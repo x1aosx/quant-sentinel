@@ -30,6 +30,7 @@ start "X-Quant Web" cmd /k "cd /d ""%~dp0web"" && npm run dev"
 
 echo.
 echo API:  http://127.0.0.1:8000/api/v1/health
-echo Web:  http://localhost:5173/
+echo Web:  http://127.0.0.1:5173/
+start "" http://127.0.0.1:5173/
 echo Close the two console windows to stop the servers.
 endlocal
