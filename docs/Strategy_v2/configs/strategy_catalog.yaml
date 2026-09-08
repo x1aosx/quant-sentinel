@@ -1,0 +1,92 @@
+schema_version: '1.0'
+kind: StrategyResearchCatalog
+catalog_status: SPECIFICATIONS_ONLY
+all_implementations_require_testing: true
+all_live_deployments_require_approval: true
+strategies:
+  - id: xq.srpa.breakout_retest.long
+    version: 0.1.0
+    role: primary_candidate
+    source_refs: [R03, R08, R12, R15]
+    implementation_priority: 1
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+    specification: ../02_SRPA_STRATEGY_SPEC.md
+    parameter_file: srpa_breakout_retest_v0.1.yaml
+  - id: xq.baseline.cash
+    version: 0.1.0
+    role: baseline
+    source_refs: []
+    implementation_priority: 1
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.baseline.ema_20_60.long
+    version: 0.1.0
+    role: baseline
+    source_refs: [R04]
+    implementation_priority: 1
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.baseline.donchian_20_10.long
+    version: 0.1.0
+    role: baseline
+    source_refs: [R19]
+    original_strategy_modified: true
+    pyramiding: false
+    implementation_priority: 1
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.baseline.investable_buy_hold
+    version: 0.1.0
+    role: benchmark
+    source_refs: []
+    implementation_priority: 2
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.srpa.h2_pullback.long
+    version: 0.1.0
+    role: optional_setup
+    source_refs: [R06, R09]
+    implementation_priority: 3
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.srpa.biased_range_rejection.long
+    version: 0.1.0
+    role: optional_setup
+    source_refs: [R07]
+    implementation_priority: 3
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.baseline.momentum_12_2.long
+    version: 0.1.0
+    role: baseline
+    source_refs: [R21, R24]
+    original_strategy_modified: true
+    implementation_priority: 3
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.challenger.boll_cci.long
+    version: 0.1.0
+    role: challenger
+    source_refs: [R20]
+    original_strategy_modified: true
+    implementation_priority: 4
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false
+  - id: xq.challenger.ml_rank.long
+    version: 0.1.0
+    role: challenger
+    source_refs: [R22, R23, R24, R32]
+    implementation_priority: 4
+    implementation_status: NOT_IMPLEMENTED
+    evidence_level: E1
+    default_live_enabled: false

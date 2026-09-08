@@ -1,0 +1,285 @@
+schema_version: '1.0'
+kind: StrategySpecification
+strategy:
+  id: xq.srpa.breakout_retest.long
+  version: 0.1.0
+  title: 支撑阻力突破回测做多
+  research_status: SPECIFIED
+  implementation_status: NOT_IMPLEMENTED
+  evidence_level: E1
+  entrypoint: null
+  engine_api_version: '1.0'
+  source_refs: [R03, R08, R12, R15, R19, R21]
+  source_integration: reference_only
+  upstream_source_pins:
+    pa_agent_commit_sha: null
+    sr_commit_sha: null
+  source_review_required: true
+
+runtime:
+  default_mode: research
+  permitted_modes_after_approval: [research, paper, live_assist]
+  broker_execution_enabled: false
+  external_llm_required: false
+  research_network_access: false
+  account_namespace: research
+  process_workers: 1
+
+market:
+  initial_profile: CN_A_EQUITY
+  side: long_only
+  leverage: 1.0
+  frequency: 1d
+  decision_on_final_bar_only: true
+  order_time: next_session
+  calendar_profile_id: null
+  market_rules_profile_id: null
+  fee_profile_id: null
+  benchmark_instrument_id: null
+  requires_effective_dated_rules: true
+  prices_for_accounting: raw
+  prices_for_features: point_in_time_action_adjusted
+
+universe:
+  use_point_in_time_membership: true
+  keep_historical_delisted_in_backtests: true
+  minimum_listing_sessions: 252
+  minimum_adv20_turnover:
+    amount: 20000000
+    currency: CNY
+  user_price_min: null
+  user_price_max: null
+  user_included_sectors: []
+  exclude_at_decision: [risk_warning, delisted, untradable, invalid_data]
+  missing_required_field: exclude_and_report
+  monitor_existing_holdings_even_if_excluded: true
+
+features:
+  ema_periods: [20, 60, 120]
+  ema_seed: first_n_mean_then_recursive
+  atr_period: 14
+  atr_method: wilder
+  overlap_pairs: 10
+  efficiency_ratio_sessions: 20
+  relative_strength_sessions: 63
+  relative_strength_return_basis: total_return
+  relative_strength_percentile_population: eligible_market_before_user_filters
+  incomplete_higher_timeframe: forbidden
+
+market_gate:
+  risk_on:
+    benchmark_close_above_ema: 120
+    benchmark_ema_nondecreasing:
+      period: 20
+      lag_sessions: 5
+  risk_off_action: block_new_entries
+  unknown_action: block_new_entries
+
+regime:
+  classifier_version: xq_regime_v01
+  priority: [INVALID, CHAOS, UPTREND, DOWNTREND, BIASED_RANGE, NEUTRAL]
+  chaos:
+    minimum_overlap10: 0.65
+    maximum_er20: 0.20
+    maximum_abs_slope20_atr: 0.25
+    combine: all
+  uptrend:
+    require_close_gt_ema20_gt_ema60: true
+    minimum_slope20_atr: 0.25
+    minimum_er20: 0.25
+  downtrend:
+    require_close_lt_ema20_lt_ema60: true
+    maximum_slope20_atr: -0.25
+  entry_allowed_regimes: [UPTREND]
+
+support_resistance:
+  detector_id: xq_sr_v01
+  detector_is_exact_upstream_replica: false
+  lookback_sessions: 250
+  bin_atr: 0.25
+  maximum_bins: 4096
+  volume_half_life_sessions: 60
+  volume_allocation: interval_overlap_conserving
+  curve_normalization: divide_by_own_max
+  smoothing_sigma_atr: 0.5
+  smoothing_truncation_sigma: 3.0
+  smoothing_edge_policy: renormalize_each_input_bin
+  peak_plateau_tie_break: leftmost
+  pivot:
+    algorithm: strict_confirmed_fractal
+    left_bars: 2
+    right_bars: 2
+    equal_extremes: not_a_pivot
+    availability: after_right_bars_close
+    half_life_after_confirmation_sessions: 120
+    kernel_sigma_atr: 0.5
+  location_weights:
+    volume_density: 1.0
+    close_density: 0.8
+    pivot_density: 1.6
+  zone_total_width_atr: 0.6
+  minimum_center_separation_atr: 0.9
+  maximum_zones_per_side: 3
+  history_reaction_sessions: 10
+  history_event_separation_sessions: 5
+  structure_score_weights:
+    log1p_resolved_events: 1.0
+    stale: 0.8
+  stale_half_life_sessions: 120
+  stall_score_weights:
+    volume_density: 1.0
+    close_density: 0.8
+    zone_width_atr: 0.3
+  label_scores_as_probabilities: false
+  freeze_on_setup_start: true
+  corporate_action_rebase_requires_event: true
+
+setup:
+  id: S-BR
+  minimum_confirmed_pivots: 2
+  select_zone: nearest_then_location_score_then_id
+  breakout:
+    close_buffer_atr: 0.2
+    require_bullish_bar: true
+    minimum_clv: 0.65
+    minimum_body_ratio: 0.50
+    maximum_true_range_atr: 2.5
+    atr_basis: prior_session
+  follow_through:
+    minimum_later_closes_above_zone: 1
+    earliest_session_after_breakout: 1
+  retest:
+    earliest_session_after_breakout: 2
+    latest_session_after_breakout: 10
+    low_tolerance_atr: 0.35
+    require_close_not_below_zone_low: true
+  confirmation:
+    maximum_sessions_after_retest: 2
+    require_bullish_bar: true
+    minimum_clv: 0.65
+    close_buffer_atr: 0.1
+    require_close_above_previous_high: true
+    allow_same_bar_retest_confirmation: true
+  invalidate:
+    close_below_zone_low_atr: 0.5
+    regimes: [INVALID, CHAOS, DOWNTREND]
+  maximum_setup_sessions: 12
+  cooldown_sessions: 5
+  same_symbol_same_zone_duplicate_plans: forbidden
+
+entry:
+  reference: signal_close
+  minimum_stop_distance_atr: 0.75
+  maximum_stop_distance_atr: 3.0
+  stop_below_structure_atr: 0.20
+  allowed_lower_offset_atr: -0.25
+  allowed_upper_offset_atr: 0.50
+  minimum_net_reward_risk: 1.5
+  target:
+    primary: nearest_qualified_resistance_low_minus_buffer
+    buffer_atr: 0.1
+    no_resistance_fallback: fixed_reference_R_multiple
+    reference_R_multiple: 2.0
+    target_is_price_forecast: false
+  quantity_may_increase_at_execution: false
+  plan_valid_for_sessions: 1
+  execution_window_profile_id: null
+  require_live_quote_or_user_price_check: true
+  unfilled_remainder: cancel
+
+execution:
+  profile: EOD_ASSIST
+  historical_fill_model: next_open_reference
+  mark_reference_fills_as_simulated: true
+  signal_bar_fill_forbidden: true
+  intrabar_stop_target_fills: false
+  validate_tradeability_at_execution: true
+  ambiguous_limit_locked_day: no_fill_and_report
+  real_position_created_only_by_execution_import: true
+  missing_minute_data_prevents_precise_delay_validation: true
+
+exit:
+  initial_stop: min_frozen_zone_low_and_retest_low_minus_atr_buffer
+  stop_can_widen: false
+  target_frozen_at_signal: true
+  decision_price: close
+  execute: next_sellable_session
+  two_consecutive_closes_below_ema: 60
+  progress_check:
+    after_held_sessions: 5
+    minimum_best_close_profit_R: 0.5
+    require_close_below_ema: 20
+  maximum_held_sessions: 20
+  trailing:
+    activation_best_close_profit_R: 1.0
+    distance_atr: 2.5
+    reference: highest_close_since_entry
+    effective: next_session
+    monotonically_tighten_only: true
+  partial_take_profit: false
+
+portfolio:
+  risk_fraction_per_trade: 0.0025
+  maximum_single_symbol_weight: 0.10
+  maximum_sector_weight: 0.25
+  maximum_gross_long_weight: 0.80
+  maximum_unique_symbols: 8
+  maximum_planned_risk_fraction: 0.02
+  maximum_order_adv20_shares_fraction: 0.001
+  gap_buffer_atr: 0.5
+  minimum_quantity_and_increment: from_market_rules
+  reserve_cash_and_risk_before_publish: true
+  count_manual_positions_and_pending_plans: true
+  unknown_holding_risk_action: block_new_entries
+  pause_new_entries_drawdown_fraction: 0.10
+  user_drawdown_tolerance_fraction: null
+  pyramiding: false
+  averaging_down: false
+  priority_when_conflicting_setups: [S-BR, S-H2, S-RG]
+  candidate_sort:
+    - field: relative_strength_percentile
+      direction: descending
+    - field: net_reward_risk
+      direction: descending
+    - field: confirmation_time
+      direction: ascending
+    - field: instrument_id
+      direction: ascending
+
+prediction:
+  mode: rule_only
+  upstream_model_weights_compatible: false
+  statistical_filter_artifact_id: null
+  statistical_filter_missing_model: abstain
+  silent_fallback_to_other_strategy_version: false
+  llm_prediction_is_tradable_probability: false
+  touch_horizon_sessions: 40
+  reaction_horizon_after_touch_sessions: 10
+  reaction_classes: [hold, break, timeout]
+  immature_labels: censored
+  return_horizons_sessions: [1, 5, 20]
+  return_label: next_open_to_open_after_h_sessions_total_return
+
+validation:
+  temporal_train_months: 36
+  temporal_validation_months: 6
+  temporal_test_months: 3
+  split_panel_by_session: true
+  purge_by_actual_label_end: true
+  untouched_final_holdout_required: true
+  maximum_initial_parameter_trials: 24
+  minimum_nonoverlapping_oos_segments: 4
+  minimum_completed_oos_trades: 100
+  minimum_paper_sessions: 60
+  minimum_observed_executable_plans: 20
+  require_time_block_bootstrap_intervals: true
+  skip_counts_as_pass: false
+  negative_or_inconclusive_edge_auto_deploy: false
+
+safety:
+  live_assist_default_enabled: false
+  exact_version_approval_required: true
+  missing_required_profiles: fail_closed
+  pause_entries_keeps_position_risk_monitoring: true
+  rollback_migrates_existing_positions_automatically: false
+  notifications_are_not_orders_or_fills: true

@@ -1,0 +1,27 @@
+{
+  "scope": "DELIVERY_SANITY_ONLY_NOT_STRATEGY_BACKTEST",
+  "status": "PASS",
+  "counts": {
+    "markdown_files": 6,
+    "source_references": 34,
+    "json_blocks": 1,
+    "python_blocks": 1,
+    "yaml_files": 2,
+    "catalog_entries": 10,
+    "planned_acceptance_tests": 36
+  },
+  "specification_invariants": "PASS",
+  "sizing_example": {
+    "quantity": 200,
+    "budgeted_risk": "186.00",
+    "net_rr": "1.941176470588235294117647059"
+  },
+  "synthetic_conditional_probability_example": {
+    "unadjusted_product": "0.12",
+    "correct_joint": "0.09"
+  },
+  "upstream_repository_tests_run": false,
+  "strategy_engine_implemented": false,
+  "real_market_backtest_run": false,
+  "live_performance_verified": false
+}

@@ -1,0 +1,63 @@
+{
+  "delivery": "X-Quant Strategy First v2",
+  "date": "2026-09-08",
+  "hash_scope": "DELIVERED_FILES_NOT_UPSTREAM_REPOSITORY_COMMITS",
+  "upstream_commits_verified": false,
+  "files": [
+    {
+      "path": "00_README.md",
+      "bytes": 2889,
+      "sha256": "afd5770a0cce280f4bf13c978e2dc9be303be0a89b14298fe2428efa280214f1"
+    },
+    {
+      "path": "01_SOURCE_AUDIT.md",
+      "bytes": 18830,
+      "sha256": "d074f1fc84a4f609cd16e47187539288aa6821db23187b41e3fdd348745038ae"
+    },
+    {
+      "path": "02_SRPA_STRATEGY_SPEC.md",
+      "bytes": 41226,
+      "sha256": "501f723d30a9901b1d444a2ad5776d502e916a0f78bc1672763512933ccd51f6"
+    },
+    {
+      "path": "03_STRATEGY_PLATFORM_DESIGN.md",
+      "bytes": 25954,
+      "sha256": "d148b16cb64e21d11a24955f27e90793679db2d5abb3e3a3d4fc53e8f2d1b56a"
+    },
+    {
+      "path": "04_CODEX_IMPLEMENTATION.md",
+      "bytes": 15215,
+      "sha256": "da134f9750806ab582d1c934613a0eda4bd2df777cd7b2974fdb7aa7d11132fa"
+    },
+    {
+      "path": "05_VALIDATION_NOTES.md",
+      "bytes": 2595,
+      "sha256": "5daabd95ccb2ec0ab97405da7ff1c8c2e4c1a2043270cbfbca25ac3c1aa1c578"
+    },
+    {
+      "path": "check_delivery.py",
+      "bytes": 7834,
+      "sha256": "1b5e6f6d389cdc05ecd17636a0114333fa2502da2fec86012a85e5ac788600de"
+    },
+    {
+      "path": "configs/srpa_breakout_retest_v0.1.yaml",
+      "bytes": 8578,
+      "sha256": "38696e6526b0e66e7db97d2d8ec263e9a0829f8df3021c9de2b4c9c68d81e360"
+    },
+    {
+      "path": "configs/strategy_catalog.yaml",
+      "bytes": 2741,
+      "sha256": "2774fca447025438d7f62ea8de388e748557c793c0433158520818585a09362f"
+    },
+    {
+      "path": "delivery_checks.json",
+      "bytes": 717,
+      "sha256": "94769db5d63feeb83c7c86f868b03f91a7e075bbb3454b58506903a9d259a45c"
+    }
+  ],
+  "combined_reading_edition": {
+    "name": "X-Quant_Strategy_First_v2.md",
+    "bytes": 105309,
+    "sha256": "516a183f1c0b3d1b83287ce23134112019602d9d7475d557de5fb7d26b6b7faf"
+  }
+}
