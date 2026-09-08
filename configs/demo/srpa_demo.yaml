@@ -1,0 +1,31 @@
+schema_version: '1.0'
+kind: StrategySpecification
+strategy:
+  id: xq.srpa.breakout_retest.long
+  version: 0.1.0
+  implementation_status: IMPLEMENTED_DEMO_ONLY
+  evidence_level: E1
+runtime:
+  default_mode: research
+  broker_execution_enabled: false
+  research_network_access: false
+market:
+  initial_profile: CN_A_EQUITY
+  side: long_only
+  frequency: 1d
+  decision_on_final_bar_only: true
+  order_time: next_session
+  market_rules_profile_id: null
+  fee_profile_id: null
+  calendar_profile_id: null
+  benchmark_instrument_id: null
+execution:
+  profile: EOD_ASSIST
+  historical_fill_model: next_open_reference
+  mark_reference_fills_as_simulated: true
+  signal_bar_fill_forbidden: true
+safety:
+  live_assist_default_enabled: false
+  exact_version_approval_required: true
+  missing_required_profiles: fail_closed
+
