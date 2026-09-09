@@ -5,6 +5,7 @@
 ## 后端
 
 ```powershell
+cd api
 uv sync
 uv run uvicorn xquant.api.app:create_app --factory --reload --port 8000
 ```
@@ -22,10 +23,17 @@ npm run dev
 Windows 下双击或命令行运行：
 
 ```powershell
-.\start_xquant.bat
+.\deploy\start_xquant.bat
 ```
 
 脚本会自动创建 Python 环境、安装前端依赖，并分别启动 FastAPI 与 Vite 开发服务器。
+
+## 项目结构
+
+- `api/`：FastAPI 服务、量化策略内核、配置与 Python 测试。
+- `web/`：React + Vite 前端应用。
+- `deploy/`：本地启动和部署相关文件。
+- `docs/`：项目与策略设计文档。
 
 ## 验收边界
 
