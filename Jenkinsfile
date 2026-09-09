@@ -9,7 +9,7 @@ pipeline {
     parameters {
         string(
             name: 'HOST_PORT',
-            defaultValue: '18080',
+            defaultValue: '8082',
             description: '宿主机对外端口（容器内固定 80）'
         )
     }
