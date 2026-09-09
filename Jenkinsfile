@@ -48,16 +48,6 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'shawsx-registry',
-                        usernameVariable: 'REGISTRY_USER',
-                        passwordVariable: 'REGISTRY_PASSWORD'
-                    )
-                ]) {
-                    sh 'printf "%s\\n" "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin'
-                }
-
                 sh 'docker pull "$RUNTIME_IMAGE"'
 
                 script {
@@ -75,31 +65,12 @@ pipeline {
                         .
                 '''
             }
-            post {
-                always {
-                    sh 'docker logout "$REGISTRY" || true'
-                }
-            }
         }
 
         stage('Push Image') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'shawsx-registry',
-                        usernameVariable: 'REGISTRY_USER',
-                        passwordVariable: 'REGISTRY_PASSWORD'
-                    )
-                ]) {
-                    sh 'printf "%s\\n" "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin'
-                    sh 'docker push "$IMAGE_REPOSITORY:$IMAGE_TAG"'
-                    sh 'docker push "$IMAGE_REPOSITORY:latest"'
-                }
-            }
-            post {
-                always {
-                    sh 'docker logout "$REGISTRY" || true'
-                }
+                sh 'docker push "$IMAGE_REPOSITORY:$IMAGE_TAG"'
+                sh 'docker push "$IMAGE_REPOSITORY:latest"'
             }
         }
 
