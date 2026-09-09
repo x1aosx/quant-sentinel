@@ -1,14 +1,9 @@
 import { createBrowserRouter } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { DashboardPage } from './pages/DashboardPage';
-import { StrategiesPage } from './pages/StrategiesPage';
-import { StrategyDetailPage } from './pages/StrategyDetailPage';
-import { ExperimentsPage } from './pages/ExperimentsPage';
-import { ReplayWorkbenchPage } from './pages/ReplayWorkbenchPage';
-import { DeploymentsPage } from './pages/DeploymentsPage';
-import { RiskPage } from './pages/RiskPage';
 import { DataCenterPage } from './pages/DataCenterPage';
-import { NotificationsPage } from './pages/NotificationsPage';
+import { SupportResistancePage } from './pages/SupportResistancePage';
+import { PriceActionPage } from './pages/PriceActionPage';
 
 export const router = createBrowserRouter([
   {
@@ -16,14 +11,9 @@ export const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { index: true, element: <DashboardPage /> },
-      { path: 'strategies', element: <StrategiesPage /> },
-      { path: 'strategies/:id', element: <StrategyDetailPage /> },
-      { path: 'experiments', element: <ExperimentsPage /> },
-      { path: 'replay', element: <ReplayWorkbenchPage /> },
-      { path: 'deployments', element: <DeploymentsPage /> },
-      { path: 'risk', element: <RiskPage /> },
       { path: 'data', element: <DataCenterPage /> },
-      { path: 'notifications', element: <NotificationsPage /> },
+      { path: 'support-resistance', element: <SupportResistancePage /> },
+      { path: 'price-action', element: <PriceActionPage /> },
     ],
   },
 ]);

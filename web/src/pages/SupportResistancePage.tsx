@@ -32,9 +32,9 @@ function fmtNum(value: number | null | undefined, digits = 2): string {
   return value.toLocaleString('zh-CN', { maximumFractionDigits: digits });
 }
 
-function fmtPct(value: number | null | undefined, digits = 2): string {
+function fmt100(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '--';
-  return `${(value * 100).toFixed(digits)}%`;
+  return `${value.toFixed(digits)}%`;
 }
 
 function parseOptionalInt(value: string, label: string): number | undefined {
@@ -150,7 +150,7 @@ export function SupportResistancePage() {
               <div>
                 <div className="stat-label">ATR</div>
                 <div className="stat-value">{fmtNum(result.atr, 4)}</div>
-                <div className="muted">{fmtPct(result.atr_pct)}</div>
+                <div className="muted">{fmt100(result.atr_pct)}</div>
               </div>
             </div>
             <div className="panel stat">
@@ -174,7 +174,7 @@ export function SupportResistancePage() {
             {result.summary.headline ? <div>{result.summary.headline}</div> : <div className="empty">后端未返回 headline。</div>}
             {riskReward ? (
               <p className="muted">
-                潜在收益 {fmtPct(riskReward.potential_profit_pct)} · 潜在损失 {fmtPct(riskReward.potential_loss_pct)}
+                潜在收益 {fmt100(riskReward.potential_profit_pct)} · 潜在损失 {fmt100(riskReward.potential_loss_pct)}
               </p>
             ) : null}
             {result.summary.caveat ? <p className="muted">提示：{result.summary.caveat}</p> : null}
@@ -211,11 +211,11 @@ export function SupportResistancePage() {
                       <td>{fmtNum(level.center, 4)}</td>
                       <td>{fmtNum(level.low, 4)}</td>
                       <td>{fmtNum(level.high, 4)}</td>
-                      <td>{fmtPct(level.distance_pct)}</td>
+                      <td>{fmt100(level.distance_pct)}</td>
                       <td>{fmtNum(level.distance_atr)}</td>
                       <td>{fmtNum(level.width_atr)}</td>
                       <td>{fmtNum(level.n_events ?? level.touch_count, 0)}</td>
-                      <td>{fmtPct(level.volume_pct)}</td>
+                      <td>{fmt100(level.volume_pct)}</td>
                       <td>{fmtNum(level.edge_score)}</td>
                       <td className="muted">{level.tf_count ?? '--'}{level.tfs ? ` · ${level.tfs}` : ''}</td>
                     </tr>

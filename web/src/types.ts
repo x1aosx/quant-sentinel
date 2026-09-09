@@ -1,5 +1,111 @@
 export type Mode = 'research' | 'paper' | 'live_assist' | 'demo';
 
+export interface DatasetBar {
+  session_id: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface DatasetSummary {
+  id: string;
+  symbol: string;
+  timeframe: string;
+  bar_count: number;
+  first_session: string;
+  last_session: string;
+  created_at: string;
+}
+
+export interface SrLevel {
+  zone_type: 'support' | 'resistance';
+  center: number;
+  low: number;
+  high: number;
+  distance_pct?: number;
+  distance_atr?: number;
+  width_atr?: number;
+  edge_score?: number;
+  n_events?: number;
+  touch_count?: number;
+  volume_pct?: number;
+  tf_count?: number;
+  tfs?: string;
+}
+
+export interface SrAnalysisResult {
+  symbol: string;
+  timeframe: string;
+  bars_used: number;
+  current_price: number;
+  atr: number;
+  atr_pct: number;
+  trend: { label: string; detail?: string };
+  levels: SrLevel[];
+  summary: {
+    headline?: string;
+    nearest?: SrLevel | null;
+    best?: SrLevel | null;
+    risk_reward?: {
+      risk_reward_ratio?: number;
+      quality?: string;
+      potential_profit_pct?: number;
+      potential_loss_pct?: number;
+    };
+    caveat?: string;
+  };
+  meta?: Record<string, unknown>;
+  candles: DatasetBar[];
+}
+
+export interface PaAnalysisResult {
+  symbol: string;
+  timeframe: string;
+  bars_used: number;
+  current_price: number;
+  ema20: number;
+  atr: number;
+  atr_pct: number;
+  market_context: {
+    direction: 'bullish' | 'bearish' | 'neutral';
+    cycle_position?: string;
+    price_position?: number;
+    range_high?: number | null;
+    range_low?: number | null;
+    overlap_mean_10?: number | null;
+    trend_detail?: string;
+    background_direction?: string;
+    recent_spike?: string | null;
+    scale_conflict?: boolean;
+  };
+  features: {
+    swing_structure?: string;
+    swings?: Array<{ seq?: number; kind?: string; price?: number }>;
+    breakout_quality?: string;
+    breakout_events?: Array<Record<string, unknown>>;
+    patterns?: string[];
+    supports?: number[];
+    resistances?: number[];
+  };
+  decision: {
+    action: 'LONG' | 'SHORT' | 'WAIT';
+    confidence: number;
+    entry?: number | null;
+    stop?: number | null;
+    target?: number | null;
+    rr?: number | null;
+    risk_fraction?: number;
+    reason_codes?: string[];
+    reasoning?: string;
+    invalidation?: string | null;
+  };
+  meta?: Record<string, unknown>;
+  candles: DatasetBar[];
+  levels: SrLevel[];
+}
+
 export interface DashboardSummary {
   mode: Mode;
   demo: boolean;
@@ -166,8 +272,6 @@ export interface NotificationItem {
 export interface HealthSummary {
   status: string;
   version: string;
-  heartbeat_at: string;
-  data_last_updated: string;
-  queue_depth: number;
-  task_heartbeat_ok: boolean;
+  mode: string;
+  dataset_count: number;
 }

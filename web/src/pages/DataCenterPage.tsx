@@ -66,7 +66,7 @@ function toFiniteNumber(raw: unknown, label: string, lineLabel: string): number 
 }
 
 function buildBar(raw: Record<string, unknown>, lineLabel: string): DatasetBar {
-  const sessionId = String(raw.session_id ?? raw.session ?? raw.date ?? '').trim();
+  const sessionId = String(raw.session_id ?? raw.session ?? raw.date ?? raw.time ?? '').trim();
   if (!sessionId) {
     throw new Error(`${lineLabel}: 缺少 session/date 字段`);
   }
@@ -110,8 +110,8 @@ function parseCsvBars(text: string): DatasetBar[] {
     close: col('close'),
     volume: col('volume', 'tick_volume'),
   };
-  if (sessionCol < 0 && dateCol < 0) {
-    throw new Error('CSV 缺少 session/session_id/date 列');
+  if (sessionCol < 0 && dateCol < 0 && timeCol < 0) {
+    throw new Error('CSV 缺少 session/session_id/date/time 列');
   }
   const missing = Object.entries(cols).filter(([, index]) => index < 0).map(([name]) => name);
   if (missing.length) {

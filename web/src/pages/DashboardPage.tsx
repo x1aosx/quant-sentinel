@@ -1,103 +1,118 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Activity, CheckCircle2, Database, FileClock, FlaskConical, ShieldAlert } from 'lucide-react';
+import { BrainCircuit, Crosshair, Database, Gauge, ShieldAlert } from 'lucide-react';
 import { api } from '../api/client';
-import { DemoWatermark } from '../components/DemoWatermark';
-import { StatusBadge } from '../components/StatusBadge';
 
 export function DashboardPage() {
-  const { data } = useQuery({ queryKey: ['dashboard'], queryFn: api.getDashboard });
-  const items = [
-    { label: '运行实例', value: data?.running_instances ?? 0, icon: Activity },
-    { label: '待处理计划', value: data?.pending_plans ?? 0, icon: FileClock },
-    { label: '待审批', value: data?.pending_approvals ?? 0, icon: ShieldAlert },
-    { label: '近期实验', value: data?.recent_experiments?.length ?? 0, icon: FlaskConical },
-  ];
+  const healthQuery = useQuery({ queryKey: ['health'], queryFn: api.getHealth });
+  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
+  const datasets = datasetsQuery.data?.items ?? [];
+  const ready = Boolean(healthQuery.data?.status === 'ok' && datasets.length);
 
   return (
     <div className="stack">
       <div className="page-header">
         <div>
-          <h1>策略驾驶台</h1>
-          <div className="muted">数据截止 {data?.data_last_updated ?? '--'} · 模式 {data?.mode ?? 'demo'}</div>
+          <h1>本地量化研究驾驶台</h1>
+          <div className="muted">先导入已收盘 OHLCV 快照，再做支撑阻力与价格行为分析。</div>
         </div>
-        {data?.demo ? <DemoWatermark /> : null}
+        <span className="badge badge-info">simulation only</span>
       </div>
 
       <div className="grid grid-4">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div key={item.label} className="panel stat">
-              <div>
-                <div className="stat-label">{item.label}</div>
-                <div className="stat-value">{item.value}</div>
-              </div>
-              <span className="stat-icon">
-                <Icon size={18} />
-              </span>
-            </div>
-          );
-        })}
+        <div className="panel stat">
+          <div>
+            <div className="stat-label">数据集</div>
+            <div className="stat-value">{datasets.length}</div>
+          </div>
+          <span className="stat-icon"><Database size={18} /></span>
+        </div>
+        <div className="panel stat">
+          <div>
+            <div className="stat-label">最新快照</div>
+            <div className="stat-value">{datasets[0]?.symbol ?? '--'}</div>
+          </div>
+          <span className="stat-icon"><Gauge size={18} /></span>
+        </div>
+        <div className="panel stat">
+          <div>
+            <div className="stat-label">API 状态</div>
+            <div className="stat-value">{healthQuery.data?.status ?? '--'}</div>
+          </div>
+          <span className="stat-icon"><ShieldAlert size={18} /></span>
+        </div>
+        <div className="panel stat">
+          <div>
+            <div className="stat-label">研究模式</div>
+            <div className="stat-value">离线</div>
+          </div>
+          <span className="stat-icon"><BrainCircuit size={18} /></span>
+        </div>
       </div>
 
-      <div className="grid grid-3">
+      <div className="grid grid-2">
         <div className="panel">
-          <div className="section-title">数据状态</div>
-          <div className="row">
-            <Database size={16} />
-            <StatusBadge status={data?.data_status ?? 'UNKNOWN'} />
+          <div className="section-title">
+            <span>开始使用</span>
+            <Link className="button" to="/data">
+              <Database size={15} />
+              打开数据中心
+            </Link>
           </div>
-          <p className="muted">最后数据时间 {data?.data_last_updated ?? '--'}</p>
+          {ready ? (
+            <p className="muted">数据准备完成，可以直接进入支撑阻力或价格行为分析。</p>
+          ) : datasetsQuery.isLoading ? (
+            <p className="muted">正在连接本地 API...</p>
+          ) : (
+            <p className="muted">尚未导入数据。上传本地 CSV/JSON，或先生成一份合成研究快照。</p>
+          )}
         </div>
         <div className="panel">
-          <div className="section-title">风控状态</div>
+          <div className="section-title">分析入口</div>
           <div className="row">
-            {data?.risk_status === 'OK' ? <CheckCircle2 size={16} color="#1f6f5e" /> : <ShieldAlert size={16} color="#a15c07" />}
-            <StatusBadge status={data?.risk_status ?? 'UNKNOWN'} />
+            <Link className="button" to="/support-resistance">
+              <Crosshair size={15} />
+              支撑阻力
+            </Link>
+            <Link className="button" to="/price-action">
+              <BrainCircuit size={15} />
+              价格行为
+            </Link>
           </div>
-          <p className="muted">组合硬风险优先于新策略信号。</p>
-        </div>
-        <div className="panel">
-          <div className="section-title">运行健康</div>
-          <div>心跳 {data?.heartbeat_at ?? '--'}</div>
-          <p className="muted">本地进程休眠或退出后不会自动发送过期提醒。</p>
+          <p className="muted">
+            分析结果基于本地历史K线结构，不连接券商，不发送下单请求，也不构成投资建议。
+          </p>
         </div>
       </div>
 
       <div className="panel">
-        <div className="section-title">
-          <span>近期实验</span>
-          <Link className="button" to="/experiments">
-            打开实验中心
-          </Link>
-        </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>实验</th>
-              <th>策略</th>
-              <th>状态</th>
-              <th>进度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.recent_experiments ?? []).map((exp) => (
-              <tr key={exp.id}>
-                <td>{exp.title}</td>
-                <td className="code">{exp.strategy_id}</td>
-                <td>
-                  <StatusBadge status={exp.status} />
-                </td>
-                <td>
-                  <div className="progress">
-                    <div className="progress-fill" style={{ width: `${exp.progress}%` }} />
-                  </div>
-                </td>
+        <div className="section-title">最近数据集</div>
+        {datasets.length ? (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>品种</th>
+                <th>周期</th>
+                <th>K线数</th>
+                <th>首根</th>
+                <th>末根</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {datasets.slice(0, 8).map((item) => (
+                <tr key={item.id}>
+                  <td>{item.symbol}</td>
+                  <td>{item.timeframe}</td>
+                  <td>{item.bar_count}</td>
+                  <td className="code">{item.first_session}</td>
+                  <td className="code">{item.last_session}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">暂无数据集</div>
+        )}
       </div>
     </div>
   );

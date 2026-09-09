@@ -4,6 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 class Database:
@@ -56,6 +57,16 @@ class Database:
                 simulation_only INTEGER,
                 payload TEXT,
                 created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS datasets (
+                id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                bar_count INTEGER NOT NULL,
+                first_session TEXT NOT NULL,
+                last_session TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                bars_json TEXT NOT NULL
             );
             """
         )
@@ -112,3 +123,60 @@ class Database:
         rows = conn.execute("SELECT * FROM experiments ORDER BY created_at DESC").fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    def insert_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        bars = payload.get("bars", [])
+        dataset_id = str(payload.get("id") or uuid4())
+        created_at = payload.get("created_at")
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO datasets
+            (id, symbol, timeframe, bar_count, first_session, last_session, created_at, bars_json)
+            VALUES (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session, :created_at, :bars_json)
+            """,
+            {
+                "id": dataset_id,
+                "symbol": payload["symbol"],
+                "timeframe": payload["timeframe"],
+                "bar_count": len(bars),
+                "first_session": bars[0]["session_id"] if bars else "",
+                "last_session": bars[-1]["session_id"] if bars else "",
+                "created_at": created_at,
+                "bars_json": json.dumps(bars, ensure_ascii=False, separators=(",", ":")),
+            },
+        )
+        conn.commit()
+        conn.close()
+        return self.get_dataset(dataset_id)["summary"]
+
+    def list_datasets(self) -> list[dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT id, symbol, timeframe, bar_count, first_session, last_session, created_at
+            FROM datasets
+            ORDER BY created_at DESC, rowid DESC
+            """
+        ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_dataset(self, dataset_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
+        conn.close()
+        if row is None:
+            raise KeyError(f"dataset not found: {dataset_id}")
+        record = dict(row)
+        bars = json.loads(record.pop("bars_json"))
+        summary = {
+            "id": record["id"],
+            "symbol": record["symbol"],
+            "timeframe": record["timeframe"],
+            "bar_count": record["bar_count"],
+            "first_session": record["first_session"],
+            "last_session": record["last_session"],
+            "created_at": record["created_at"],
+        }
+        return {"summary": summary, "bars": bars}

@@ -37,6 +37,11 @@ function fmtPct(value: number | null | undefined, digits = 2): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function fmt100(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '--';
+  return `${value.toFixed(digits)}%`;
+}
+
 const DIRECTION_LABELS: Record<string, string> = {
   bullish: '偏多',
   bearish: '偏空',
@@ -184,13 +189,13 @@ export function PriceActionPage() {
               <div>
                 <div className="stat-label">ATR</div>
                 <div className="stat-value">{fmtNum(result.atr, 4)}</div>
-                <div className="muted">{fmtPct(result.atr_pct)}</div>
+                <div className="muted">{fmt100(result.atr_pct)}</div>
               </div>
             </div>
             <div className="panel stat">
               <div>
                 <div className="stat-label">置信度</div>
-                <div className="stat-value">{fmtPct(decision.confidence)}</div>
+                <div className="stat-value">{fmt100(decision.confidence)}</div>
               </div>
             </div>
           </div>
@@ -233,7 +238,7 @@ export function PriceActionPage() {
               <span className={`badge ${decision.action === 'LONG' ? 'badge-ok' : decision.action === 'SHORT' ? 'badge-danger' : 'badge-neutral'}`}>
                 {decision.action === 'LONG' ? '做多观察' : decision.action === 'SHORT' ? '做空观察' : '观望'}
               </span>
-              <span className="tag">置信度 {fmtPct(decision.confidence)}</span>
+              <span className="tag">置信度 {fmt100(decision.confidence)}</span>
               {decision.risk_fraction ? <span className="tag">单笔风险 {fmtPct(decision.risk_fraction)}</span> : null}
             </div>
             <div className="row">

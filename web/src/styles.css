@@ -259,6 +259,62 @@ a {
   color: #6b21a8;
 }
 
+.kline-chart {
+  width: 100%;
+  overflow: hidden;
+}
+
+.kline-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.kline-grid {
+  stroke: #e4e9ee;
+  stroke-width: 1;
+}
+
+.kline-text {
+  fill: #66727f;
+  font-size: 11px;
+}
+
+.kline-level-text {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.kline-level-text.support {
+  fill: #1f6f5e;
+}
+
+.kline-level-text.resistance {
+  fill: #b42318;
+}
+
+.kline-candle .wick.bullish {
+  stroke: #1f6f5e;
+  stroke-width: 1.2;
+}
+
+.kline-candle .wick.bearish {
+  stroke: #b42318;
+  stroke-width: 1.2;
+}
+
+.kline-candle .body.bullish {
+  fill: #e7f4ef;
+  stroke: #1f6f5e;
+  stroke-width: 1;
+}
+
+.kline-candle .body.bearish {
+  fill: #fdeceb;
+  stroke: #b42318;
+  stroke-width: 1;
+}
+
 .tag {
   display: inline-block;
   border: 1px solid var(--border);
@@ -433,6 +489,50 @@ a {
   padding: 22px;
   color: var(--muted);
   text-align: center;
+}
+
+.upload-panel {
+  border: 1px dashed #b9c4cd;
+  border-radius: var(--radius);
+  padding: 18px;
+  background: #fbfcfd;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.field input,
+.field select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 9px;
+  font-size: 13px;
+  background: white;
+  min-width: 0;
+}
+
+.notice {
+  border: 1px solid #b7d9cf;
+  background: var(--accent-soft);
+  color: #17584a;
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  font-size: 13px;
 }
 
 @media (max-width: 1080px) {
