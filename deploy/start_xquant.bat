@@ -1,6 +1,8 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+set "API_DIR=%~dp0..\api"
+set "WEB_DIR=%~dp0..\web"
+cd /d "%API_DIR%"
 
 echo ============================================
 echo  X-Quant local workbench launcher
@@ -15,9 +17,9 @@ if errorlevel 1 (
   echo Python environment ready.
 )
 
-if not exist "web\node_modules" (
+if not exist "%WEB_DIR%\node_modules" (
   echo [2/3] Installing web dependencies...
-  pushd web
+  pushd "%WEB_DIR%"
   call npm install
   popd
 ) else (
@@ -25,8 +27,8 @@ if not exist "web\node_modules" (
 )
 
 echo [3/3] Starting API and web dev server...
-start "X-Quant API" cmd /k "cd /d ""%~dp0"" && uv run uvicorn xquant.api.app:create_app --factory --reload --port 8000"
-start "X-Quant Web" cmd /k "cd /d ""%~dp0web"" && npm run dev"
+start "X-Quant API" /D "%API_DIR%" cmd /k uv run uvicorn xquant.api.app:create_app --factory --reload --port 8000
+start "X-Quant Web" /D "%WEB_DIR%" cmd /k npm run dev
 
 echo.
 echo API:  http://127.0.0.1:8000/api/v1/health
