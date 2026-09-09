@@ -1,0 +1,16 @@
+.git
+.gitignore
+Jenkinsfile
+README.md
+docs/
+api/.pytest_cache/
+api/.ruff_cache/
+api/.venv/
+api/**/__pycache__/
+api/tests/
+web/node_modules/
+web/dist/
+deploy/data/
+deploy/logs/
+*.log
+*.db
