@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,13 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from xquant.analysis.price_action import analyze_price_action
 from xquant.analysis.sr_levels import detect_support_resistance
 from xquant.marketdata.synthetic import generate_synthetic_bars
-from xquant.registry.sqlite import Database
+from xquant.registry import Database
+from xquant.storage import StorageSettings
 
 
-def create_app(db_path: Path | None = None) -> FastAPI:
-    db_path = db_path or Path(os.getenv("XQUANT_DB_PATH", "data/xquant.db"))
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    db = Database(db_path)
+def create_app(db_path: Path | None = None, settings: StorageSettings | None = None) -> FastAPI:
+    settings = settings or StorageSettings.load()
+    db = Database.from_settings(settings, db_path)
     app = FastAPI(title="X-Quant API", version="0.2.0")
     app.state.db = db
     app.add_middleware(
@@ -33,8 +32,15 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             "status": "ok",
             "version": "0.2.0",
             "mode": "local_research",
+            "storage_backend": settings.storage_backend,
             "dataset_count": len(db.list_datasets()),
         }
+
+    @app.get("/api/v1/health/storage")
+    def storage_health() -> dict[str, Any]:
+        if not hasattr(db, "storage_health"):
+            return {"status": "ok", "services": {"legacy_sqlite": {"status": "ok"}}}
+        return {"status": "ok", "services": db.storage_health()}
 
     @app.get("/api/v1/dashboard")
     def dashboard() -> dict[str, Any]:
