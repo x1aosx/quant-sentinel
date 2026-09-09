@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.uv-cache/
+.pytest_tmp/
 .venv/
 node_modules/
 dist/

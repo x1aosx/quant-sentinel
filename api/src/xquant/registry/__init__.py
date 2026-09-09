@@ -1,4 +1,5 @@
-from .sqlite import Database
+from .database import Database
+from .sqlite import Database as LegacySqliteDatabase
 
-__all__ = ["Database"]
+__all__ = ["Database", "LegacySqliteDatabase"]
 
