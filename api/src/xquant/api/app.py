@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from xquant.registry.sqlite import Database
 
 
 def create_app(db_path: Path | None = None) -> FastAPI:
-    db_path = db_path or Path("data/xquant.db")
+    db_path = db_path or Path(os.getenv("XQUANT_DB_PATH", "data/xquant.db"))
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(db_path)
     app = FastAPI(title="X-Quant API", version="0.2.0")

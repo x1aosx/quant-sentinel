@@ -1,0 +1,25 @@
+name: quant-sentinel
+
+services:
+  quant-sentinel:
+    image: ${REGISTRY:-registry.shawsx.com:8443}/library/${PROJECT_NAME:-quant-sentinel}:${IMAGE_TAG:-latest}
+    container_name: ${PROJECT_NAME:-quant-sentinel}
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-18080}:80"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      XQUANT_DB_PATH: ${XQUANT_DB_PATH:-/app/data/xquant.db}
+      XQUANT_REQUIRED_ENV_VARS: ${XQUANT_REQUIRED_ENV_VARS:-TZ,XQUANT_DB_PATH}
+    volumes:
+      - ${DATA_VOLUME:-quant-sentinel-data}:/app/data
+      - ${LOG_VOLUME:-quant-sentinel-logs}:/app/logs
+    extra_hosts:
+      - "loki.shawsx.com:10.10.10.100"
+      - "newapi.shawsx.com:10.10.10.100"
+
+volumes:
+  quant-sentinel-data:
+    name: ${DATA_VOLUME:-quant-sentinel-data}
+  quant-sentinel-logs:
+    name: ${LOG_VOLUME:-quant-sentinel-logs}
