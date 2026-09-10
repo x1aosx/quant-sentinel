@@ -30,6 +30,7 @@ export function Layout() {
   const location = useLocation();
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.getHealth });
   const title = titles[location.pathname] ?? 'X-Quant';
+  const healthBadgeClass = health?.status === 'ok' ? 'badge badge-ok' : 'badge badge-neutral';
 
   return (
     <div className="app-shell">
@@ -54,20 +55,23 @@ export function Layout() {
               {item.label}
             </NavLink>
           );
-        })}
-      </aside>
+          })}
+          <div className="sidebar-footnote">本地研究 · simulation only</div>
+        </aside>
       <div className="main">
         <header className="topbar">
           <div className="topbar-left">
             <span className="topbar-title">{title}</span>
           </div>
           <div className="topbar-right">
-            <span className="badge badge-neutral">
+            <span className={healthBadgeClass}>
               <Activity size={14} />
-              {health?.status ?? 'unknown'}
+              健康 {health?.status ?? 'unknown'}
             </span>
-            <span className="badge badge-neutral">数据集 {health?.dataset_count ?? 0}</span>
-            <span className="badge badge-info">本地研究</span>
+            <span className="badge badge-neutral">
+              <Database size={14} />
+              数据集 {health?.dataset_count ?? 0}
+            </span>
           </div>
         </header>
         <main className="page">
