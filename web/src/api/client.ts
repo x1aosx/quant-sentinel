@@ -25,6 +25,31 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+async function requestCsv(path: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { Accept: 'text/csv' },
+  });
+  if (response.ok) {
+    return response.blob();
+  }
+
+  let detail = '';
+  try {
+    const body = (await response.json()) as { detail?: unknown; message?: unknown };
+    if (typeof body.detail === 'string') detail = body.detail;
+    else if (typeof body.message === 'string') detail = body.message;
+  } catch {
+    // Response bodies for gateway errors are often plain HTML.
+  }
+
+  const statusMessages: Record<number, string> = {
+    404: '行情下载接口不可用（HTTP 404）',
+    502: '行情服务网关错误（HTTP 502），请稍后重试',
+    503: '行情服务暂时不可用（HTTP 503），请稍后重试',
+  };
+  throw new Error(statusMessages[response.status] ?? detail ?? `行情下载失败（HTTP ${response.status}）`);
+}
+
 export interface DatasetUpsertPayload {
   symbol: string;
   timeframe: string;
@@ -73,4 +98,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  downloadQuoteCsv: (payload: { symbol: string; timeframe: string; count: number }) => {
+    const params = new URLSearchParams({
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
+      count: String(payload.count),
+    });
+    return requestCsv(`/marketdata/quotes/download?${params.toString()}`);
+  },
 };
