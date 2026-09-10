@@ -1,9 +1,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Activity, Bell, Bot, CalendarClock, Download, Gauge, LineChart, ListTree, Network, Send, Sparkles, TrendingUp } from 'lucide-react';
+import { Activity, Bell, Bot, CalendarClock, Download, Gauge, LineChart, ListTree, Network, RotateCcw, Save, Send, Sparkles, Trash2, TrendingUp } from 'lucide-react';
 import { api } from '../api/client';
 import { KlineChart } from '../components/KlineChart';
 import type { AIAnalysisRecord, DatasetSummary, SrLevel } from '../types';
+import { clearAIConfig, DEFAULT_AI_CONFIG, isAIConfigDirty, loadAIConfig, saveAIConfig } from '../utils/aiConfig';
 
 const VIEWS = [
   { key: 'decision', label: '决策' },
@@ -15,16 +16,18 @@ const VIEWS = [
 type ViewKey = (typeof VIEWS)[number]['key'];
 
 export function AIAnalysisPage() {
+  const [storedConfig, setStoredConfig] = useState(loadAIConfig);
   const [datasetId, setDatasetId] = useState('');
   const [symbol, setSymbol] = useState('GC=F');
   const [timeframe, setTimeframe] = useState('1d');
   const [source, setSource] = useState<'yfinance' | 'akshare'>('yfinance');
-  const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com/v1');
-  const [model, setModel] = useState('deepseek-chat');
-  const [apiKey, setApiKey] = useState('');
-  const [thinking, setThinking] = useState(false);
-  const [barCount, setBarCount] = useState('120');
-  const [stance, setStance] = useState('balanced');
+  const [baseUrl, setBaseUrl] = useState(storedConfig.baseUrl);
+  const [model, setModel] = useState(storedConfig.model);
+  const [apiKey, setApiKey] = useState(storedConfig.apiKey);
+  const [thinking, setThinking] = useState(storedConfig.thinking);
+  const [barCount, setBarCount] = useState(storedConfig.analysisBarCount);
+  const [stance, setStance] = useState(storedConfig.decisionStance);
+  const [rememberApiKey, setRememberApiKey] = useState(storedConfig.rememberApiKey);
   const [view, setView] = useState<ViewKey>('decision');
   const [question, setQuestion] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -54,6 +57,80 @@ export function AIAnalysisPage() {
     decision_stance: stance,
     enable_next_bar_prediction: true,
   });
+
+  const currentConfig = {
+    baseUrl,
+    model,
+    apiKey,
+    thinking,
+    analysisBarCount: barCount,
+    decisionStance: stance,
+    rememberApiKey,
+  };
+  const configIsDirty = isAIConfigDirty(currentConfig, storedConfig);
+
+  const saveModelConfig = () => {
+    if (!model.trim()) {
+      setPageError('模型名不能为空');
+      return;
+    }
+    if (!/^https?:\/\//.test(baseUrl.trim())) {
+      setPageError('Base URL 必须以 http:// 或 https:// 开头');
+      return;
+    }
+    const parsedBarCount = Number(barCount);
+    if (!Number.isInteger(parsedBarCount) || parsedBarCount < 60 || parsedBarCount > 1000) {
+      setPageError('分析K线数必须是 60 到 1000 之间的整数');
+      return;
+    }
+
+    try {
+      const next = saveAIConfig(currentConfig);
+      setStoredConfig(next);
+      setNotice('大模型配置已保存');
+      setPageError('');
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const discardConfigChanges = () => {
+    setBaseUrl(storedConfig.baseUrl);
+    setModel(storedConfig.model);
+    setApiKey(storedConfig.apiKey);
+    setThinking(storedConfig.thinking);
+    setBarCount(storedConfig.analysisBarCount);
+    setStance(storedConfig.decisionStance);
+    setRememberApiKey(storedConfig.rememberApiKey);
+    setNotice('');
+    setPageError('');
+  };
+
+  const resetModelConfig = () => {
+    setBaseUrl(DEFAULT_AI_CONFIG.baseUrl);
+    setModel(DEFAULT_AI_CONFIG.model);
+    setApiKey(DEFAULT_AI_CONFIG.apiKey);
+    setThinking(DEFAULT_AI_CONFIG.thinking);
+    setBarCount(DEFAULT_AI_CONFIG.analysisBarCount);
+    setStance(DEFAULT_AI_CONFIG.decisionStance);
+    setRememberApiKey(DEFAULT_AI_CONFIG.rememberApiKey);
+    setNotice('已恢复默认配置，保存后生效');
+    setPageError('');
+  };
+
+  const removeSavedConfig = () => {
+    const next = clearAIConfig();
+    setStoredConfig(next);
+    setBaseUrl(next.baseUrl);
+    setModel(next.model);
+    setApiKey(next.apiKey);
+    setThinking(next.thinking);
+    setBarCount(next.analysisBarCount);
+    setStance(next.decisionStance);
+    setRememberApiKey(next.rememberApiKey);
+    setNotice('已清除保存的大模型配置');
+    setPageError('');
+  };
 
   const importRemote = useMutation({
     mutationFn: () => api.importRemoteDataset({ source, symbol, timeframe, lookback: 500 }),
@@ -209,8 +286,8 @@ export function AIAnalysisPage() {
                 <input id="ai-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
               </div>
               <div className="field">
-                <label htmlFor="ai-api-key">API Key（仅本次会话）</label>
-                <input id="ai-api-key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" />
+                <label htmlFor="ai-api-key">API Key</label>
+                <input id="ai-api-key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" autoComplete="off" />
               </div>
             </div>
           </div>
@@ -234,6 +311,32 @@ export function AIAnalysisPage() {
                 {thinking ? '已开启' : '已关闭'}
               </label>
             </div>
+          </div>
+          <div className="row" style={{ marginTop: 14 }}>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={rememberApiKey} onChange={(event) => setRememberApiKey(event.target.checked)} />
+              记住 API Key
+            </label>
+            <button className="button button-primary" onClick={saveModelConfig}>
+              <Save size={14} />
+              保存配置
+            </button>
+            <button className="button" onClick={discardConfigChanges} disabled={!configIsDirty}>
+              <RotateCcw size={14} />
+              放弃修改
+            </button>
+            <button className="button" onClick={resetModelConfig}>
+              恢复默认
+            </button>
+            <button className="button" onClick={removeSavedConfig} disabled={!storedConfig.savedAt}>
+              <Trash2 size={14} />
+              清除保存
+            </button>
+          </div>
+          <div className="muted" style={{ marginTop: 10 }}>
+            {storedConfig.savedAt
+              ? `已保存于 ${new Date(storedConfig.savedAt).toLocaleString()}。未勾选“记住 API Key”时密钥不会写入浏览器。`
+              : '尚未保存配置。未勾选“记住 API Key”时密钥不会写入浏览器。'}
           </div>
         </div>
       </div>
