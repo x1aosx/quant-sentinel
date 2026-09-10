@@ -1,6 +1,16 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { CandlestickChart, Play } from 'lucide-react';
+import {
+  AlertTriangle,
+  CandlestickChart,
+  CircleDollarSign,
+  Gauge,
+  ListChecks,
+  Loader2,
+  Play,
+  ScanSearch,
+  TrendingUp,
+} from 'lucide-react';
 import { KlineChart } from '../components/KlineChart';
 import type { DatasetSummary, PaAnalysisResult } from '../types';
 
@@ -129,46 +139,98 @@ export function PriceActionPage() {
           <h1>价格行为分析</h1>
           <div className="muted">基于所选数据集观察结构、突破与形态，仅用于研究与演示。</div>
         </div>
+        {result ? (
+          <div className="row">
+            <span className="badge badge-info">{result.symbol}</span>
+            <span className="tag">{result.timeframe}</span>
+            <span className="tag">{result.bars_used} 根K线</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="panel">
         <div className="section-title">
-          <CandlestickChart size={15} />
-          分析参数
+          <span className="row">
+            <CandlestickChart size={15} />
+            分析参数
+          </span>
         </div>
-        <div className="row">
-          <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-            {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-            {datasets.map((dataset) => (
-              <option key={dataset.id} value={dataset.id}>
-                {dataset.symbol} · {dataset.timeframe} · {dataset.bar_count} 根
-              </option>
-            ))}
-          </select>
-          <label className="muted">lookback</label>
-          <input value={lookback} onChange={(e) => setLookback(e.target.value)} placeholder="如 250，可留空" />
-          <label className="muted">risk_fraction</label>
-          <input value={riskFraction} onChange={(e) => setRiskFraction(e.target.value)} placeholder="如 0.01" />
-          <label className="muted">min_rr</label>
-          <input value={minRr} onChange={(e) => setMinRr(e.target.value)} placeholder="如 1.5" />
-          <select value={stance} onChange={(e) => setStance(e.target.value as 'conservative' | 'balanced' | 'aggressive')}>
-            <option value="conservative">保守 conservative</option>
-            <option value="balanced">均衡 balanced</option>
-            <option value="aggressive">积极 aggressive</option>
-          </select>
+        <div className="form-grid">
+          <label className="field">
+            <span>数据集</span>
+            <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+              {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
+              {datasets.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.symbol} · {dataset.timeframe} · {dataset.bar_count} 根
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Lookback</span>
+            <input value={lookback} onChange={(e) => setLookback(e.target.value)} placeholder="如 250，可留空" />
+          </label>
+          <label className="field">
+            <span>Risk fraction</span>
+            <input value={riskFraction} onChange={(e) => setRiskFraction(e.target.value)} placeholder="如 0.01" />
+          </label>
+          <label className="field">
+            <span>最小 RR</span>
+            <input value={minRr} onChange={(e) => setMinRr(e.target.value)} placeholder="如 1.5" />
+          </label>
+          <label className="field">
+            <span>分析倾向</span>
+            <select value={stance} onChange={(e) => setStance(e.target.value as 'conservative' | 'balanced' | 'aggressive')}>
+              <option value="conservative">保守 conservative</option>
+              <option value="balanced">均衡 balanced</option>
+              <option value="aggressive">积极 aggressive</option>
+            </select>
+          </label>
+        </div>
+        <div className="row" style={{ marginTop: 14 }}>
           <button className="button button-primary" onClick={handleAnalyze} disabled={analysis.isPending || !datasetId}>
-            <Play size={14} />
+            {analysis.isPending ? <Loader2 size={14} /> : <Play size={14} />}
             {analysis.isPending ? '分析中...' : '开始分析'}
           </button>
+          {datasets.length > 0 ? <span className="muted">参数留空时使用后端默认值。</span> : null}
         </div>
-        {datasetsQuery.isError ? <p className="muted">数据集列表加载失败：{(datasetsQuery.error as Error).message}</p> : null}
-        {pageError ? <div className="empty">错误：{pageError}</div> : null}
-        {analysis.isError ? <div className="empty">分析失败：{(analysis.error as Error).message}</div> : null}
+        {datasetsQuery.isError ? (
+          <div className="empty" style={{ marginTop: 14 }}>
+            <span>
+              <AlertTriangle size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+              数据集列表加载失败：{(datasetsQuery.error as Error).message}
+            </span>
+          </div>
+        ) : null}
+        {pageError ? (
+          <div className="empty" style={{ marginTop: 14 }}>
+            <span>
+              <AlertTriangle size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+              {pageError}
+            </span>
+          </div>
+        ) : null}
+        {analysis.isError ? (
+          <div className="empty" style={{ marginTop: 14 }}>
+            <span>
+              <AlertTriangle size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+              分析失败：{(analysis.error as Error).message}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {!result && !analysis.isPending && !pageError && !analysis.isError ? (
-        <div className="empty">选择数据集与参数后点击“开始分析”，结果会显示在这里。</div>
+        <div className="empty">
+          <span>
+            <ScanSearch size={18} style={{ display: 'block', margin: '0 auto 8px' }} />
+            选择数据集与参数后点击“开始分析”，结果会显示在这里。
+          </span>
+        </div>
       ) : null}
+
+      {analysis.isPending ? <div className="empty">正在生成价格行为结果...</div> : null}
 
       {result && context && features && decision ? (
         <>
@@ -178,12 +240,14 @@ export function PriceActionPage() {
                 <div className="stat-label">现价</div>
                 <div className="stat-value">{fmtNum(result.current_price, 4)}</div>
               </div>
+              <span className="stat-icon"><CircleDollarSign size={18} /></span>
             </div>
             <div className="panel stat">
               <div>
                 <div className="stat-label">EMA20</div>
                 <div className="stat-value">{fmtNum(result.ema20, 4)}</div>
               </div>
+              <span className="stat-icon info"><TrendingUp size={18} /></span>
             </div>
             <div className="panel stat">
               <div>
@@ -191,32 +255,56 @@ export function PriceActionPage() {
                 <div className="stat-value">{fmtNum(result.atr, 4)}</div>
                 <div className="muted">{fmt100(result.atr_pct)}</div>
               </div>
+              <span className="stat-icon warn"><Gauge size={18} /></span>
             </div>
             <div className="panel stat">
               <div>
                 <div className="stat-label">置信度</div>
                 <div className="stat-value">{fmt100(decision.confidence)}</div>
+                <div className="muted">{decision.action}</div>
               </div>
+              <span className="stat-icon"><ListChecks size={18} /></span>
             </div>
           </div>
 
           <div className="grid grid-2">
             <div className="panel">
-              <div className="section-title">市场环境</div>
+              <div className="section-title">
+                <span>市场环境</span>
+                <span className="tag">{result.symbol}</span>
+              </div>
               <div className="row">
                 <span className="badge badge-info">{DIRECTION_LABELS[context.direction] ?? context.direction}</span>
                 {context.cycle_position ? <span className="tag">{context.cycle_position}</span> : null}
                 {context.recent_spike ? <span className="tag">{context.recent_spike}</span> : null}
                 {context.scale_conflict ? <span className="badge badge-warn">多周期方向冲突</span> : null}
               </div>
-              <p className="muted">
-                价格位置 {fmtPct(context.price_position)} · 区间 {fmtNum(context.range_low, 4)} ~ {fmtNum(context.range_high, 4)}
-              </p>
-              {context.trend_detail ? <div>{context.trend_detail}</div> : null}
-              {context.background_direction ? <p className="muted">背景方向：{context.background_direction}</p> : null}
+              <div className="feature-list" style={{ marginTop: 14 }}>
+                <div className="feature-item">
+                  <div className="label">价格位置</div>
+                  <div className="value">{fmtPct(context.price_position)}</div>
+                </div>
+                <div className="feature-item">
+                  <div className="label">观察区间</div>
+                  <div className="value">
+                    {fmtNum(context.range_low, 4)} ~ {fmtNum(context.range_high, 4)}
+                  </div>
+                </div>
+                <div className="feature-item">
+                  <div className="label">背景方向</div>
+                  <div className="value">{context.background_direction ?? '--'}</div>
+                </div>
+                <div className="feature-item">
+                  <div className="label">趋势细节</div>
+                  <div className="value">{context.trend_detail ?? '--'}</div>
+                </div>
+              </div>
             </div>
             <div className="panel">
-              <div className="section-title">结构特征</div>
+              <div className="section-title">
+                <span>结构特征</span>
+                <span className="tag">{result.timeframe}</span>
+              </div>
               <div className="row">
                 {features.swing_structure ? <span className="tag">{features.swing_structure}</span> : null}
                 {features.breakout_quality ? <span className="tag">{features.breakout_quality}</span> : null}
@@ -224,16 +312,50 @@ export function PriceActionPage() {
                   <span key={pattern} className="tag">{pattern}</span>
                 ))}
               </div>
-              <p className="muted">
-                支撑 {features.supports?.length ?? 0} 个 · 阻力 {features.resistances?.length ?? 0} 个 · 突破事件 {features.breakout_events?.length ?? 0} 次 · 摆动点 {features.swings?.length ?? 0} 个
-              </p>
-              {features.supports?.length ? <div className="code">支撑: {features.supports.map((price) => fmtNum(price, 4)).join(' / ')}</div> : null}
-              {features.resistances?.length ? <div className="code">阻力: {features.resistances.map((price) => fmtNum(price, 4)).join(' / ')}</div> : null}
+              <div className="metric-list" style={{ marginTop: 14 }}>
+                <div>
+                  <div className="label">支撑</div>
+                  <div className="value">{features.supports?.length ?? 0} 个</div>
+                </div>
+                <div>
+                  <div className="label">阻力</div>
+                  <div className="value">{features.resistances?.length ?? 0} 个</div>
+                </div>
+                <div>
+                  <div className="label">突破事件</div>
+                  <div className="value">{features.breakout_events?.length ?? 0} 次</div>
+                </div>
+                <div>
+                  <div className="label">摆动点</div>
+                  <div className="value">{features.swings?.length ?? 0} 个</div>
+                </div>
+              </div>
+              <div className="stack" style={{ gap: 8, marginTop: 14 }}>
+                <div className="row">
+                  {(features.supports ?? []).map((price, index) => (
+                    <span key={`support-${price}-${index}`} className="zone-chip support">
+                      {fmtNum(price, 4)}
+                    </span>
+                  ))}
+                  {!features.supports?.length ? <span className="muted">暂无支撑价位</span> : null}
+                </div>
+                <div className="row">
+                  {(features.resistances ?? []).map((price, index) => (
+                    <span key={`resistance-${price}-${index}`} className="zone-chip resistance">
+                      {fmtNum(price, 4)}
+                    </span>
+                  ))}
+                  {!features.resistances?.length ? <span className="muted">暂无阻力价位</span> : null}
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="panel">
-            <div className="section-title">行为决策</div>
+            <div className="section-title">
+              <span>行为决策</span>
+              <span className="tag">{result.bars_used} 根K线</span>
+            </div>
             <div className="row">
               <span className={`badge ${decision.action === 'LONG' ? 'badge-ok' : decision.action === 'SHORT' ? 'badge-danger' : 'badge-neutral'}`}>
                 {decision.action === 'LONG' ? '做多观察' : decision.action === 'SHORT' ? '做空观察' : '观望'}
@@ -241,26 +363,51 @@ export function PriceActionPage() {
               <span className="tag">置信度 {fmt100(decision.confidence)}</span>
               {decision.risk_fraction ? <span className="tag">单笔风险 {fmtPct(decision.risk_fraction)}</span> : null}
             </div>
-            <div className="row">
-              <span className="muted">entry {fmtNum(decision.entry, 4)}</span>
-              <span className="muted">stop {fmtNum(decision.stop, 4)}</span>
-              <span className="muted">target {fmtNum(decision.target, 4)}</span>
-              <span className="muted">rr {fmtNum(decision.rr)}</span>
+            <div className="metric-list" style={{ marginTop: 14 }}>
+              <div>
+                <div className="label">Entry</div>
+                <div className="value">{fmtNum(decision.entry, 4)}</div>
+              </div>
+              <div>
+                <div className="label">Stop</div>
+                <div className="value">{fmtNum(decision.stop, 4)}</div>
+              </div>
+              <div>
+                <div className="label">Target</div>
+                <div className="value">{fmtNum(decision.target, 4)}</div>
+              </div>
+              <div>
+                <div className="label">RR</div>
+                <div className="value">{fmtNum(decision.rr)}</div>
+              </div>
             </div>
             {(decision.reason_codes ?? []).length ? (
-              <div className="row">
+              <div className="row" style={{ marginTop: 14 }}>
                 {(decision.reason_codes ?? []).map((code) => (
                   <span key={code} className="code">{code}</span>
                 ))}
               </div>
             ) : null}
-            {decision.reasoning ? <p>{decision.reasoning}</p> : null}
-            {decision.invalidation ? <p className="muted">失效条件：{decision.invalidation}</p> : null}
-            <p className="muted">以上为研究/演示输出，不构成投资建议。</p>
+            {decision.reasoning ? (
+              <div className="feature-item" style={{ marginTop: 14 }}>
+                <div className="label">判断依据</div>
+                <div className="value">{decision.reasoning}</div>
+              </div>
+            ) : null}
+            {decision.invalidation ? (
+              <div className="feature-item" style={{ marginTop: 8 }}>
+                <div className="label">失效条件</div>
+                <div className="value">{decision.invalidation}</div>
+              </div>
+            ) : null}
+            <p className="muted" style={{ marginBottom: 0 }}>以上为研究/演示输出，不构成投资建议。</p>
           </div>
 
           <div className="panel">
-            <div className="section-title">最近 150 根K线</div>
+            <div className="section-title">
+              <span>最近 150 根K线</span>
+              <span className="tag">{result.timeframe}</span>
+            </div>
             <KlineChart candles={result.candles.slice(-150)} levels={result.levels ?? []} />
           </div>
         </>
