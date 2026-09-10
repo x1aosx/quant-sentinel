@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { Database, Download, FileUp, Sparkles } from 'lucide-react';
+import { Database, Download, FileUp, Globe, Sparkles, Upload } from 'lucide-react';
 import { api } from '../api/client';
 import type { DatasetBar, DatasetSummary } from '../types';
 
@@ -157,6 +157,11 @@ export function DataCenterPage() {
   const [symbol, setSymbol] = useState('AAPL');
   const [timeframe, setTimeframe] = useState('1d');
   const [count, setCount] = useState('180');
+  const [remoteSource, setRemoteSource] = useState<'yfinance' | 'akshare'>('yfinance');
+  const [remoteSymbol, setRemoteSymbol] = useState('GC=F');
+  const [remoteTimeframe, setRemoteTimeframe] = useState('1d');
+  const [remoteLookback, setRemoteLookback] = useState('500');
+  const [remoteAdjust, setRemoteAdjust] = useState<'qfq' | 'hfq' | 'none'>('qfq');
   const [selectedId, setSelectedId] = useState('');
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
@@ -212,6 +217,21 @@ export function DataCenterPage() {
       setNotice(`行情下载成功：${payload.symbol} ${payload.timeframe}，${payload.count} 根K线`);
       setPageError('');
     },
+    onError: (err: Error) => {
+      setNotice('');
+      setPageError(err.message);
+    },
+  });
+
+  const remoteMutation = useMutation({
+    mutationFn: (payload: {
+      source: 'yfinance' | 'akshare';
+      symbol: string;
+      timeframe: string;
+      lookback: number;
+      adjust: 'qfq' | 'hfq' | 'none';
+    }) => api.importRemoteDataset(payload),
+    onSuccess: (created) => finishWith(created, '网络导入'),
     onError: (err: Error) => {
       setNotice('');
       setPageError(err.message);
@@ -283,74 +303,199 @@ export function DataCenterPage() {
     });
   };
 
+  const handleRemoteImport = () => {
+    setPageError('');
+    setNotice('');
+    const symbolValue = remoteSymbol.trim().toUpperCase();
+    const timeframeValue = remoteTimeframe.trim();
+    const lookback = Number(remoteLookback);
+    if (!symbolValue) {
+      setPageError('请填写要导入的 symbol');
+      return;
+    }
+    if (!timeframeValue) {
+      setPageError('请选择要导入的 timeframe');
+      return;
+    }
+    if (!Number.isInteger(lookback) || lookback < 10 || lookback > 5000) {
+      setPageError('回看数量必须是 10 到 5000 之间的整数');
+      return;
+    }
+    remoteMutation.mutate({
+      source: remoteSource,
+      symbol: symbolValue,
+      timeframe: timeframeValue,
+      lookback,
+      adjust: remoteAdjust,
+    });
+  };
+
   return (
     <div className="stack">
       <div className="page-header">
         <div>
           <h1>数据中心</h1>
-          <div className="muted">导入本地行情数据或生成演示数据集，供支撑阻力与价格行为分析使用。</div>
+          <div className="muted">导入本地或网络行情数据，供支撑阻力与价格行为分析使用。</div>
         </div>
+        <span className="tag">{datasets.length} 个数据集</span>
       </div>
 
-      <div className="grid grid-2">
+      <div className="grid grid-3">
         <div className="panel">
           <div className="section-title">
             <FileUp size={15} />
             导入本地数据
           </div>
-          <div className="row">
+          <div className="upload-panel">
             <input ref={fileInputRef} type="file" accept=".csv,.json" onChange={(e) => handleFileChange(e.target.files?.[0])} />
-          </div>
-          <div className="row">
-            <label className="muted">symbol</label>
-            <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="如 AAPL" />
-            <label className="muted">timeframe</label>
-            <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="如 1d" />
-            <label className="muted">count</label>
-            <input type="number" min={60} max={1000} value={count} onChange={(e) => setCount(e.target.value)} />
-          </div>
-          <div className="row">
-            <button className="button button-primary" onClick={handleUpload} disabled={uploadMutation.isPending}>
-              {uploadMutation.isPending ? '导入中...' : '解析并上传'}
-            </button>
-            <button className="button" onClick={handleDownload} disabled={downloadMutation.isPending}>
-              <Download size={15} />
-              {downloadMutation.isPending ? '下载中...' : '下载行情'}
-            </button>
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="dataset-symbol">symbol</label>
+                <input id="dataset-symbol" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="如 AAPL" />
+              </div>
+              <div className="field">
+                <label htmlFor="dataset-timeframe">timeframe</label>
+                <input id="dataset-timeframe" value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="如 1d" />
+              </div>
+              <div className="field">
+                <label htmlFor="dataset-count">count</label>
+                <input
+                  id="dataset-count"
+                  type="number"
+                  min={60}
+                  max={1000}
+                  value={count}
+                  onChange={(e) => setCount(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 14 }}>
+              <button className="button button-primary" onClick={handleUpload} disabled={uploadMutation.isPending}>
+                <Upload size={14} />
+                {uploadMutation.isPending ? '导入中...' : '解析并上传'}
+              </button>
+              <button className="button" onClick={handleDownload} disabled={downloadMutation.isPending}>
+                <Download size={15} />
+                {downloadMutation.isPending ? '下载中...' : '下载行情'}
+              </button>
+            </div>
             <span className="muted">支持 CSV（session/date、OHLC、volume/tick_volume）与 JSON（bar 数组或 {'{bars: []}'}）。</span>
             <span className="muted">下载行情使用确定性演示数据，不代表真实市场。</span>
           </div>
         </div>
+
         <div className="panel">
           <div className="section-title">
             <Sparkles size={15} />
             演示数据
           </div>
-          <div className="row">
-            <button
-              className="button"
-              onClick={() => sampleMutation.mutate(timeframe.trim() || undefined)}
-              disabled={sampleMutation.isPending}
-            >
-              {sampleMutation.isPending ? '生成中...' : '生成演示数据'}
-            </button>
-            <span className="muted">在 timeframe 输入框中填写周期可指定生成的演示数据。</span>
+          <div className="upload-panel">
+            <div className="row">
+              <span className="inline-label">目标周期</span>
+              <span className="tag">{timeframe.trim() || '默认周期'}</span>
+            </div>
+            <div className="row" style={{ marginTop: 14 }}>
+              <button
+                className="button"
+                onClick={() => sampleMutation.mutate(timeframe.trim() || undefined)}
+                disabled={sampleMutation.isPending}
+              >
+                <Sparkles size={14} />
+                {sampleMutation.isPending ? '生成中...' : '生成演示数据'}
+              </button>
+              <span className="muted">在上方 timeframe 输入框填写周期可指定生成结果。</span>
+            </div>
+            <p className="muted" style={{ margin: '12px 0 0' }}>演示数据仅用于研究流程验证，不代表真实市场。</p>
           </div>
-          <p className="muted">演示数据仅用于研究流程验证，不代表真实市场。</p>
+        </div>
+
+        <div className="panel">
+          <div className="section-title">
+            <Globe size={15} />
+            网络数据导入
+          </div>
+          <div className="upload-panel">
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="remote-source">数据源</label>
+                <select
+                  id="remote-source"
+                  value={remoteSource}
+                  onChange={(e) => setRemoteSource(e.target.value as 'yfinance' | 'akshare')}
+                >
+                  <option value="yfinance">YFinance</option>
+                  <option value="akshare">AkShare/A股</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="remote-symbol">symbol</label>
+                <input
+                  id="remote-symbol"
+                  value={remoteSymbol}
+                  onChange={(e) => setRemoteSymbol(e.target.value)}
+                  placeholder={remoteSource === 'akshare' ? '如 600519 或 SH600519' : '如 GC=F 或 AAPL'}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="remote-timeframe">timeframe</label>
+                <select
+                  id="remote-timeframe"
+                  value={remoteTimeframe}
+                  onChange={(e) => setRemoteTimeframe(e.target.value)}
+                >
+                  <option value="1d">1d</option>
+                  <option value="1w">1w</option>
+                  <option value="1h">1h</option>
+                  <option value="30m">30m</option>
+                  <option value="15m">15m</option>
+                  <option value="5m">5m</option>
+                  <option value="1m">1m</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="remote-lookback">回看K线</label>
+                <input
+                  id="remote-lookback"
+                  type="number"
+                  min={10}
+                  max={5000}
+                  step={1}
+                  value={remoteLookback}
+                  onChange={(e) => setRemoteLookback(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="remote-adjust">复权</label>
+                <select
+                  id="remote-adjust"
+                  value={remoteAdjust}
+                  onChange={(e) => setRemoteAdjust(e.target.value as 'qfq' | 'hfq' | 'none')}
+                >
+                  <option value="qfq">前复权</option>
+                  <option value="hfq">后复权</option>
+                  <option value="none">不复权</option>
+                </select>
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 14 }}>
+              <button className="button button-primary" onClick={handleRemoteImport} disabled={remoteMutation.isPending}>
+                <Globe size={14} />
+                {remoteMutation.isPending ? '下载中...' : '下载并导入'}
+              </button>
+              <span className="muted">使用公开行情接口，仅生成本地研究快照。</span>
+            </div>
+          </div>
         </div>
       </div>
 
       {pageError ? <div className="empty">错误：{pageError}</div> : null}
-      {notice ? (
-        <div className="row">
-          <span className="badge badge-ok">{notice}</span>
-        </div>
-      ) : null}
+      {notice ? <div className="notice">{notice}</div> : null}
 
       <div className="panel">
         <div className="section-title">
           <Database size={15} />
           数据集列表
+          {datasets.length ? <span className="tag">{selectedId ? '已选择数据集' : '未选择'}</span> : null}
         </div>
         {datasetsQuery.isPending ? (
           <div className="empty">加载中...</div>

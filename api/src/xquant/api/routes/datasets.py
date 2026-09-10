@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+from xquant.marketdata.remote import fetch_remote_bars
 from xquant.marketdata.synthetic import generate_synthetic_bars
 from xquant.registry import Database
 
@@ -72,6 +74,36 @@ def create_sample_dataset(
             "created_at": datetime.now(UTC).isoformat(),
         }
     )
+
+
+@router.post("/datasets/remote")
+def import_remote_dataset(
+    db: Annotated[Database, Depends(get_database)],
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = payload or {}
+    try:
+        remote = fetch_remote_bars(payload)
+        if len(remote["bars"]) < 60:
+            raise HTTPException(status_code=400, detail="远程行情数据不足：至少需要 60 根已收盘K线")
+        dataset = db.insert_dataset(
+            {
+                "symbol": remote["symbol"],
+                "timeframe": remote["timeframe"],
+                "bars": remote["bars"],
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+    except HTTPException:
+        raise
+    except (TypeError, ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        **dataset,
+        "source": remote["source"],
+        "source_provider": remote["source_provider"],
+        "simulation_only": True,
+    }
 
 
 @router.get("/datasets")

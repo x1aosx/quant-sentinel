@@ -14,3 +14,4 @@ deploy/data/
 deploy/logs/
 *.log
 *.db
+.vscode/

@@ -6,6 +6,7 @@ import io
 from fastapi.testclient import TestClient
 
 from xquant.api.app import create_app
+from xquant.marketdata.remote import RemoteImportRequest
 
 
 def test_dataset_and_analysis_endpoints(tmp_path) -> None:
@@ -93,6 +94,66 @@ def test_dataset_validation_rejects_short_and_bad_bars(tmp_path) -> None:
             },
         )
         assert bad.status_code == 400
+
+
+def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
+    tmp_path, monkeypatch
+) -> None:
+    request_seen = None
+
+    def fake_fetch_remote_bars(payload: dict) -> dict:
+        nonlocal request_seen
+        request_seen = RemoteImportRequest(
+            source=str(payload["source"]),
+            symbol=str(payload["symbol"]),
+            timeframe=str(payload["timeframe"]),
+            lookback=int(payload["lookback"]),
+            adjust=str(payload["adjust"]),
+        )
+        return {
+            "symbol": request_seen.symbol.upper(),
+            "timeframe": request_seen.timeframe,
+            "source": request_seen.source,
+            "source_provider": "yfinance_public_chart",
+            "simulation_only": True,
+            "bars": [
+                {
+                    "session_id": f"2026-01-{day:02d}",
+                    "open": 100,
+                    "high": 101,
+                    "low": 99,
+                    "close": 100.5,
+                    "volume": 1_000,
+                }
+                for day in range(1, 81)
+            ],
+        }
+
+    monkeypatch.setattr("xquant.api.routes.datasets.fetch_remote_bars", fake_fetch_remote_bars)
+
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        response = client.post(
+            "/api/v1/datasets/remote",
+            json={
+                "source": "yfinance",
+                "symbol": "gc=f",
+                "timeframe": "1d",
+                "lookback": 500,
+                "adjust": "qfq",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        created = response.json()
+        assert created["symbol"] == "GC=F"
+        assert created["bar_count"] == 80
+        assert created["source"] == "yfinance"
+        assert created["source_provider"] == "yfinance_public_chart"
+        assert request_seen is not None
+        assert request_seen.symbol.upper() == "GC=F"
+
+        datasets = client.get("/api/v1/datasets").json()["items"]
+        assert [item["id"] for item in datasets] == [created["id"]]
 
 
 def test_quotes_download_returns_deterministic_csv(tmp_path) -> None:

@@ -1,4 +1,5 @@
 import type {
+  AIAnalysisRecord,
   DatasetBar,
   DatasetSummary,
   HealthSummary,
@@ -95,6 +96,32 @@ export const api = {
     stance?: 'conservative' | 'balanced' | 'aggressive';
   }) =>
     apiRequest<PaAnalysisResult>('/analysis/price-action', {
+      method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  importRemoteDataset: (payload: {
+    source: 'yfinance' | 'akshare';
+    symbol: string;
+    timeframe: string;
+    lookback?: number;
+    adjust?: 'qfq' | 'hfq' | 'none';
+  }) =>
+    apiRequest<DatasetSummary>('/datasets/remote', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  analyzeAI: (payload: Record<string, unknown>) =>
+    apiRequest<AIAnalysisRecord>('/ai/analyze', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  followupAI: (payload: Record<string, unknown>) =>
+    apiRequest<{ status: string; answer: string }>('/ai/followup', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  sendFeishu: (payload: Record<string, unknown>) =>
+    apiRequest<{ sent: boolean; reason?: string; response?: unknown }>('/notifications/feishu', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

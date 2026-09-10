@@ -1,6 +1,15 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Layers, Play } from 'lucide-react';
+import {
+  AlertTriangle,
+  CircleDollarSign,
+  Gauge,
+  Layers,
+  Loader2,
+  Play,
+  ScanSearch,
+  ShieldCheck,
+} from 'lucide-react';
 import { KlineChart } from '../components/KlineChart';
 import type { DatasetSummary, SrAnalysisResult } from '../types';
 
@@ -98,44 +107,94 @@ export function SupportResistancePage() {
           <h1>支撑阻力分析</h1>
           <div className="muted">基于所选数据集识别关键价位区间，结果仅用于研究参考。</div>
         </div>
+        {result ? (
+          <div className="row">
+            <span className="badge badge-info">{result.symbol}</span>
+            <span className="tag">{result.timeframe}</span>
+            <span className="tag">{result.levels.length} 个区间</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="panel">
         <div className="section-title">
-          <Layers size={15} />
-          分析参数
+          <span className="row">
+            <Layers size={15} />
+            分析参数
+          </span>
         </div>
-        <div className="row">
-          <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-            {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-            {datasets.map((dataset) => (
-              <option key={dataset.id} value={dataset.id}>
-                {dataset.symbol} · {dataset.timeframe} · {dataset.bar_count} 根
-              </option>
-            ))}
-          </select>
-          <label className="muted">lookback</label>
-          <input value={lookback} onChange={(e) => setLookback(e.target.value)} placeholder="如 250，可留空" />
-          <label className="muted">n_zones</label>
-          <input value={nZones} onChange={(e) => setNZones(e.target.value)} placeholder="如 8，可留空" />
-          <select value={direction} onChange={(e) => setDirection(e.target.value as 'both' | 'long' | 'short')}>
-            <option value="both">双向 both</option>
-            <option value="long">仅做多 long</option>
-            <option value="short">仅做空 short</option>
-          </select>
+        <div className="form-grid">
+          <label className="field">
+            <span>数据集</span>
+            <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+              {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
+              {datasets.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.symbol} · {dataset.timeframe} · {dataset.bar_count} 根
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Lookback</span>
+            <input value={lookback} onChange={(e) => setLookback(e.target.value)} placeholder="如 250，可留空" />
+          </label>
+          <label className="field">
+            <span>区间数量</span>
+            <input value={nZones} onChange={(e) => setNZones(e.target.value)} placeholder="如 8，可留空" />
+          </label>
+          <label className="field">
+            <span>方向</span>
+            <select value={direction} onChange={(e) => setDirection(e.target.value as 'both' | 'long' | 'short')}>
+              <option value="both">双向 both</option>
+              <option value="long">仅做多 long</option>
+              <option value="short">仅做空 short</option>
+            </select>
+          </label>
+        </div>
+        <div className="row" style={{ marginTop: 14 }}>
           <button className="button button-primary" onClick={handleAnalyze} disabled={analysis.isPending || !datasetId}>
-            <Play size={14} />
+            {analysis.isPending ? <Loader2 size={14} /> : <Play size={14} />}
             {analysis.isPending ? '分析中...' : '开始分析'}
           </button>
+          {datasets.length > 0 ? <span className="muted">参数留空时使用后端默认值。</span> : null}
         </div>
-        {datasetsQuery.isError ? <p className="muted">数据集列表加载失败：{(datasetsQuery.error as Error).message}</p> : null}
-        {pageError ? <div className="empty">错误：{pageError}</div> : null}
-        {analysis.isError ? <div className="empty">分析失败：{(analysis.error as Error).message}</div> : null}
+        {datasetsQuery.isError ? (
+          <div className="empty" style={{ marginTop: 14 }}>
+            <span>
+              <AlertTriangle size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+              数据集列表加载失败：{(datasetsQuery.error as Error).message}
+            </span>
+          </div>
+        ) : null}
+        {pageError ? (
+          <div className="empty" style={{ marginTop: 14 }}>
+            <span>
+              <AlertTriangle size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+              {pageError}
+            </span>
+          </div>
+        ) : null}
+        {analysis.isError ? (
+          <div className="empty" style={{ marginTop: 14 }}>
+            <span>
+              <AlertTriangle size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+              分析失败：{(analysis.error as Error).message}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {!result && !analysis.isPending && !pageError && !analysis.isError ? (
-        <div className="empty">选择数据集与参数后点击“开始分析”，结果会显示在这里。</div>
+        <div className="empty">
+          <span>
+            <ScanSearch size={18} style={{ display: 'block', margin: '0 auto 8px' }} />
+            选择数据集与参数后点击“开始分析”，结果会显示在这里。
+          </span>
+        </div>
       ) : null}
+
+      {analysis.isPending ? <div className="empty">正在识别支撑阻力区间...</div> : null}
 
       {result ? (
         <>
@@ -145,6 +204,7 @@ export function SupportResistancePage() {
                 <div className="stat-label">现价</div>
                 <div className="stat-value">{fmtNum(result.current_price, 4)}</div>
               </div>
+              <span className="stat-icon"><CircleDollarSign size={18} /></span>
             </div>
             <div className="panel stat">
               <div>
@@ -152,6 +212,7 @@ export function SupportResistancePage() {
                 <div className="stat-value">{fmtNum(result.atr, 4)}</div>
                 <div className="muted">{fmt100(result.atr_pct)}</div>
               </div>
+              <span className="stat-icon warn"><Gauge size={18} /></span>
             </div>
             <div className="panel stat">
               <div>
@@ -159,6 +220,7 @@ export function SupportResistancePage() {
                 <div className="stat-value">{result.trend.label}</div>
                 {result.trend.detail ? <div className="muted">{result.trend.detail}</div> : null}
               </div>
+              <span className="stat-icon info"><ShieldCheck size={18} /></span>
             </div>
             <div className="panel stat">
               <div>
@@ -166,25 +228,44 @@ export function SupportResistancePage() {
                 <div className="stat-value">{fmtNum(riskReward?.risk_reward_ratio)}</div>
                 <div className="muted">{riskReward?.quality ?? '--'}</div>
               </div>
+              <span className="stat-icon"><Layers size={18} /></span>
             </div>
           </div>
 
           <div className="panel">
-            <div className="section-title">概览</div>
-            {result.summary.headline ? <div>{result.summary.headline}</div> : <div className="empty">后端未返回 headline。</div>}
+            <div className="section-title">
+              <span>概览</span>
+              <span className="tag">{result.bars_used} 根K线</span>
+            </div>
+            {result.summary.headline ? <div className="feature-item"><div className="value">{result.summary.headline}</div></div> : <div className="empty">后端未返回 headline。</div>}
             {riskReward ? (
-              <p className="muted">
-                潜在收益 {fmt100(riskReward.potential_profit_pct)} · 潜在损失 {fmt100(riskReward.potential_loss_pct)}
-              </p>
+              <div className="metric-list" style={{ marginTop: 14 }}>
+                <div>
+                  <div className="label">风险回报比</div>
+                  <div className="value">{fmtNum(riskReward.risk_reward_ratio)}</div>
+                </div>
+                <div>
+                  <div className="label">质量</div>
+                  <div className="value">{riskReward.quality ?? '--'}</div>
+                </div>
+                <div>
+                  <div className="label">潜在收益</div>
+                  <div className="value">{fmt100(riskReward.potential_profit_pct)}</div>
+                </div>
+                <div>
+                  <div className="label">潜在损失</div>
+                  <div className="value">{fmt100(riskReward.potential_loss_pct)}</div>
+                </div>
+              </div>
             ) : null}
-            {result.summary.caveat ? <p className="muted">提示：{result.summary.caveat}</p> : null}
-            <p className="muted">
-              使用 {result.bars_used} 根K线 · {result.symbol} · {result.timeframe}
-            </p>
+            {result.summary.caveat ? <p className="muted" style={{ marginBottom: 0 }}>提示：{result.summary.caveat}</p> : null}
           </div>
 
           <div className="panel">
-            <div className="section-title">价位区间</div>
+            <div className="section-title">
+              <span>价位区间</span>
+              <span className="tag">{result.levels.length} 个</span>
+            </div>
             {result.levels.length === 0 ? (
               <div className="empty">后端未识别出价位区间。</div>
             ) : (
@@ -192,22 +273,24 @@ export function SupportResistancePage() {
                 <thead>
                   <tr>
                     <th>类型</th>
-                    <th>center</th>
-                    <th>low</th>
-                    <th>high</th>
-                    <th>distance_pct</th>
-                    <th>distance_atr</th>
-                    <th>width_atr</th>
-                    <th>n_events</th>
-                    <th>volume_pct</th>
-                    <th>edge_score</th>
-                    <th>tf_count/tfs</th>
+                    <th>Center</th>
+                    <th>Low</th>
+                    <th>High</th>
+                    <th>Distance %</th>
+                    <th>Distance ATR</th>
+                    <th>Width ATR</th>
+                    <th>Events</th>
+                    <th>Volume %</th>
+                    <th>Edge Score</th>
+                    <th>TF Count / TFS</th>
                   </tr>
                 </thead>
                 <tbody>
                   {result.levels.map((level, index) => (
                     <tr key={`${level.zone_type}-${level.center}-${index}`}>
-                      <td>{level.zone_type === 'support' ? '支撑' : '阻力'}</td>
+                      <td>
+                        <span className={`zone-chip ${level.zone_type}`}>{level.zone_type === 'support' ? '支撑' : '阻力'}</span>
+                      </td>
                       <td>{fmtNum(level.center, 4)}</td>
                       <td>{fmtNum(level.low, 4)}</td>
                       <td>{fmtNum(level.high, 4)}</td>
@@ -226,7 +309,10 @@ export function SupportResistancePage() {
           </div>
 
           <div className="panel">
-            <div className="section-title">K线与价位区间</div>
+            <div className="section-title">
+              <span>K线与价位区间</span>
+              <span className="tag">{result.symbol}</span>
+            </div>
             <KlineChart candles={result.candles.slice(-150)} levels={result.levels} />
           </div>
         </>
