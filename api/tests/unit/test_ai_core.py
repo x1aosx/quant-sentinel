@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from xquant.ai.service import (
     build_decision_tree_layout,
     build_snapshot,
@@ -8,7 +10,11 @@ from xquant.ai.service import (
     normalize_ai_settings,
     run_two_stage,
 )
-from xquant.marketdata.remote import normalize_remote_payload
+from xquant.marketdata.remote import (
+    RemoteImportRequest,
+    fetch_remote_bars,
+    normalize_remote_payload,
+)
 from xquant.marketdata.synthetic import generate_synthetic_bars
 from xquant.notifications.feishu import sign_feishu_payload
 
@@ -107,3 +113,50 @@ def test_remote_payload_normalization_and_feishu_signing() -> None:
     signed = sign_feishu_payload({"msg_type": "text"}, "secret")
     assert signed["timestamp"]
     assert signed["sign"]
+
+
+def test_yahoo_fetch_encodes_symbol_and_normalizes_bars(monkeypatch) -> None:
+    requests: list[tuple[str, dict]] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            timestamps = [1_767_225_600_000 + day * 86_400_000 for day in range(80)]
+            return {
+                "chart": {
+                    "result": [
+                        {
+                            "timestamp": timestamps,
+                            "indicators": {
+                                "quote": [
+                                    {
+                                        "open": [100] * 80,
+                                        "high": [101] * 80,
+                                        "low": [99] * 80,
+                                        "close": [100.5] * 80,
+                                        "volume": [1_000] * 80,
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+
+    def fake_get(url: str, params: dict, timeout: float) -> FakeResponse:
+        requests.append((url, params))
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    request = RemoteImportRequest(source="yfinance", symbol="GC=F", timeframe="1d", lookback=80)
+    result = fetch_remote_bars(request)
+
+    assert requests[0][0] == "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF"
+    assert result["symbol"] == "GC=F"
+    assert result["source_provider"] == "yfinance_public_chart"
+    assert requests[0][1]["interval"] == "1d"
+    assert requests[0][1]["range"] == "2y"
+    # Yahoo marks the latest intraday bar unclosed; normalization removes it.
+    assert len(result["bars"]) == 79

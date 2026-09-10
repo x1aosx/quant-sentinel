@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import quote
 
 import httpx
-
 
 _YAHOO_INTERVALS = {
     "1m": "1m",
@@ -141,17 +141,17 @@ def _fetch_yahoo(request: RemoteImportRequest) -> list[dict[str, Any]]:
         raise ValueError("YFinance 未返回行情数据")
     bars = result[0]
     timestamps = bars.get("timestamp") or []
-    quote = bars.get("indicators", {}).get("quote", [{}])[0]
+    quote_data = bars.get("indicators", {}).get("quote", [{}])[0]
     rows: list[dict[str, Any]] = []
     for index, timestamp in enumerate(timestamps):
         try:
             row = {
                 "session_id": _iso_ms(timestamp),
-                "open": quote["open"][index],
-                "high": quote["high"][index],
-                "low": quote["low"][index],
-                "close": quote["close"][index],
-                "volume": quote["volume"][index],
+                "open": quote_data["open"][index],
+                "high": quote_data["high"][index],
+                "low": quote_data["low"][index],
+                "close": quote_data["close"][index],
+                "volume": quote_data["volume"][index],
                 "closed": index < len(timestamps) - 1,
             }
         except (KeyError, IndexError, TypeError):
