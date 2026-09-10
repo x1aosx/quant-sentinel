@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Bot, Download, Network, Send, Sparkles } from 'lucide-react';
+import { Activity, Bell, Bot, CalendarClock, Download, Gauge, LineChart, ListTree, Network, Send, Sparkles, TrendingUp } from 'lucide-react';
 import { api } from '../api/client';
 import { KlineChart } from '../components/KlineChart';
 import type { AIAnalysisRecord, DatasetSummary, SrLevel } from '../types';
@@ -152,6 +152,7 @@ export function AIAnalysisPage() {
           <h1>AI 分析中心</h1>
           <div className="muted">数据快照、市场诊断、价格行为决策、未来走势与追问一体化。</div>
         </div>
+        <span className="tag">{datasets.length} 个可用数据集</span>
       </div>
 
       <div className="grid grid-2">
@@ -160,20 +161,35 @@ export function AIAnalysisPage() {
             <Download size={15} />
             网络数据导入
           </div>
-          <div className="row">
-            <select value={source} onChange={(event) => setSource(event.target.value as 'yfinance' | 'akshare')}>
-              <option value="yfinance">YFinance</option>
-              <option value="akshare">AkShare/A股</option>
-            </select>
-            <input value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="GC=F 或 600519" />
-            <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>
-              {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map((item) => (
-                <option key={item} value={item}>{item}</option>
-              ))}
-            </select>
+          <div className="upload-panel">
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="ai-source">数据源</label>
+                <select id="ai-source" value={source} onChange={(event) => setSource(event.target.value as 'yfinance' | 'akshare')}>
+                  <option value="yfinance">YFinance</option>
+                  <option value="akshare">AkShare/A股</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="ai-symbol">标的代码</label>
+                <input id="ai-symbol" value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="GC=F 或 600519" />
+              </div>
+              <div className="field">
+                <label htmlFor="ai-timeframe">周期</label>
+                <select id="ai-timeframe" value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>
+                  {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map((item) => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+          <div className="row" style={{ marginTop: 14 }}>
             <button className="button" onClick={() => importRemote.mutate()} disabled={importRemote.isPending}>
+              <Download size={14} />
               {importRemote.isPending ? '下载中...' : '下载行情'}
             </button>
+            <span className="muted">回看 500 根K线，导入后自动选择数据集。</span>
           </div>
         </div>
 
@@ -182,20 +198,42 @@ export function AIAnalysisPage() {
             <Bot size={15} />
             大模型配置
           </div>
-          <div className="row">
-            <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="Base URL" />
-            <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="模型名" />
-            <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="API Key（仅本次会话）" type="password" />
-            <label className="muted">思考</label>
-            <input type="checkbox" checked={thinking} onChange={(event) => setThinking(event.target.checked)} />
+          <div className="upload-panel">
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="ai-base-url">Base URL</label>
+                <input id="ai-base-url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com/v1" />
+              </div>
+              <div className="field">
+                <label htmlFor="ai-model">模型名</label>
+                <input id="ai-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-chat" />
+              </div>
+              <div className="field">
+                <label htmlFor="ai-api-key">API Key（仅本次会话）</label>
+                <input id="ai-api-key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" />
+              </div>
+            </div>
           </div>
-          <div className="row">
-            <input value={barCount} onChange={(event) => setBarCount(event.target.value)} placeholder="分析K线数" />
-            <select value={stance} onChange={(event) => setStance(event.target.value)}>
-              <option value="conservative">保守</option>
-              <option value="balanced">均衡</option>
-              <option value="aggressive">积极</option>
-            </select>
+          <div className="form-grid" style={{ marginTop: 14 }}>
+            <div className="field">
+              <label htmlFor="ai-bar-count">分析K线数</label>
+              <input id="ai-bar-count" value={barCount} onChange={(event) => setBarCount(event.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="ai-stance">决策风格</label>
+              <select id="ai-stance" value={stance} onChange={(event) => setStance(event.target.value)}>
+                <option value="conservative">保守</option>
+                <option value="balanced">均衡</option>
+                <option value="aggressive">积极</option>
+              </select>
+            </div>
+            <div className="field">
+              <span>思考模式</span>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={thinking} onChange={(event) => setThinking(event.target.checked)} />
+                {thinking ? '已开启' : '已关闭'}
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -204,22 +242,34 @@ export function AIAnalysisPage() {
         <div className="section-title">
           <Sparkles size={15} />
           分析执行
+          <span className="tag">两阶段</span>
         </div>
-        <div className="row">
-          <select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
-            {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-            {datasets.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.symbol} · {item.timeframe} · {item.bar_count} 根
-              </option>
-            ))}
-          </select>
-          <button className="button button-primary" onClick={() => void runAnalysis()} disabled={analysis.isPending || !datasetId}>
-            {analysis.isPending ? '分析中...' : '开始两阶段分析'}
-          </button>
-          <span className="muted">未配置 API Key 时使用本地确定性研究模式。</span>
+        <div className="upload-panel">
+          <div className="field">
+            <label htmlFor="ai-dataset">分析数据集</label>
+            <select id="ai-dataset" value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
+              {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
+              {datasets.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.symbol} · {item.timeframe} · {item.bar_count} 根
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="row" style={{ marginTop: 14 }}>
+            <button className="button button-primary" onClick={() => void runAnalysis()} disabled={analysis.isPending || !datasetId}>
+              <Sparkles size={14} />
+              {analysis.isPending ? '分析中...' : '开始两阶段分析'}
+            </button>
+            <span className="muted">未配置 API Key 时使用本地确定性研究模式。</span>
+          </div>
         </div>
-        {streamLog ? <pre className="raw-prompt">{streamLog}</pre> : null}
+        {streamLog ? (
+          <div className="stack" style={{ marginTop: 14 }}>
+            <div className="section-title"><Activity size={15} />模型日志</div>
+            <pre className="raw-prompt">{streamLog}</pre>
+          </div>
+        ) : null}
       </div>
 
       {pageError ? <div className="empty">错误：{pageError}</div> : null}
@@ -228,23 +278,78 @@ export function AIAnalysisPage() {
       {record ? (
         <>
           <div className="grid grid-4">
-            <div className="panel stat"><div><div className="stat-label">现价</div><div className="stat-value">{snapshot?.current_price ?? '--'}</div></div></div>
-            <div className="panel stat"><div><div className="stat-label">趋势方向</div><div className="stat-value">{diagnosis?.current_trend?.direction ?? '--'}</div></div></div>
-            <div className="panel stat"><div><div className="stat-label">当前周期</div><div className="stat-value">{diagnosis?.current_cycle ?? '--'}</div></div></div>
-            <div className="panel stat"><div><div className="stat-label">下一周期</div><div className="stat-value">{diagnosis?.next_cycle ?? '--'}</div></div></div>
+            <div className="panel stat">
+              <div>
+                <div className="stat-label">现价</div>
+                <div className="stat-value">{snapshot?.current_price ?? '--'}</div>
+              </div>
+              <div className="stat-icon"><Gauge size={18} /></div>
+            </div>
+            <div className="panel stat">
+              <div>
+                <div className="stat-label">趋势方向</div>
+                <div className="stat-value">{diagnosis?.current_trend?.direction ?? '--'}</div>
+              </div>
+              <div className="stat-icon info"><TrendingUp size={18} /></div>
+            </div>
+            <div className="panel stat">
+              <div>
+                <div className="stat-label">当前周期</div>
+                <div className="stat-value">{diagnosis?.current_cycle ?? '--'}</div>
+              </div>
+              <div className="stat-icon"><CalendarClock size={18} /></div>
+            </div>
+            <div className="panel stat">
+              <div>
+                <div className="stat-label">下一周期</div>
+                <div className="stat-value">{diagnosis?.next_cycle ?? '--'}</div>
+              </div>
+              <div className="stat-icon warn"><Activity size={18} /></div>
+            </div>
+          </div>
+
+          <div className="result-grid">
+            <div className="panel highlight-card">
+              <div className="section-title">关键结果</div>
+              <div className="row">
+                <span className="badge badge-info">{decision.action ?? decision.order_type ?? 'WAIT'}</span>
+                <span className="tag">置信度 {decision.confidence ?? '--'}</span>
+              </div>
+              <div className="metric-list" style={{ marginTop: 16 }}>
+                <div><div className="label">Entry</div><div className="value">{decision.entry ?? '--'}</div></div>
+                <div><div className="label">Stop</div><div className="value">{decision.stop ?? '--'}</div></div>
+                <div><div className="label">Target</div><div className="value">{decision.target ?? '--'}</div></div>
+                <div><div className="label">RR</div><div className="value">{decision.rr ?? '--'}</div></div>
+              </div>
+              {decision.reasoning ? <p className="muted" style={{ marginBottom: 0, marginTop: 16 }}>{decision.reasoning}</p> : null}
+              <div className="feature-list" style={{ marginTop: 16 }}>
+                <div className="feature-item">
+                  <div className="label">未来走势</div>
+                  <div className="value">{future.label ?? '--'}</div>
+                </div>
+                <div className="feature-item">
+                  <div className="label">下根K线</div>
+                  <div className="value">{record.stage2_decision?.next_bar_prediction?.direction ?? '--'}</div>
+                </div>
+              </div>
+            </div>
+            <div className="panel">
+              <div className="section-title"><LineChart size={15} />K线与关键区</div>
+              <KlineChart
+                candles={(snapshot?.candles ?? []).slice(-150)}
+                levels={[...supports, ...resistances]}
+              />
+              <div className="row">
+                <span className="zone-chip support">支撑 {supports.length}</span>
+                <span className="zone-chip resistance">阻力 {resistances.length}</span>
+                <span className="tag">展示最近 150 根</span>
+              </div>
+            </div>
           </div>
 
           <div className="panel">
-            <div className="section-title">K线与关键区</div>
-            <KlineChart
-              candles={(snapshot?.candles ?? []).slice(-150)}
-              levels={[...supports, ...resistances]}
-            />
-          </div>
-
-          <div className="panel">
-            <div className="section-title">结果视图</div>
-            <div className="row">
+            <div className="section-title"><ListTree size={15} />结果视图</div>
+            <div className="segmented">
               {VIEWS.map((item) => (
                 <button key={item.key} className={view === item.key ? 'button button-primary' : 'button'} onClick={() => setView(item.key)}>
                   {item.label}
@@ -253,21 +358,15 @@ export function AIAnalysisPage() {
             </div>
             {view === 'decision' ? (
               <div className="stack">
-                <div className="row">
-                  <span className="badge badge-info">{decision.action ?? decision.order_type ?? 'WAIT'}</span>
-                  <span className="tag">置信度 {decision.confidence ?? '--'}</span>
+                <div className="metric-list">
+                  <div><div className="label">Action</div><div className="value">{decision.action ?? decision.order_type ?? 'WAIT'}</div></div>
+                  <div><div className="label">Confidence</div><div className="value">{decision.confidence ?? '--'}</div></div>
+                  <div><div className="label">Entry</div><div className="value">{decision.entry ?? '--'}</div></div>
+                  <div><div className="label">Stop</div><div className="value">{decision.stop ?? '--'}</div></div>
+                  <div><div className="label">Target</div><div className="value">{decision.target ?? '--'}</div></div>
+                  <div><div className="label">RR</div><div className="value">{decision.rr ?? '--'}</div></div>
                 </div>
-                <div className="row">
-                  <span className="muted">entry {decision.entry ?? '--'}</span>
-                  <span className="muted">stop {decision.stop ?? '--'}</span>
-                  <span className="muted">target {decision.target ?? '--'}</span>
-                  <span className="muted">rr {decision.rr ?? '--'}</span>
-                </div>
-                <div>{decision.reasoning}</div>
-                <div className="grid grid-2">
-                  <div><strong>未来走势</strong><div className="muted">{future.label ?? '--'}</div></div>
-                  <div><strong>下根K线</strong><div className="muted">{record.stage2_decision?.next_bar_prediction?.direction ?? '--'}</div></div>
-                </div>
+                {decision.reasoning ? <p className="muted">{decision.reasoning}</p> : null}
               </div>
             ) : null}
             {view === 'tree' ? (
@@ -310,21 +409,44 @@ export function AIAnalysisPage() {
           <div className="grid grid-2">
             <div className="panel">
               <div className="section-title"><Network size={15} />分析后追问</div>
-              <textarea className="followup-input" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：当前方案在哪里失效？" />
-              <button className="button" onClick={() => followup.mutate()} disabled={followup.isPending || !question}>
-                <Send size={14} />
-                发送追问
-              </button>
+              <div className="upload-panel">
+                <div className="field">
+                  <label htmlFor="ai-question">追问内容</label>
+                  <textarea id="ai-question" className="followup-input" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：当前方案在哪里失效？" />
+                </div>
+                <div className="row" style={{ marginTop: 14 }}>
+                  <button className="button" onClick={() => followup.mutate()} disabled={followup.isPending || !question}>
+                    <Send size={14} />
+                    发送追问
+                  </button>
+                  <span className="muted">追问将复用当前模型配置。</span>
+                </div>
+              </div>
               {followup.data ? <pre className="raw-prompt">{followup.data.answer}</pre> : null}
             </div>
             <div className="panel">
-              <div className="section-title">飞书通知</div>
-              <div className="row">
-                <input value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="Webhook URL" />
-                <input value={feishuSecret} onChange={(event) => setFeishuSecret(event.target.value)} placeholder="签名 Secret" type="password" />
-                <label className="muted">仅交易</label>
-                <input type="checkbox" checked={notifyOnlyOrder} onChange={(event) => setNotifyOnlyOrder(event.target.checked)} />
-                <button className="button" onClick={() => notify.mutate()} disabled={notify.isPending}>发送通知</button>
+              <div className="section-title"><Bell size={15} />飞书通知</div>
+              <div className="upload-panel">
+                <div className="form-grid">
+                  <div className="field">
+                    <label htmlFor="feishu-webhook">Webhook URL</label>
+                    <input id="feishu-webhook" value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="feishu-secret">签名 Secret</label>
+                    <input id="feishu-secret" value={feishuSecret} onChange={(event) => setFeishuSecret(event.target.value)} type="password" />
+                  </div>
+                </div>
+                <div className="row" style={{ marginTop: 14 }}>
+                  <label className="checkbox-row">
+                    <input type="checkbox" checked={notifyOnlyOrder} onChange={(event) => setNotifyOnlyOrder(event.target.checked)} />
+                    仅交易信号时通知
+                  </label>
+                  <button className="button" onClick={() => notify.mutate()} disabled={notify.isPending}>
+                    <Bell size={14} />
+                    {notify.isPending ? '发送中...' : '发送通知'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

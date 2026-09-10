@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { Database, FileUp, Sparkles } from 'lucide-react';
+import { Database, FileUp, Sparkles, Upload } from 'lucide-react';
 import type { DatasetBar, DatasetSummary } from '../types';
 
 const API_BASE = '/api/v1';
@@ -266,6 +266,7 @@ export function DataCenterPage() {
           <h1>数据中心</h1>
           <div className="muted">导入本地行情数据或生成演示数据集，供支撑阻力与价格行为分析使用。</div>
         </div>
+        <span className="tag">{datasets.length} 个数据集</span>
       </div>
 
       <div className="grid grid-2">
@@ -274,17 +275,23 @@ export function DataCenterPage() {
             <FileUp size={15} />
             导入本地数据
           </div>
-          <div className="row">
+          <div className="upload-panel">
             <input ref={fileInputRef} type="file" accept=".csv,.json" onChange={(e) => handleFileChange(e.target.files?.[0])} />
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="dataset-symbol">symbol</label>
+                <input id="dataset-symbol" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="如 AAPL" />
+              </div>
+              <div className="field">
+                <label htmlFor="dataset-timeframe">timeframe</label>
+                <input id="dataset-timeframe" value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="如 1d" />
+              </div>
+            </div>
           </div>
-          <div className="row">
-            <label className="muted">symbol</label>
-            <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="如 AAPL" />
-            <label className="muted">timeframe</label>
-            <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="如 1d" />
-          </div>
-          <div className="row">
+
+          <div className="row" style={{ marginTop: 14 }}>
             <button className="button button-primary" onClick={handleUpload} disabled={uploadMutation.isPending}>
+              <Upload size={14} />
               {uploadMutation.isPending ? '导入中...' : '解析并上传'}
             </button>
             <span className="muted">支持 CSV（session/date、OHLC、volume/tick_volume）与 JSON（bar 数组或 {'{bars: []}'}）。</span>
@@ -295,31 +302,35 @@ export function DataCenterPage() {
             <Sparkles size={15} />
             演示数据
           </div>
-          <div className="row">
-            <button
-              className="button"
-              onClick={() => sampleMutation.mutate(timeframe.trim() || undefined)}
-              disabled={sampleMutation.isPending}
-            >
-              {sampleMutation.isPending ? '生成中...' : '生成演示数据'}
-            </button>
-            <span className="muted">在 timeframe 输入框中填写周期可指定生成的演示数据。</span>
+          <div className="upload-panel">
+            <div className="row">
+              <span className="inline-label">目标周期</span>
+              <span className="tag">{timeframe.trim() || '默认周期'}</span>
+            </div>
+            <div className="row" style={{ marginTop: 14 }}>
+              <button
+                className="button"
+                onClick={() => sampleMutation.mutate(timeframe.trim() || undefined)}
+                disabled={sampleMutation.isPending}
+              >
+                <Sparkles size={14} />
+                {sampleMutation.isPending ? '生成中...' : '生成演示数据'}
+              </button>
+              <span className="muted">在上方 timeframe 输入框填写周期可指定生成结果。</span>
+            </div>
+            <p className="muted" style={{ margin: '12px 0 0' }}>演示数据仅用于研究流程验证，不代表真实市场。</p>
           </div>
-          <p className="muted">演示数据仅用于研究流程验证，不代表真实市场。</p>
         </div>
       </div>
 
       {pageError ? <div className="empty">错误：{pageError}</div> : null}
-      {notice ? (
-        <div className="row">
-          <span className="badge badge-ok">{notice}</span>
-        </div>
-      ) : null}
+      {notice ? <div className="notice">{notice}</div> : null}
 
       <div className="panel">
         <div className="section-title">
           <Database size={15} />
           数据集列表
+          {datasets.length ? <span className="tag">{selectedId ? '已选择数据集' : '未选择'}</span> : null}
         </div>
         {datasetsQuery.isPending ? (
           <div className="empty">加载中...</div>
