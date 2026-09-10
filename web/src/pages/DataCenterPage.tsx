@@ -1,30 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { Database, FileUp, Sparkles } from 'lucide-react';
+import { Database, Download, FileUp, Sparkles } from 'lucide-react';
+import { api } from '../api/client';
 import type { DatasetBar, DatasetSummary } from '../types';
-
-const API_BASE = '/api/v1';
-
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { detail?: unknown; message?: unknown };
-      if (typeof body.detail === 'string') detail = body.detail;
-      else if (typeof body.message === 'string') detail = body.message;
-    } catch {
-      // keep HTTP status as the error detail
-    }
-    throw new Error(`请求失败: ${detail}`);
-  }
-  return (await res.json()) as T;
-}
-
-const listDatasets = () => requestJson<{ items: DatasetSummary[] }>('/datasets');
 
 const TIMEFRAME_ALIASES: Record<string, string> = {
   '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m',
@@ -176,13 +154,14 @@ export function DataCenterPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [fileText, setFileText] = useState('');
-  const [symbol, setSymbol] = useState('');
-  const [timeframe, setTimeframe] = useState('');
+  const [symbol, setSymbol] = useState('AAPL');
+  const [timeframe, setTimeframe] = useState('1d');
+  const [count, setCount] = useState('180');
   const [selectedId, setSelectedId] = useState('');
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
 
-  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: listDatasets });
+  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
   const datasets = datasetsQuery.data?.items ?? [];
 
   const finishWith = (created: DatasetSummary, action: string) => {
@@ -194,7 +173,7 @@ export function DataCenterPage() {
 
   const uploadMutation = useMutation({
     mutationFn: (payload: { symbol: string; timeframe: string; bars: DatasetBar[] }) =>
-      requestJson<DatasetSummary>('/datasets', { method: 'POST', body: JSON.stringify(payload) }),
+      api.uploadDataset(payload),
     onSuccess: (created) => {
       setFile(null);
       setFileText('');
@@ -209,8 +188,30 @@ export function DataCenterPage() {
 
   const sampleMutation = useMutation({
     mutationFn: (timeframe?: string) =>
-      requestJson<DatasetSummary>('/datasets/sample', { method: 'POST', body: JSON.stringify(timeframe ? { timeframe } : {}) }),
+      api.generateSampleDataset(timeframe),
     onSuccess: (created) => finishWith(created, '生成演示数据'),
+    onError: (err: Error) => {
+      setNotice('');
+      setPageError(err.message);
+    },
+  });
+
+  const downloadMutation = useMutation({
+    mutationFn: (payload: { symbol: string; timeframe: string; count: number }) =>
+      api.downloadQuoteCsv(payload),
+    onSuccess: (blob, payload) => {
+      const safeName = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, '_');
+      const source = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = source;
+      link.download = `${safeName(payload.symbol)}_${safeName(payload.timeframe)}_${payload.count}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(source);
+      setNotice(`行情下载成功：${payload.symbol} ${payload.timeframe}，${payload.count} 根K线`);
+      setPageError('');
+    },
     onError: (err: Error) => {
       setNotice('');
       setPageError(err.message);
@@ -259,6 +260,29 @@ export function DataCenterPage() {
     }
   };
 
+  const handleDownload = () => {
+    setPageError('');
+    setNotice('');
+    const quoteCount = Number(count);
+    if (!symbol.trim()) {
+      setPageError('请填写要下载的 symbol');
+      return;
+    }
+    if (!timeframe.trim()) {
+      setPageError('请填写要下载的 timeframe');
+      return;
+    }
+    if (!Number.isInteger(quoteCount) || quoteCount < 60 || quoteCount > 1000) {
+      setPageError('count 需为 60-1000 之间的整数');
+      return;
+    }
+    downloadMutation.mutate({
+      symbol: symbol.trim().toUpperCase(),
+      timeframe: timeframe.trim(),
+      count: quoteCount,
+    });
+  };
+
   return (
     <div className="stack">
       <div className="page-header">
@@ -282,12 +306,19 @@ export function DataCenterPage() {
             <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="如 AAPL" />
             <label className="muted">timeframe</label>
             <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="如 1d" />
+            <label className="muted">count</label>
+            <input type="number" min={60} max={1000} value={count} onChange={(e) => setCount(e.target.value)} />
           </div>
           <div className="row">
             <button className="button button-primary" onClick={handleUpload} disabled={uploadMutation.isPending}>
               {uploadMutation.isPending ? '导入中...' : '解析并上传'}
             </button>
+            <button className="button" onClick={handleDownload} disabled={downloadMutation.isPending}>
+              <Download size={15} />
+              {downloadMutation.isPending ? '下载中...' : '下载行情'}
+            </button>
             <span className="muted">支持 CSV（session/date、OHLC、volume/tick_volume）与 JSON（bar 数组或 {'{bars: []}'}）。</span>
+            <span className="muted">下载行情使用确定性演示数据，不代表真实市场。</span>
           </div>
         </div>
         <div className="panel">

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import io
+
 from fastapi.testclient import TestClient
 
 from xquant.api.app import create_app
@@ -11,15 +14,27 @@ def test_dataset_and_analysis_endpoints(tmp_path) -> None:
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
 
+        storage = client.get("/api/v1/health/storage")
+        assert storage.status_code == 200
+        assert storage.json()["status"] == "ok"
+
         sample = client.post("/api/v1/datasets/sample", json={"timeframe": "1d"})
         assert sample.status_code == 200, sample.text
         dataset = sample.json()
         assert dataset["symbol"] == "DEMO.RESEARCH"
         assert dataset["bar_count"] == 180
 
+        dashboard = client.get("/api/v1/dashboard")
+        assert dashboard.status_code == 200
+        assert dashboard.json()["dataset_count"] == 1
+
         datasets = client.get("/api/v1/datasets")
         assert datasets.status_code == 200
         assert [item["id"] for item in datasets.json()["items"]] == [dataset["id"]]
+
+        fetched_dataset = client.get(f"/api/v1/datasets/{dataset['id']}")
+        assert fetched_dataset.status_code == 200
+        assert fetched_dataset.json() == dataset
 
         sr = client.post(
             "/api/v1/analysis/support-resistance",
@@ -41,6 +56,13 @@ def test_dataset_and_analysis_endpoints(tmp_path) -> None:
         assert pa_result["simulation_only"] is True
         assert pa_result["decision"]["action"] in {"LONG", "SHORT", "WAIT"}
         assert len(pa_result["candles"]) == 150
+
+        missing = client.post(
+            "/api/v1/analysis/support-resistance",
+            json={"dataset_id": "missing", "lookback": 120},
+        )
+        assert missing.status_code == 404
+        assert missing.json()["detail"] == "数据集不存在"
 
 
 def test_dataset_validation_rejects_short_and_bad_bars(tmp_path) -> None:
@@ -71,3 +93,46 @@ def test_dataset_validation_rejects_short_and_bad_bars(tmp_path) -> None:
             },
         )
         assert bad.status_code == 400
+
+
+def test_quotes_download_returns_deterministic_csv(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        response = client.get(
+            "/api/v1/marketdata/quotes/download",
+            params={"symbol": "DEMO.RESEARCH", "timeframe": "1d", "count": 60},
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert response.headers["content-disposition"] == (
+            'attachment; filename="DEMO.RESEARCH_1d.csv"'
+        )
+
+        rows = list(csv.DictReader(io.StringIO(response.text)))
+        assert len(rows) == 60
+        assert list(rows[0]) == ["session_id", "open", "high", "low", "close", "volume"]
+        assert rows[0]["session_id"] == "S0001"
+        assert rows[-1]["session_id"] == "S0060"
+        assert all(float(row["open"]) > 0 for row in rows)
+
+        repeat = client.get(
+            "/api/v1/marketdata/quotes/download",
+            params={"symbol": "DEMO.RESEARCH", "timeframe": "1d", "count": 60},
+        )
+        assert repeat.status_code == 200
+        assert repeat.text == response.text
+
+
+def test_quotes_download_rejects_invalid_input(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        blank_symbol = client.get(
+            "/api/v1/marketdata/quotes/download",
+            params={"symbol": "", "timeframe": "1d"},
+        )
+        assert blank_symbol.status_code == 400
+
+        invalid_count = client.get(
+            "/api/v1/marketdata/quotes/download",
+            params={"symbol": "DEMO.RESEARCH", "timeframe": "1d", "count": 0},
+        )
+        assert invalid_count.status_code == 422
