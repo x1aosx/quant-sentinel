@@ -1,0 +1,38 @@
+name: quant-sentinel
+
+services:
+  quant-sentinel:
+    image: registry.shawsx.com:8443/library/quant-sentinel:latest
+    container_name: quant-sentinel
+    restart: unless-stopped
+    ports:
+      - "18080:80"
+    environment:
+      TZ: Asia/Shanghai
+      XQUANT_DB_PATH: /app/data/xquant.db
+      XQUANT_REQUIRED_ENV_VARS: TZ,STORAGE_BACKEND,POSTGRES_HOST,REDIS_HOST,INFLUXDB_URL
+      STORAGE_BACKEND: postgres
+      XQUANT_STORAGE_CONFIG_FILE:
+      POSTGRES_HOST: 10.10.10.100
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: quant-sentinel
+      POSTGRES_USER: quant-sentinel
+      POSTGRES_PASSWORD: voXNaDwvv8Yu7jTkEI
+      REDIS_HOST: 10.10.10.100
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: Xian1183089686*
+      INFLUXDB_URL: https://influx.shawsx.com:8443
+      INFLUXDB_DATABASE: quant-sentine
+      INFLUXDB_TOKEN: apiv3_50759e4cde73936ce9ca0a9940261323
+    volumes:
+      - quant-sentinel-data:/app/data
+      - quant-sentinel-logs:/app/logs
+    extra_hosts:
+      - "loki.shawsx.com:10.10.10.100"
+      - "newapi.shawsx.com:10.10.10.100"
+
+volumes:
+  quant-sentinel-data:
+    name: quant-sentinel-data
+  quant-sentinel-logs:
+    name: quant-sentinel-logs
