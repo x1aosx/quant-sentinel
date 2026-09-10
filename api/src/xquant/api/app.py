@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
+from xquant.ai.service import (
+    build_followup_prompt,
+    build_snapshot,
+    build_stage1_prompt,
+    build_stage2_prompt,
+    call_chat_completion,
+    mask_provider,
+    normalize_ai_settings,
+    run_two_stage,
+    stream_chat_completion,
+)
 from xquant.analysis.price_action import analyze_price_action
 from xquant.analysis.sr_levels import detect_support_resistance
+from xquant.marketdata.remote import fetch_remote_bars
 from xquant.marketdata.synthetic import generate_synthetic_bars
+from xquant.notifications.feishu import send_feishu_message
 from xquant.registry import Database
 from xquant.storage import StorageSettings
 
@@ -173,6 +189,124 @@ def create_app(db_path: Path | None = None, settings: StorageSettings | None = N
         result["levels"] = levels
         result["candles"] = dataset["bars"][-150:]
         return result
+
+    @app.post("/api/v1/datasets/remote")
+    def import_remote_dataset(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        try:
+            remote = fetch_remote_bars(payload)
+            if len(remote["bars"]) < 60:
+                raise HTTPException(status_code=400, detail="远程行情数据不足：至少需要 60 根已收盘K线")
+            dataset = db.insert_dataset(
+                {
+                    "symbol": remote["symbol"],
+                    "timeframe": remote["timeframe"],
+                    "bars": remote["bars"],
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        except HTTPException:
+            raise
+        except (TypeError, ValueError, httpx.HTTPError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            **dataset,
+            "source": remote["source"],
+            "source_provider": remote["source_provider"],
+            "simulation_only": True,
+        }
+
+    @app.post("/api/v1/ai/config")
+    def ai_config(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        settings = normalize_ai_settings(payload)
+        return {
+            "status": "ok",
+            "provider": mask_provider(settings.provider.__dict__),
+            "analysis_bar_count": settings.analysis_bar_count,
+        }
+
+    @app.post("/api/v1/ai/analyze")
+    def analyze_ai(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        dataset = get_dataset_or_404(str(payload.get("dataset_id") or ""))
+        try:
+            ai_settings = normalize_ai_settings(payload)
+            snapshot = build_snapshot(
+                dataset_id=dataset["summary"]["id"],
+                symbol=dataset["summary"]["symbol"],
+                timeframe=dataset["summary"]["timeframe"],
+                bars=dataset["bars"],
+                settings=ai_settings,
+            )
+            return run_two_stage(snapshot, ai_settings)
+        except (TypeError, ValueError, httpx.HTTPError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/ai/analyze/stream")
+    async def analyze_ai_stream(payload: dict[str, Any] | None = None):
+        payload = payload or {}
+        dataset = get_dataset_or_404(str(payload.get("dataset_id") or ""))
+        try:
+            ai_settings = normalize_ai_settings(payload)
+            snapshot = build_snapshot(
+                dataset_id=dataset["summary"]["id"],
+                symbol=dataset["summary"]["symbol"],
+                timeframe=dataset["summary"]["timeframe"],
+                bars=dataset["bars"],
+                settings=ai_settings,
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async def event_stream():
+            yield f"data: {json.dumps({'type': 'snapshot', 'symbol': snapshot['symbol'], 'timeframe': snapshot['timeframe'], 'bar_count': len(snapshot['candles'])})}\n\n"
+            if not ai_settings.provider.api_key:
+                yield f"data: {json.dumps({'type': 'log', 'text': '进入本地研究模式。'})}\n\n"
+                yield f"data: {json.dumps({'type': 'log', 'text': '使用确定性规则完成诊断与决策。'})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
+            stage1_messages = build_stage1_prompt(snapshot)
+            for chunk in stream_chat_completion(ai_settings.provider, stage1_messages):
+                yield f"data: {json.dumps({'type': 'stage1', 'text': chunk})}\n\n"
+            stage2_messages = build_stage2_prompt(snapshot, {})
+            for chunk in stream_chat_completion(ai_settings.provider, stage2_messages):
+                yield f"data: {json.dumps({'type': 'stage2', 'text': chunk})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.post("/api/v1/ai/followup")
+    def followup_ai(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        record = payload.get("record")
+        question = str(payload.get("question") or "").strip()
+        if not record or not question:
+            raise HTTPException(status_code=400, detail="追问需要 record 与 question")
+        ai_settings = normalize_ai_settings(payload)
+        messages = build_followup_prompt(record, question)
+        if not ai_settings.provider.api_key:
+            return {"status": "ok", "answer": "本地研究模式暂不支持模型追问。请配置 API Key 后使用。"}
+        try:
+            return {"status": "ok", "answer": call_chat_completion(ai_settings.provider, messages)}
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/notifications/feishu")
+    def notify_feishu(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        result = payload.get("record") or payload.get("result")
+        if not result:
+            raise HTTPException(status_code=400, detail="缺少通知内容 record")
+        try:
+            return send_feishu_message(
+                result,
+                webhook_url=str(payload.get("webhook_url") or ""),
+                secret=str(payload.get("secret") or ""),
+                enabled=bool(payload.get("enabled", True)),
+                notify_on_order_only=bool(payload.get("notify_on_order_only", False)),
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def get_dataset_or_404(dataset_id: str) -> dict[str, Any]:
         try:

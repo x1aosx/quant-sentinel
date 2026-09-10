@@ -275,3 +275,39 @@ export interface HealthSummary {
   mode: string;
   dataset_count: number;
 }
+
+export interface AIProviderConfig {
+  model: string;
+  base_url: string;
+  api_key: string;
+  thinking: boolean;
+  reasoning_effort: string;
+  context_window: number;
+}
+
+export interface AIAnalysisRecord {
+  id: string;
+  status: string;
+  symbol: string;
+  timeframe: string;
+  snapshot: Record<string, any>;
+  stage1_messages: Array<{ role: string; content: string }>;
+  stage2_messages: Array<{ role: string; content: string }>;
+  raw_prompt: Record<string, unknown>;
+  stage1_response: string;
+  stage2_response: string;
+  stage1_diagnosis?: Record<string, any>;
+  stage2_decision?: Record<string, any>;
+  decision_tree_layout?: {
+    nodes: Array<{
+      id: string;
+      label: string;
+      question: string;
+      answer: string;
+      x: number;
+      y: number;
+    }>;
+    edges: Array<{ from: string; to: string }>;
+  };
+  exception?: Record<string, any> | null;
+}

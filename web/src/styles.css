@@ -535,6 +535,57 @@ a {
   font-size: 13px;
 }
 
+.decision-tree {
+  width: 100%;
+  overflow: auto;
+}
+
+.decision-tree svg {
+  min-width: 560px;
+  height: auto;
+}
+
+.tree-edge {
+  stroke: #c7d2d9;
+  stroke-width: 1.5;
+}
+
+.tree-node {
+  fill: #ffffff;
+  stroke: #b7d9cf;
+}
+
+.tree-node-label {
+  font-size: 12px;
+  font-weight: 650;
+  fill: #1c2733;
+}
+
+.tree-node-answer {
+  font-size: 11px;
+  fill: #66727f;
+}
+
+.raw-prompt {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #f7f9fa;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.followup-input {
+  width: 100%;
+  min-height: 84px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: inherit;
+}
+
 @media (max-width: 1080px) {
   .grid-3,
   .grid-4 {
