@@ -1,0 +1,77 @@
+name: quant-sentinel
+
+services:
+  quant-sentinel:
+    image: ${REGISTRY:-registry.shawsx.com:8443}/library/${PROJECT_NAME:-quant-sentinel}:${IMAGE_TAG:-latest}
+    container_name: ${PROJECT_NAME:-quant-sentinel}
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-18080}:80"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      XQUANT_DB_PATH: ${XQUANT_DB_PATH:-/app/data/xquant.db}
+      XQUANT_REQUIRED_ENV_VARS: ${XQUANT_REQUIRED_ENV_VARS:-TZ,STORAGE_BACKEND,POSTGRES_HOST,REDIS_HOST,INFLUXDB_URL}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
+      XQUANT_STORAGE_CONFIG_FILE: ${XQUANT_STORAGE_CONFIG_FILE:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:?required}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      REDIS_HOST: ${REDIS_HOST:?required}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      INFLUXDB_URL: ${INFLUXDB_URL:?required}
+      INFLUXDB_DATABASE: ${INFLUXDB_DATABASE:?required}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:?required}
+    volumes:
+      - ${DATA_VOLUME:-quant-sentinel-data}:/app/data
+      - ${LOG_VOLUME:-quant-sentinel-logs}:/app/logs
+    extra_hosts:
+      - "loki.shawsx.com:10.10.10.100"
+      - "newapi.shawsx.com:10.10.10.100"
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18-alpine}
+    profiles: ["storage-local"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:8-alpine}
+    profiles: ["storage-local"]
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?required}"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  influxdb:
+    image: ${INFLUXDB_IMAGE:-influxdb:3-core}
+    profiles: ["storage-local"]
+    restart: unless-stopped
+    volumes:
+      - influxdb-data:/var/lib/influxdb3/data
+
+volumes:
+  quant-sentinel-data:
+    name: ${DATA_VOLUME:-quant-sentinel-data}
+  quant-sentinel-logs:
+    name: ${LOG_VOLUME:-quant-sentinel-logs}
+  postgres-data:
+  redis-data:
+  influxdb-data:
