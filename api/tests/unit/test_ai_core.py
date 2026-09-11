@@ -107,6 +107,14 @@ def test_remote_payload_normalization_and_feishu_signing() -> None:
                 "close": 9.5,
                 "volume": 100,
             },
+            {
+                "session_id": "2026-01-04",
+                "open": None,
+                "high": None,
+                "low": None,
+                "close": None,
+                "volume": None,
+            },
         ]
     )
     assert [bar["session_id"] for bar in bars] == ["2026-01-01", "2026-01-02"]
@@ -119,6 +127,8 @@ def test_yahoo_fetch_encodes_symbol_and_normalizes_bars(monkeypatch) -> None:
     requests: list[tuple[str, dict]] = []
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
@@ -145,7 +155,13 @@ def test_yahoo_fetch_encodes_symbol_and_normalizes_bars(monkeypatch) -> None:
                 }
             }
 
-    def fake_get(url: str, params: dict, timeout: float) -> FakeResponse:
+    def fake_get(
+        url: str,
+        params: dict,
+        timeout: float,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> FakeResponse:
         requests.append((url, params))
         return FakeResponse()
 

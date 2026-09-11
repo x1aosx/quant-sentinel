@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
+
+from xquant.marketdata.remote import fetch_remote_bars
 
 
 class Database:
@@ -66,10 +69,20 @@ class Database:
                 first_session TEXT NOT NULL,
                 last_session TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                source TEXT,
+                source_provider TEXT,
+                last_synced_at TEXT,
                 bars_json TEXT NOT NULL
             );
             """
         )
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(datasets)").fetchall()
+        }
+        for name in ("source", "source_provider", "last_synced_at"):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE datasets ADD COLUMN {name} TEXT")
         conn.commit()
         conn.close()
 
@@ -127,13 +140,25 @@ class Database:
     def insert_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
         bars = payload.get("bars", [])
         dataset_id = str(payload.get("id") or uuid4())
-        created_at = payload.get("created_at")
+        created_at = payload.get("created_at") or datetime.now(UTC).isoformat()
         conn = self._connect()
         conn.execute(
             """
             INSERT INTO datasets
-            (id, symbol, timeframe, bar_count, first_session, last_session, created_at, bars_json)
-            VALUES (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session, :created_at, :bars_json)
+            (id, symbol, timeframe, bar_count, first_session, last_session, created_at,
+             source, source_provider, last_synced_at, bars_json)
+            VALUES (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
+                    :created_at, :source, :source_provider, :last_synced_at, :bars_json)
+            ON CONFLICT(id) DO UPDATE SET
+                symbol=excluded.symbol,
+                timeframe=excluded.timeframe,
+                bar_count=excluded.bar_count,
+                first_session=excluded.first_session,
+                last_session=excluded.last_session,
+                source=excluded.source,
+                source_provider=excluded.source_provider,
+                last_synced_at=excluded.last_synced_at,
+                bars_json=excluded.bars_json
             """,
             {
                 "id": dataset_id,
@@ -143,6 +168,9 @@ class Database:
                 "first_session": bars[0]["session_id"] if bars else "",
                 "last_session": bars[-1]["session_id"] if bars else "",
                 "created_at": created_at,
+                "source": payload.get("source"),
+                "source_provider": payload.get("source_provider"),
+                "last_synced_at": payload.get("last_synced_at"),
                 "bars_json": json.dumps(bars, ensure_ascii=False, separators=(",", ":")),
             },
         )
@@ -150,11 +178,85 @@ class Database:
         conn.close()
         return self.get_dataset(dataset_id)["summary"]
 
+    def sync_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        remote = fetch_remote_bars(payload)
+        conn = self._connect()
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM datasets
+            WHERE symbol = ? AND timeframe = ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (remote["symbol"], remote["timeframe"]),
+        ).fetchone()
+        conn.close()
+
+        previous_bars: list[dict[str, Any]] = []
+        dataset_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                (
+                    "https://xquant.local/datasets/"
+                    f"{remote['symbol'].strip().upper()}/{remote['timeframe'].strip().lower()}"
+                ),
+            )
+        )
+        created_at = datetime.now(UTC).isoformat()
+        if existing is not None:
+            existing_record = self.get_dataset(str(existing["id"]))
+            dataset_id = str(existing_record["summary"]["id"])
+            created_at = str(existing_record["summary"]["created_at"])
+            previous_bars = list(existing_record["bars"])
+
+        merged: dict[str, dict[str, Any]] = {
+            str(bar["session_id"]): {**bar, "session_id": str(bar["session_id"])}
+            for bar in previous_bars
+        }
+        incoming_ids = {
+            str(bar["session_id"])
+            for bar in remote["bars"]
+            if str(bar.get("session_id") or "").strip()
+        }
+        inserted_count = sum(1 for session_id in incoming_ids if session_id not in merged)
+        for bar in remote["bars"]:
+            session_id = str(bar.get("session_id") or "").strip()
+            if session_id:
+                merged[session_id] = {**bar, "session_id": session_id}
+        bars = [merged[key] for key in sorted(merged)]
+        synced_at = datetime.now(UTC).isoformat()
+        summary = self.insert_dataset(
+            {
+                "id": dataset_id,
+                "symbol": remote["symbol"],
+                "timeframe": remote["timeframe"],
+                "bars": bars,
+                "created_at": created_at,
+                "source": remote["source"],
+                "source_provider": remote["source_provider"],
+                "last_synced_at": synced_at,
+            }
+        )
+        return {
+            **summary,
+            "dataset": summary,
+            "source": remote["source"],
+            "source_provider": remote["source_provider"],
+            "inserted_count": inserted_count,
+            "updated_count": len(incoming_ids) - inserted_count,
+            "total_count": len(bars),
+            "sync_status": "updated" if inserted_count else "unchanged",
+            "synced_at": synced_at,
+            "simulation_only": True,
+        }
+
     def list_datasets(self) -> list[dict[str, Any]]:
         conn = self._connect()
         rows = conn.execute(
             """
-            SELECT id, symbol, timeframe, bar_count, first_session, last_session, created_at
+            SELECT id, symbol, timeframe, bar_count, first_session, last_session,
+                   created_at, source, source_provider, last_synced_at
             FROM datasets
             ORDER BY created_at DESC, rowid DESC
             """
@@ -178,5 +280,8 @@ class Database:
             "first_session": record["first_session"],
             "last_session": record["last_session"],
             "created_at": record["created_at"],
+            "source": record.get("source"),
+            "source_provider": record.get("source_provider"),
+            "last_synced_at": record.get("last_synced_at"),
         }
         return {"summary": summary, "bars": bars}

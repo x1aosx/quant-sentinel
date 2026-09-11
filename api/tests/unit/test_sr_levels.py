@@ -4,7 +4,11 @@ import math
 
 import pytest
 
-from xquant.analysis.sr_levels import detect_support_resistance
+from xquant.analysis.sr_levels import (
+    _build_price_profile,
+    _touch_event_stats,
+    detect_support_resistance,
+)
 
 
 def _bar(index: int, close: float, *, spread: float = 0.5, volume: int = 1000) -> dict[str, object]:
@@ -53,6 +57,123 @@ def test_uptrend_and_oscillation_emit_reasonable_levels() -> None:
             assert level["tf_count"] >= 1
 
 
+def test_v3_fields_evidence_and_null_probabilities() -> None:
+    result = detect_support_resistance(_oscillation_bars())
+    required_fields = {
+        "zone_label",
+        "width_pct",
+        "stale",
+        "p_stall",
+        "stall_bucket",
+        "vp_strength",
+        "bucket",
+        "bucket_hold_rate",
+        "bucket_fwd_ret",
+        "bucket_n",
+        "p_touch",
+        "p_hold",
+        "p_effective",
+        "n_events",
+        "n_decided",
+        "n_hold",
+    }
+
+    assert result["levels"]
+    for level in result["levels"]:
+        assert required_fields <= set(level)
+        assert level["zone_label"] == (
+            "支撑带" if level["zone_type"] == "support" else "压力带"
+        )
+        assert level["bucket"] in {"Q1", "Q2", "Q3", "Q4"}
+        assert level["stall_bucket"] in {"Q1", "Q2", "Q3", "Q4"}
+        assert 0.0 <= level["stale"] <= 1.0
+        assert 0.0 <= level["p_stall"] <= 1.0
+        assert 0.0 <= level["vp_strength"] <= 1.0
+        assert level["p_touch"] is None
+        assert level["p_hold"] is None
+        assert level["p_effective"] is None
+        assert level["bucket_hold_rate"] is None
+        assert level["bucket_fwd_ret"] is None
+        assert level["bucket_n"] is None
+        assert level["n_hold"] <= level["n_decided"] <= level["n_events"]
+        expected_width_pct = (
+            (level["high"] - level["low"]) / result["current_price"] * 100.0
+        )
+        assert math.isclose(level["width_pct"], expected_width_pct, rel_tol=1e-4, abs_tol=1e-4)
+        event_component = min(math.log1p(level["n_events"]) / math.log1p(12.0), 1.0)
+        expected_edge = 100.0 * (0.65 * event_component + 0.35 * level["stale"])
+        assert math.isclose(level["edge_score"], expected_edge, rel_tol=1e-3, abs_tol=0.01)
+
+    summary = result["summary"]
+    assert {
+        "headline",
+        "nearest",
+        "best",
+        "risk_reward",
+        "caveat",
+        "direction",
+        "direction_label",
+        "trend_label",
+        "trend_detail",
+    } <= set(summary)
+    assert summary["direction_label"] in {"只做多", "只做空", "多空都做"}
+
+
+def test_volume_profile_conserves_decayed_volume() -> None:
+    bars = _oscillation_bars()
+    highs = [float(bar["high"]) for bar in bars]
+    lows = [float(bar["low"]) for bar in bars]
+    closes = [float(bar["close"]) for bar in bars]
+    volumes = [float(bar["volume"]) for bar in bars]
+    expected_volume = sum(
+        volume * 2.0 ** (-(len(volumes) - 1 - index) / 60.0)
+        for index, volume in enumerate(volumes)
+    )
+
+    profile = _build_price_profile(highs, lows, closes, volumes, atr=2.0)
+
+    assert math.isclose(sum(profile.volume_density), expected_volume, rel_tol=1e-10)
+    assert all(0.0 <= value <= 1.0 for value in profile.vp_strength)
+    assert profile.bin_width >= 0.5
+
+
+def test_touch_events_deduplicate_and_validate_approach_direction() -> None:
+    highs = [106.0, 103.0, 103.0, 103.0, 103.0, 103.0, 104.0]
+    lows = [104.0, 98.0, 98.0, 98.0, 98.0, 98.0, 99.0]
+    closes = [105.0, 101.0, 101.0, 101.0, 101.0, 101.0, 104.0]
+    atr_values = [1.0] * len(closes)
+    raw_touches = sum(high >= 99.0 and low <= 101.0 for high, low in zip(highs, lows, strict=True))
+
+    support_stats = _touch_event_stats(
+        highs,
+        lows,
+        closes,
+        atr_values,
+        low=99.0,
+        high=101.0,
+        zone_type="support",
+        fallback_atr=1.0,
+    )
+    wrong_direction_stats = _touch_event_stats(
+        highs,
+        lows,
+        closes,
+        atr_values,
+        low=99.0,
+        high=101.0,
+        zone_type="resistance",
+        fallback_atr=1.0,
+    )
+
+    assert raw_touches > 1
+    assert support_stats["n_events"] == 1
+    assert support_stats["n_decided"] == 1
+    assert support_stats["n_hold"] == 1
+    assert support_stats["hold_rate"] == 1.0
+    assert wrong_direction_stats["n_events"] == 0
+    assert wrong_direction_stats["stale"] == 1.0
+
+
 def test_direction_filter_and_side_limit() -> None:
     bars = _oscillation_bars()
     long_result = detect_support_resistance(bars, direction="long", n_zones=6)
@@ -73,6 +194,14 @@ def test_invalid_direction_falls_back_to_both() -> None:
 
     assert result["meta"]["direction"] == "both"
     assert {level["zone_type"] for level in result["levels"]} <= {"support", "resistance"}
+
+
+def test_invalid_numeric_values_raise() -> None:
+    bars = _oscillation_bars()
+    bars[0]["close"] = math.nan
+
+    with pytest.raises(ValueError, match="K线数值无效"):
+        detect_support_resistance(bars)
 
 
 def test_insufficient_data_raises_exact_value_error() -> None:

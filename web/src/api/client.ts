@@ -1,10 +1,10 @@
 import type {
   AIAnalysisRecord,
-  DatasetBar,
   DatasetSummary,
   HealthSummary,
   PaAnalysisResult,
   SrAnalysisResult,
+  SyncDatasetResponse,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -26,37 +26,6 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-async function requestCsv(path: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { Accept: 'text/csv' },
-  });
-  if (response.ok) {
-    return response.blob();
-  }
-
-  let detail = '';
-  try {
-    const body = (await response.json()) as { detail?: unknown; message?: unknown };
-    if (typeof body.detail === 'string') detail = body.detail;
-    else if (typeof body.message === 'string') detail = body.message;
-  } catch {
-    // Response bodies for gateway errors are often plain HTML.
-  }
-
-  const statusMessages: Record<number, string> = {
-    404: '行情下载接口不可用（HTTP 404）',
-    502: '行情服务网关错误（HTTP 502），请稍后重试',
-    503: '行情服务暂时不可用（HTTP 503），请稍后重试',
-  };
-  throw new Error(statusMessages[response.status] ?? detail ?? `行情下载失败（HTTP ${response.status}）`);
-}
-
-export interface DatasetUpsertPayload {
-  symbol: string;
-  timeframe: string;
-  bars: DatasetBar[];
-}
-
 export const api = {
   getHealth: () => apiRequest<HealthSummary>('/health'),
   getDashboard: () => apiRequest<{
@@ -66,18 +35,6 @@ export const api = {
     mode: string;
   }>('/dashboard'),
   listDatasets: () => apiRequest<{ items: DatasetSummary[] }>('/datasets'),
-  uploadDataset: (payload: DatasetUpsertPayload) =>
-    apiRequest<DatasetSummary>('/datasets', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
-    }),
-  generateSampleDataset: (timeframe = '1d') =>
-    apiRequest<DatasetSummary>('/datasets/sample', {
-      method: 'POST',
-      body: JSON.stringify({ timeframe }),
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
-    }),
   analyzeSupportResistance: (payload: {
     dataset_id: string;
     lookback?: number;
@@ -99,17 +56,33 @@ export const api = {
       method: 'POST',
     body: JSON.stringify(payload),
   }),
-  importRemoteDataset: (payload: {
+  syncRemoteDataset: (payload: {
+    source: 'yfinance' | 'akshare';
+    symbol: string;
+    timeframe: string;
+    lookback: number;
+    adjust: 'qfq' | 'hfq' | 'none';
+  }) =>
+    apiRequest<SyncDatasetResponse>('/datasets/remote/sync', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  importRemoteDataset: async (payload: {
     source: 'yfinance' | 'akshare';
     symbol: string;
     timeframe: string;
     lookback?: number;
     adjust?: 'qfq' | 'hfq' | 'none';
-  }) =>
-    apiRequest<DatasetSummary>('/datasets/remote', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+  }) => {
+    const response = await api.syncRemoteDataset({
+      source: payload.source,
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
+      lookback: payload.lookback ?? 500,
+      adjust: payload.adjust ?? 'qfq',
+    });
+    return response.dataset;
+  },
   analyzeAI: (payload: Record<string, unknown>) =>
     apiRequest<AIAnalysisRecord>('/ai/analyze', {
       method: 'POST',
@@ -125,12 +98,4 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  downloadQuoteCsv: (payload: { symbol: string; timeframe: string; count: number }) => {
-    const params = new URLSearchParams({
-      symbol: payload.symbol,
-      timeframe: payload.timeframe,
-      count: String(payload.count),
-    });
-    return requestCsv(`/marketdata/quotes/download?${params.toString()}`);
-  },
 };

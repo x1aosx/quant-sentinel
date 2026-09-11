@@ -2,16 +2,36 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 _MIN_BARS = 60
 _MIN_DISTANCE_ATR = 0.5
 _MAX_DISTANCE_ATR = 5.0
+_MIN_ZONE_WIDTH_ATR = 0.3
+_MAX_ZONE_WIDTH_ATR = 1.2
+_VOLUME_BIN_ATR = 0.25
+_VOLUME_HALF_LIFE = 60.0
+_MAX_PROFILE_BINS = 240
+_TOUCH_GAP_BARS = 5
+_TOUCH_HOLD_BARS = 10
+_TOUCH_BREAK_ATR = 0.5
+_TOUCH_TARGET_ATR = 1.0
+_STALE_HALF_LIFE = 120.0
+_DIRECTION_LABELS = {"long": "只做多", "short": "只做空", "both": "多空都做"}
 
 _CAVEAT = (
     "支撑阻力是规则化统计区域，不预测未来价格；"
     "结果仅用于研究和模拟，不构成投资建议。"
 )
+
+
+class _PriceProfile(NamedTuple):
+    price_min: float
+    bin_width: float
+    volume_density: tuple[float, ...]
+    close_density: tuple[float, ...]
+    vp_strength: tuple[float, ...]
+    close_strength: tuple[float, ...]
 
 
 def detect_support_resistance(
@@ -40,18 +60,23 @@ def detect_support_resistance(
     volumes = [item["volume"] for item in selected]
     bars_used = len(selected)
     current_price = closes[-1]
-    atr = _atr14(highs, lows, closes) or max(abs(current_price) * 1e-3, 1e-9)
+    atr_values = _atr_series(highs, lows, closes)
+    atr = atr_values[-1] or max(abs(current_price) * 1e-3, 1e-9)
+    profile = _build_price_profile(highs, lows, closes, volumes, atr)
 
     candidates = _swing_pivot_candidates(highs, lows)
-    candidates.extend(_volume_density_candidates(highs, lows, volumes, atr))
+    candidates.extend(_volume_density_candidates(highs, lows, volumes, atr, profile=profile))
     zones = _build_zones(
         candidates,
         highs=highs,
         lows=lows,
+        closes=closes,
         volumes=volumes,
         current_price=current_price,
         atr=atr,
+        atr_values=atr_values,
         bars_used=bars_used,
+        profile=profile,
     )
     zones = _mark_higher_timeframe_resonance(zones, selected, timeframe, atr)
     zones = _filter_and_limit(zones, current_price, atr, n_zones, direction)
@@ -70,11 +95,13 @@ def detect_support_resistance(
         "levels": zones,
         "summary": summary,
         "meta": {
-            "engine": "xq_sr_fusion_v1",
+            "engine": "xq_sr_fusion_v3",
             "simulation_only": True,
             "lookback": _bounded_lookback(lookback),
             "n_zones": _bounded_zone_count(n_zones),
             "direction": _normalized_direction(direction),
+            "calibrated": False,
+            "probability_model": None,
         },
     }
 
@@ -153,9 +180,13 @@ def _normalized_direction(direction: str) -> str:
     return value if value in {"long", "short", "both"} else "both"
 
 
-def _atr14(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float]) -> float | None:
+def _atr_series(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+) -> list[float | None]:
     if len(closes) < 14:
-        return None
+        return [None] * len(closes)
     true_ranges = [highs[0] - lows[0]]
     for index in range(1, len(closes)):
         previous_close = closes[index - 1]
@@ -166,10 +197,18 @@ def _atr14(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float
                 abs(lows[index] - previous_close),
             )
         )
-    result = sum(true_ranges[:14]) / 14.0
+    atr_values: list[float | None] = [None] * len(closes)
+    atr = sum(true_ranges[:14]) / 14.0
+    atr_values[13] = atr if math.isfinite(atr) and atr > 0.0 else None
     for index in range(14, len(true_ranges)):
-        result = (result * 13.0 + true_ranges[index]) / 14.0
-    return result if math.isfinite(result) and result > 0.0 else None
+        atr = (atr * 13.0 + true_ranges[index]) / 14.0
+        atr_values[index] = atr if math.isfinite(atr) and atr > 0.0 else None
+    return atr_values
+
+
+def _atr14(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float]) -> float | None:
+    values = _atr_series(highs, lows, closes)
+    return values[-1] if values else None
 
 
 def _swing_pivot_candidates(highs: Sequence[float], lows: Sequence[float]) -> list[float]:
@@ -199,51 +238,201 @@ def _volume_density_candidates(
     lows: Sequence[float],
     volumes: Sequence[float],
     atr: float,
+    *,
+    profile: _PriceProfile | None = None,
 ) -> list[float]:
-    price_min = min(lows)
-    price_max = max(highs)
-    if price_max <= price_min:
-        return [price_min]
+    profile = profile or _build_price_profile(highs, lows, (), volumes, atr)
+    strengths = profile.vp_strength
+    if not strengths:
+        return []
 
-    target_bins = min(180, max(20, int((price_max - price_min) / max(atr * 0.5, 1e-12)) + 1))
-    bin_width = (price_max - price_min) / target_bins
-    density = [0.0] * target_bins
-    for high, low, volume in zip(highs, lows, volumes, strict=True):
-        if volume <= 0.0:
-            continue
-        bar_width = max(high - low, bin_width * 1e-6)
-        first = min(target_bins - 1, max(0, int((low - price_min) / bin_width)))
-        last = min(target_bins - 1, max(0, int((high - price_min) / bin_width)))
-        for bin_index in range(first, last + 1):
-            bin_low = price_min + bin_index * bin_width
-            bin_high = bin_low + bin_width
-            overlap = min(high, bin_high) - max(low, bin_low)
-            if overlap > 0.0:
-                density[bin_index] += volume * overlap / bar_width
-
-    smoothed = [
-        sum(density[max(0, index - 1) : min(target_bins, index + 2)])
-        / len(density[max(0, index - 1) : min(target_bins, index + 2)])
-        for index in range(target_bins)
-    ]
-    peaks = [
-        index
-        for index in range(1, target_bins - 1)
-        if smoothed[index] > 0.0
-        and smoothed[index] >= smoothed[index - 1]
-        and smoothed[index] >= smoothed[index + 1]
-    ]
+    peaks = _profile_peaks(strengths)
     if not peaks:
-        peaks = [max(range(target_bins), key=lambda index: smoothed[index])]
+        peaks = [max(range(len(strengths)), key=strengths.__getitem__)]
 
     selected: list[int] = []
-    minimum_separation = max(1, int(0.75 * atr / bin_width))
-    for index in sorted(peaks, key=lambda item: smoothed[item], reverse=True):
+    minimum_separation = max(1, round(0.75 * atr / profile.bin_width))
+    for index in sorted(peaks, key=strengths.__getitem__, reverse=True):
         if all(abs(index - chosen) >= minimum_separation for chosen in selected):
             selected.append(index)
         if len(selected) == 10:
             break
-    return sorted(price_min + (index + 0.5) * bin_width for index in selected)
+    return sorted(
+        _profile_price(profile, index)
+        for index in selected
+        if strengths[index] > 0.0
+    )
+
+
+def _build_price_profile(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[float],
+    atr: float,
+) -> _PriceProfile:
+    if not highs:
+        return _PriceProfile(0.0, 1.0, (), (), (), ())
+
+    count = len(highs)
+    decayed_volumes = [
+        max(float(volume), 0.0) * 2.0 ** (-(count - 1 - index) / _VOLUME_HALF_LIFE)
+        for index, volume in enumerate(volumes)
+    ]
+    price_max = max(highs)
+    price_min = min(lows)
+    core_span = max(price_max - price_min, atr * _VOLUME_BIN_ATR, 1e-12)
+    bin_width = max(atr * _VOLUME_BIN_ATR, core_span / _MAX_PROFILE_BINS)
+    price_min -= bin_width
+    span = max(price_max - price_min, bin_width)
+    n_bins = max(1, math.ceil(span / bin_width) + 1)
+    if n_bins > _MAX_PROFILE_BINS:
+        bin_width = span / max(_MAX_PROFILE_BINS - 1, 1)
+        n_bins = _MAX_PROFILE_BINS
+
+    volume_density = [0.0] * n_bins
+    close_density = [0.0] * n_bins
+    for index, (high, low, volume) in enumerate(zip(highs, lows, decayed_volumes, strict=True)):
+        first = _profile_index(price_min, bin_width, n_bins, low)
+        last = _profile_index(price_min, bin_width, n_bins, high)
+        if last < first:
+            first, last = last, first
+
+        bar_width = max(high - low, bin_width * 1e-12)
+        allocations: list[tuple[int, float]] = []
+        allocation_total = 0.0
+        for bin_index in range(first, last + 1):
+            bin_low = price_min + bin_index * bin_width
+            bin_high = bin_low + bin_width
+            overlap = min(high, bin_high) - max(low, bin_low)
+            if overlap <= 0.0:
+                continue
+            allocation = overlap / bar_width
+            allocations.append((bin_index, allocation))
+            allocation_total += allocation
+        if allocation_total <= 0.0:
+            allocations = [(first, 1.0)]
+            allocation_total = 1.0
+        for bin_index, allocation in allocations:
+            volume_density[bin_index] += volume * allocation / allocation_total
+
+        if index < len(closes):
+            close_index = _profile_index(price_min, bin_width, n_bins, closes[index])
+            close_density[close_index] += volume
+
+    volume_density = _smooth_density(volume_density)
+    close_density = _smooth_density(close_density)
+    return _PriceProfile(
+        price_min=price_min,
+        bin_width=bin_width,
+        volume_density=tuple(volume_density),
+        close_density=tuple(close_density),
+        vp_strength=_normalized_profile_strength(volume_density),
+        close_strength=_normalized_profile_strength(close_density),
+    )
+
+
+def _profile_index(price_min: float, bin_width: float, n_bins: int, price: float) -> int:
+    return min(n_bins - 1, max(0, math.floor((price - price_min) / bin_width)))
+
+
+def _profile_price(profile: _PriceProfile, index: int) -> float:
+    return profile.price_min + (index + 0.5) * profile.bin_width
+
+
+def _smooth_density(values: Sequence[float]) -> list[float]:
+    if len(values) < 3:
+        return list(values)
+    weighted_values: list[float] = []
+    for index in range(len(values)):
+        weighted = 0.0
+        for offset, weight in ((-1, 0.25), (0, 0.5), (1, 0.25)):
+            neighbor = index + offset
+            if 0 <= neighbor < len(values):
+                weighted += values[neighbor] * weight
+        weighted_values.append(weighted)
+    weighted_total = sum(weighted_values)
+    if weighted_total <= 1e-12:
+        return [0.0 for _ in values]
+    scale = sum(values) / weighted_total
+    return [value * scale for value in weighted_values]
+
+
+def _normalized_profile_strength(values: Sequence[float]) -> tuple[float, ...]:
+    if not values:
+        return ()
+    ordered = sorted(value for value in values if value > 0.0)
+    if not ordered:
+        return tuple(0.0 for _ in values)
+    p90_index = min(len(ordered) - 1, int((len(ordered) - 1) * 0.9))
+    scale = ordered[p90_index]
+    if scale <= 1e-12:
+        return tuple(0.0 for _ in values)
+    return tuple(min(1.0, max(0.0, value / scale)) for value in values)
+
+
+def _profile_peaks(values: Sequence[float]) -> list[int]:
+    peaks: list[int] = []
+    index = 1
+    while index < len(values) - 1:
+        value = values[index]
+        if value <= 0.0 or value < values[index - 1]:
+            index += 1
+            continue
+        plateau_end = index
+        while plateau_end + 1 < len(values) and values[plateau_end + 1] == value:
+            plateau_end += 1
+        right = plateau_end + 1
+        if right >= len(values) or value >= values[right]:
+            peaks.append((index + plateau_end) // 2)
+        index = plateau_end + 1
+    return peaks
+
+
+def _profile_strength_at(profile: _PriceProfile, price: float, field: str) -> float:
+    values = getattr(profile, field)
+    if not values:
+        return 0.0
+    index = _profile_index(profile.price_min, profile.bin_width, len(values), price)
+    return values[index]
+
+
+def _adaptive_zone_width(
+    profile: _PriceProfile,
+    cluster_span: float,
+    center: float,
+    atr: float,
+) -> float:
+    cluster_width = cluster_span / atr if atr else _MIN_ZONE_WIDTH_ATR
+    width = max(_MIN_ZONE_WIDTH_ATR, cluster_width * 0.75)
+    strengths = profile.vp_strength
+    if strengths:
+        center_index = _profile_index(
+            profile.price_min,
+            profile.bin_width,
+            len(strengths),
+            center,
+        )
+        positive = sorted(value for value in strengths if value > 0.0)
+        baseline = positive[len(positive) // 2] if positive else 0.0
+        threshold = max(0.15, (strengths[center_index] + baseline) / 2.0)
+        left = center_index
+        right = center_index
+        max_half_bins = max(
+            1,
+            math.ceil(_MAX_ZONE_WIDTH_ATR * atr / max(profile.bin_width * 2.0, 1e-12)),
+        )
+        while left > 0 and center_index - left < max_half_bins and strengths[left - 1] >= threshold:
+            left -= 1
+        while (
+            right + 1 < len(strengths)
+            and right - center_index < max_half_bins
+            and strengths[right + 1] >= threshold
+        ):
+            right += 1
+        profile_width = (right - left + 1) * profile.bin_width / atr if atr else 0.0
+        width = max(width, profile_width)
+    return min(_MAX_ZONE_WIDTH_ATR, max(_MIN_ZONE_WIDTH_ATR, width))
 
 
 def _build_zones(
@@ -251,10 +440,13 @@ def _build_zones(
     *,
     highs: Sequence[float],
     lows: Sequence[float],
+    closes: Sequence[float],
     volumes: Sequence[float],
     current_price: float,
     atr: float,
+    atr_values: Sequence[float | None],
     bars_used: int,
+    profile: _PriceProfile,
 ) -> list[dict[str, Any]]:
     if not candidates:
         return []
@@ -267,9 +459,35 @@ def _build_zones(
         if price - cluster[0] <= tolerance:
             cluster.append(price)
             continue
-        zones.append(_zone_from_cluster(cluster, highs, lows, volumes, current_price, atr, bars_used))
+        zones.append(
+            _zone_from_cluster(
+                cluster,
+                highs,
+                lows,
+                closes,
+                volumes,
+                current_price,
+                atr,
+                atr_values,
+                bars_used,
+                profile,
+            )
+        )
         cluster = [price]
-    zones.append(_zone_from_cluster(cluster, highs, lows, volumes, current_price, atr, bars_used))
+    zones.append(
+        _zone_from_cluster(
+            cluster,
+            highs,
+            lows,
+            closes,
+            volumes,
+            current_price,
+            atr,
+            atr_values,
+            bars_used,
+            profile,
+        )
+    )
     return zones
 
 
@@ -277,22 +495,35 @@ def _zone_from_cluster(
     cluster: Sequence[float],
     highs: Sequence[float],
     lows: Sequence[float],
+    closes: Sequence[float],
     volumes: Sequence[float],
     current_price: float,
     atr: float,
+    atr_values: Sequence[float | None],
     bars_used: int,
+    profile: _PriceProfile,
 ) -> dict[str, Any]:
     ordered = sorted(cluster)
     middle = len(ordered) // 2
     center = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
     span = max(ordered) - min(ordered)
-    width = min(1.2, max(0.3, min(0.8, span / atr if atr else 0.8)))
+    width = _adaptive_zone_width(profile, span, center, atr)
     half_width = width * atr / 2.0
     low = center - half_width
     high = center + half_width
 
     touch_count = sum(1 for bar_high, bar_low in zip(highs, lows, strict=True) if bar_high >= low and bar_low <= high)
-    n_events = _contact_runs(highs, lows, low, high)
+    zone_type = "support" if center < current_price else "resistance"
+    event_stats = _touch_event_stats(
+        highs,
+        lows,
+        closes,
+        atr_values,
+        low,
+        high,
+        zone_type,
+        atr,
+    )
     volume_in_zone = 0.0
     total_volume = sum(volumes)
     for bar_high, bar_low, volume in zip(highs, lows, volumes, strict=True):
@@ -304,23 +535,54 @@ def _zone_from_cluster(
     volume_pct = volume_in_zone / total_volume * 100.0 if total_volume > 0.0 else 0.0
 
     distance_atr = abs(center - current_price) / atr
-    proximity = max(0.0, 1.0 - min(distance_atr / _MAX_DISTANCE_ATR, 1.0))
-    volume_component = min(volume_pct / 15.0, 1.0)
-    touch_component = min(touch_count / max(12.0, bars_used * 0.08), 1.0)
-    edge_score = 100.0 * (0.45 * volume_component + 0.35 * touch_component + 0.20 * proximity)
+    vp_strength = _profile_strength_at(profile, center, "vp_strength")
+    close_strength = _profile_strength_at(profile, center, "close_strength")
+    n_events = int(event_stats["n_events"])
+    stale = float(event_stats["stale"])
+    event_component = min(math.log1p(max(n_events, 0)) / math.log1p(12.0), 1.0)
+    edge_score = 100.0 * (0.65 * event_component + 0.35 * stale)
+    p_stall = min(
+        1.0,
+        max(
+            0.0,
+            (1.0 * vp_strength + 0.8 * close_strength + 0.3 * width) / 2.1,
+        ),
+    )
     distance_pct = (center - current_price) / current_price * 100.0 if current_price else 0.0
-    zone_type = "support" if center < current_price else "resistance"
+    width_pct = (high - low) / current_price * 100.0 if current_price else None
 
     return {
         "zone_type": zone_type,
+        "zone_label": "支撑带" if zone_type == "support" else "压力带",
         "center": _round(center),
         "low": _round(low),
         "high": _round(high),
         "distance_pct": _round(distance_pct),
         "distance_atr": _round(distance_atr),
         "width_atr": _round(width),
+        "width_pct": _round(width_pct, 4) if width_pct is not None else None,
         "edge_score": _round(edge_score, 4),
+        "edge_event_component": _round(event_component, 4),
+        "edge_stale_component": _round(stale, 4),
         "n_events": n_events,
+        "n_decided": int(event_stats["n_decided"]),
+        "n_hold": int(event_stats["n_hold"]),
+        "event_hold_rate": (
+            _round(event_stats["hold_rate"], 4)
+            if event_stats["hold_rate"] is not None
+            else None
+        ),
+        "stale": _round(stale, 4),
+        "p_stall": _round(p_stall, 4),
+        "stall_bucket": _score_bucket(p_stall * 100.0),
+        "vp_strength": _round(vp_strength, 4),
+        "bucket": _score_bucket(edge_score),
+        "bucket_hold_rate": None,
+        "bucket_fwd_ret": None,
+        "bucket_n": None,
+        "p_touch": None,
+        "p_hold": None,
+        "p_effective": None,
         "volume_pct": _round(volume_pct),
         "touch_count": touch_count,
         "tf_count": 1,
@@ -328,20 +590,94 @@ def _zone_from_cluster(
     }
 
 
-def _contact_runs(
+def _touch_event_stats(
     highs: Sequence[float],
     lows: Sequence[float],
+    closes: Sequence[float],
+    atr_values: Sequence[float | None],
     low: float,
     high: float,
-) -> int:
-    runs = 0
-    previous_touch = False
-    for bar_high, bar_low in zip(highs, lows, strict=True):
-        touch = bar_high >= low and bar_low <= high
-        if touch and not previous_touch:
-            runs += 1
-        previous_touch = touch
-    return runs
+    zone_type: str,
+    fallback_atr: float,
+) -> dict[str, float | int | None]:
+    history_size = max(0, len(closes) - 1)
+    empty = {
+        "n_events": 0,
+        "n_decided": 0,
+        "n_hold": 0,
+        "hold_rate": None,
+        "stale": 1.0,
+    }
+    if history_size <= 1:
+        return empty
+
+    event_indices: list[int] = []
+    last_event = -_TOUCH_GAP_BARS
+    for index in range(1, history_size):
+        intersects = highs[index] >= low and lows[index] <= high
+        if not intersects:
+            continue
+        previous_close = closes[index - 1]
+        valid_direction = (
+            previous_close > high if zone_type == "support" else previous_close < low
+        )
+        if not valid_direction or index - last_event < _TOUCH_GAP_BARS:
+            continue
+        event_indices.append(index)
+        last_event = index
+
+    if not event_indices:
+        return empty
+
+    n_hold = 0
+    n_decided = 0
+    for index in event_indices:
+        end = min(history_size - 1, index + _TOUCH_HOLD_BARS)
+        if end <= index:
+            continue
+        event_atr = atr_values[index] or fallback_atr
+        event_atr = max(event_atr, 1e-12)
+        hold_index: int | None = None
+        break_index: int | None = None
+        for outcome_index in range(index + 1, end + 1):
+            if zone_type == "support":
+                reached_target = highs[outcome_index] >= high + _TOUCH_TARGET_ATR * event_atr
+                broke_zone = closes[outcome_index] < low - _TOUCH_BREAK_ATR * event_atr
+            else:
+                reached_target = lows[outcome_index] <= low - _TOUCH_TARGET_ATR * event_atr
+                broke_zone = closes[outcome_index] > high + _TOUCH_BREAK_ATR * event_atr
+            if reached_target and hold_index is None:
+                hold_index = outcome_index
+            if broke_zone and break_index is None:
+                break_index = outcome_index
+            if hold_index is not None or break_index is not None:
+                break
+
+        if hold_index is None and break_index is None:
+            continue
+        n_decided += 1
+        if break_index is None or (hold_index is not None and hold_index <= break_index):
+            n_hold += 1
+
+    age = history_size - 1 - event_indices[-1]
+    recency = 2.0 ** (-age / _STALE_HALF_LIFE)
+    return {
+        "n_events": len(event_indices),
+        "n_decided": n_decided,
+        "n_hold": n_hold,
+        "hold_rate": n_hold / n_decided if n_decided else None,
+        "stale": min(1.0, max(0.0, 1.0 - recency)),
+    }
+
+
+def _score_bucket(score: float) -> str:
+    if score < 25.0:
+        return "Q1"
+    if score < 50.0:
+        return "Q2"
+    if score < 75.0:
+        return "Q3"
+    return "Q4"
 
 
 def _mark_higher_timeframe_resonance(
@@ -491,7 +827,9 @@ def _build_summary(
     if nearest is None:
         headline = "距离带内没有符合条件的支撑阻力位"
     else:
-        type_label = "支撑" if nearest["zone_type"] == "support" else "阻力"
+        type_label = nearest.get("zone_label") or (
+            "支撑带" if nearest["zone_type"] == "support" else "压力带"
+        )
         headline = (
             f"趋势{trend['label']}，最近{type_label} {_round(nearest['center'])}"
             f"（距离 {nearest['distance_pct']:+.2f}% / {nearest['distance_atr']:.2f} ATR）"
@@ -510,6 +848,9 @@ def _build_summary(
         },
         "caveat": _CAVEAT,
         "direction": normalized_direction,
+        "direction_label": _DIRECTION_LABELS[normalized_direction],
+        "trend_label": trend["label"],
+        "trend_detail": trend["detail"],
     }
 
 

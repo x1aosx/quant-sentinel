@@ -17,6 +17,28 @@ export interface DatasetSummary {
   first_session: string;
   last_session: string;
   created_at: string;
+  source?: 'yfinance' | 'akshare' | 'local';
+  source_provider?: string;
+  synced_at?: string;
+  last_synced_at?: string;
+}
+
+export interface SyncDatasetResponse {
+  dataset: DatasetSummary;
+  id: string;
+  symbol: string;
+  timeframe: string;
+  bar_count: number;
+  first_session: string;
+  last_session: string;
+  created_at: string;
+  source: 'yfinance' | 'akshare';
+  source_provider: string;
+  inserted_count: number;
+  updated_count: number;
+  total_count: number;
+  sync_status: 'updated' | 'unchanged';
+  synced_at: string;
 }
 
 export interface SrLevel {

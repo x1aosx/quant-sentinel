@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import UTC, datetime, timedelta
+import zlib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
+from ..marketdata.remote import fetch_remote_bars
 from ..storage import (
     InfluxDBStore,
     PostgresStore,
@@ -104,10 +106,21 @@ class Database:
                 bar_count INTEGER NOT NULL,
                 first_session TEXT NOT NULL,
                 last_session TEXT NOT NULL,
+                source TEXT,
+                source_provider TEXT,
+                last_synced_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL
             );
+            ALTER TABLE research.dataset
+                ADD COLUMN IF NOT EXISTS source TEXT;
+            ALTER TABLE research.dataset
+                ADD COLUMN IF NOT EXISTS source_provider TEXT;
+            ALTER TABLE research.dataset
+                ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
             CREATE INDEX IF NOT EXISTS idx_dataset_created_at
                 ON research.dataset (created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_dataset_symbol_timeframe
+                ON research.dataset (symbol, timeframe);
             """
         )
 
@@ -192,12 +205,17 @@ class Database:
         bars = payload.get("bars", [])
         dataset_id = str(payload.get("id") or uuid4())
         created_at = payload.get("created_at") or datetime.now(UTC)
+        source = str(payload.get("source") or "local")
+        source_provider = str(payload.get("source_provider") or "local_file")
+        last_synced_at = payload.get("last_synced_at") or created_at
         self.postgres.execute(
             """
             INSERT INTO research.dataset
-                (id, symbol, timeframe, bar_count, first_session, last_session, created_at)
+                (id, symbol, timeframe, bar_count, first_session, last_session,
+                 source, source_provider, last_synced_at, created_at)
             VALUES
                 (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
+                 :source, :source_provider, CAST(:last_synced_at AS timestamptz),
                  CAST(:created_at AS timestamptz))
             ON CONFLICT (id) DO UPDATE SET
                 symbol = excluded.symbol,
@@ -205,6 +223,9 @@ class Database:
                 bar_count = excluded.bar_count,
                 first_session = excluded.first_session,
                 last_session = excluded.last_session,
+                source = excluded.source,
+                source_provider = excluded.source_provider,
+                last_synced_at = excluded.last_synced_at,
                 created_at = excluded.created_at
             """,
             {
@@ -214,6 +235,9 @@ class Database:
                 "bar_count": len(bars),
                 "first_session": bars[0]["session_id"] if bars else "",
                 "last_session": bars[-1]["session_id"] if bars else "",
+                "source": source,
+                "source_provider": source_provider,
+                "last_synced_at": last_synced_at,
                 "created_at": created_at,
             },
         )
@@ -221,12 +245,97 @@ class Database:
         self._invalidate("dataset:list", f"dataset:{dataset_id}:bars")
         return self.get_dataset(dataset_id)["summary"]
 
+    def sync_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_payload = dict(payload)
+        requested_symbol = str(request_payload.get("symbol") or "").strip().upper()
+        requested_timeframe = str(request_payload.get("timeframe") or "1d").strip() or "1d"
+        existing = (
+            self._find_dataset(requested_symbol, requested_timeframe) if requested_symbol else None
+        )
+        if existing and not request_payload.get("session_start"):
+            request_payload["session_start"] = existing["last_session"]
+
+        remote = fetch_remote_bars(request_payload)
+        symbol = str(remote.get("symbol") or requested_symbol).strip().upper()
+        timeframe = str(remote.get("timeframe") or requested_timeframe).strip() or "1d"
+        if not symbol:
+            raise ValueError("远程行情返回的 symbol 不能为空")
+        if existing is None or symbol != requested_symbol or timeframe != requested_timeframe:
+            existing = self._find_dataset(symbol, timeframe)
+
+        raw_bars = remote.get("bars")
+        if raw_bars is None:
+            raise ValueError("远程行情返回的 bars 不能为空")
+        if not isinstance(raw_bars, list):
+            raise TypeError("远程行情返回的 bars 格式无效")
+        remote_bars = _dedupe_bars(raw_bars)
+
+        dataset_id = str(existing["id"]) if existing else _dataset_id(symbol, timeframe)
+        created_at = _parse_time(existing.get("created_at")) if existing else None
+        now = datetime.now(UTC)
+        created_at = created_at or now
+        existing_bars = self._fetch_dataset_bars(dataset_id) if existing else []
+        existing_by_session = {
+            bar["session_id"]: bar for bar in _dedupe_bars(existing_bars).values()
+        }
+
+        new_bars = [
+            bar for session_id, bar in remote_bars.items() if session_id not in existing_by_session
+        ]
+        updated_count = len(remote_bars) - len(new_bars)
+        merged = {**existing_by_session, **{bar["session_id"]: bar for bar in new_bars}}
+        merged_bars = [merged[session_id] for session_id in sorted(merged)]
+        source = str(remote.get("source") or request_payload.get("source") or "unknown")
+        source_provider = str(remote.get("source_provider") or source)
+
+        if new_bars:
+            self._write_dataset_bars(
+                dataset_id,
+                symbol,
+                timeframe,
+                new_bars,
+                created_at,
+            )
+        self._upsert_dataset_metadata(
+            dataset_id=dataset_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=merged_bars,
+            source=source,
+            source_provider=source_provider,
+            last_synced_at=now,
+            created_at=created_at,
+        )
+        self._invalidate("dataset:list", f"dataset:{dataset_id}:bars")
+        summary = self.get_dataset(dataset_id)["summary"]
+        return {
+            "dataset": summary,
+            "id": dataset_id,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "bar_count": len(merged_bars),
+            "first_session": merged_bars[0]["session_id"] if merged_bars else "",
+            "last_session": merged_bars[-1]["session_id"] if merged_bars else "",
+            "created_at": summary["created_at"],
+            "source": source,
+            "source_provider": source_provider,
+            "inserted_count": len(new_bars),
+            "updated_count": updated_count,
+            "total_count": len(merged_bars),
+            "sync_status": "updated" if new_bars else "unchanged",
+            "synced_at": now.isoformat(),
+        }
+
     def list_datasets(self) -> list[dict[str, Any]]:
         return self._cache_get_or_set(
             "dataset:list",
             lambda: self.postgres.query(
                 """
-                SELECT id::text, symbol, timeframe, bar_count, first_session, last_session, created_at
+                SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
+                       COALESCE(source, 'local') AS source,
+                       COALESCE(source_provider, 'local_file') AS source_provider,
+                       COALESCE(last_synced_at, created_at) AS last_synced_at,
+                       created_at
                 FROM research.dataset
                 ORDER BY created_at DESC
                 """
@@ -237,7 +346,11 @@ class Database:
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         metadata = self.postgres.query_one(
             """
-            SELECT id::text, symbol, timeframe, bar_count, first_session, last_session, created_at
+            SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
+                   COALESCE(source, 'local') AS source,
+                   COALESCE(source_provider, 'local_file') AS source_provider,
+                   COALESCE(last_synced_at, created_at) AS last_synced_at,
+                   created_at
             FROM research.dataset
             WHERE id = CAST(:dataset_id AS uuid)
             """,
@@ -318,8 +431,11 @@ class Database:
         points: list[dict[str, Any]] = []
         fallback_time = _parse_time(created_at) or datetime.now(UTC)
         for index, bar in enumerate(bars):
-            bar_time = _parse_time(bar.get("session_id")) or fallback_time
-            bar_time = bar_time + timedelta(microseconds=index % 1000)
+            session_id = str(bar["session_id"])
+            bar_time = _parse_time(session_id)
+            if bar_time is None:
+                offset = zlib.crc32(session_id.encode("utf-8")) % 1_000_000
+                bar_time = fallback_time.replace(microsecond=offset)
             points.append(
                 {
                     "measurement": "market_bar",
@@ -329,7 +445,7 @@ class Database:
                         "timeframe": timeframe,
                     },
                     "fields": {
-                        "session_id": bar["session_id"],
+                        "session_id": session_id,
                         "source_seq": index,
                         "open": float(bar["open"]),
                         "high": float(bar["high"]),
@@ -342,6 +458,67 @@ class Database:
             )
         if points:
             self.influx.write_points(points)
+
+    def _find_dataset(self, symbol: str, timeframe: str) -> dict[str, Any] | None:
+        return self.postgres.query_one(
+            """
+            SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
+                   COALESCE(source, 'local') AS source,
+                   COALESCE(source_provider, 'local_file') AS source_provider,
+                   COALESCE(last_synced_at, created_at) AS last_synced_at,
+                   created_at
+            FROM research.dataset
+            WHERE UPPER(symbol) = UPPER(:symbol) AND timeframe = :timeframe
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            {"symbol": symbol, "timeframe": timeframe},
+        )
+
+    def _upsert_dataset_metadata(
+        self,
+        *,
+        dataset_id: str,
+        symbol: str,
+        timeframe: str,
+        bars: list[dict[str, Any]],
+        source: str,
+        source_provider: str,
+        last_synced_at: datetime,
+        created_at: datetime,
+    ) -> None:
+        self.postgres.execute(
+            """
+            INSERT INTO research.dataset
+                (id, symbol, timeframe, bar_count, first_session, last_session,
+                 source, source_provider, last_synced_at, created_at)
+            VALUES
+                (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
+                 :source, :source_provider, CAST(:last_synced_at AS timestamptz),
+                 CAST(:created_at AS timestamptz))
+            ON CONFLICT (id) DO UPDATE SET
+                symbol = excluded.symbol,
+                timeframe = excluded.timeframe,
+                bar_count = excluded.bar_count,
+                first_session = excluded.first_session,
+                last_session = excluded.last_session,
+                source = excluded.source,
+                source_provider = excluded.source_provider,
+                last_synced_at = excluded.last_synced_at
+            """,
+            {
+                "id": dataset_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "bar_count": len(bars),
+                "first_session": bars[0]["session_id"] if bars else "",
+                "last_session": bars[-1]["session_id"] if bars else "",
+                "source": source,
+                "source_provider": source_provider,
+                "last_synced_at": last_synced_at,
+                "created_at": created_at,
+            },
+        )
 
     def _fetch_dataset_bars(self, dataset_id: str) -> list[dict[str, Any]]:
         rows = self.influx.query(
@@ -378,3 +555,29 @@ def _parse_time(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for index, bar in enumerate(bars):
+        try:
+            session_id = str(bar["session_id"]).strip()
+            normalized = {
+                "session_id": session_id,
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+                "volume": float(bar.get("volume") or 0.0),
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"第 {index + 1} 条 bar 数据无效") from exc
+        if not session_id:
+            raise ValueError(f"第 {index + 1} 条 bar 缺少 session_id")
+        deduped.setdefault(session_id, normalized)
+    return deduped
+
+
+def _dataset_id(symbol: str, timeframe: str) -> str:
+    identity = f"https://xquant.local/datasets/{symbol.strip().upper()}/{timeframe.strip().lower()}"
+    return str(uuid5(NAMESPACE_URL, identity))

@@ -129,11 +129,12 @@ def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
             ],
         }
 
-    monkeypatch.setattr("xquant.api.routes.datasets.fetch_remote_bars", fake_fetch_remote_bars)
+    monkeypatch.setattr("xquant.registry.database.fetch_remote_bars", fake_fetch_remote_bars)
+    monkeypatch.setattr("xquant.registry.sqlite.fetch_remote_bars", fake_fetch_remote_bars)
 
     with TestClient(create_app(tmp_path / "xquant.db")) as client:
         response = client.post(
-            "/api/v1/datasets/remote",
+            "/api/v1/datasets/remote/sync",
             json={
                 "source": "yfinance",
                 "symbol": "gc=f",
@@ -149,8 +150,30 @@ def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
         assert created["bar_count"] == 80
         assert created["source"] == "yfinance"
         assert created["source_provider"] == "yfinance_public_chart"
+        assert created["inserted_count"] == 80
+        assert created["updated_count"] == 0
+        assert created["total_count"] == 80
+        assert created["sync_status"] == "updated"
         assert request_seen is not None
         assert request_seen.symbol.upper() == "GC=F"
+
+        repeat = client.post(
+            "/api/v1/datasets/remote/sync",
+            json={
+                "source": "yfinance",
+                "symbol": "gc=f",
+                "timeframe": "1d",
+                "lookback": 500,
+                "adjust": "qfq",
+            },
+        )
+        assert repeat.status_code == 200, repeat.text
+        unchanged = repeat.json()
+        assert unchanged["id"] == created["id"]
+        assert unchanged["inserted_count"] == 0
+        assert unchanged["updated_count"] == 80
+        assert unchanged["total_count"] == 80
+        assert unchanged["sync_status"] == "unchanged"
 
         datasets = client.get("/api/v1/datasets").json()["items"]
         assert [item["id"] for item in datasets] == [created["id"]]

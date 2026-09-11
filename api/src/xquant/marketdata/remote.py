@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,13 @@ _EASTMONEY_KLT = {
     "1d": "101",
     "1w": "102",
 }
+
+_REMOTE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -79,8 +87,8 @@ def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict
             volume = float(raw.get("volume") or 0.0)
             session_id = str(raw.get("session_id") or raw.get("time") or raw.get("date") or "").strip()
             closed = bool(raw.get("closed", True))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"第 {index + 1} 条行情数据无效") from exc
+        except (KeyError, TypeError, ValueError):
+            continue
         if not session_id or session_id in seen:
             continue
         if min(open_price, high, low, close) <= 0 or not all(
@@ -106,9 +114,14 @@ def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict
     return bars
 
 
-def _iso_ms(value: Any) -> str:
+def _iso_timestamp(value: Any) -> str:
     try:
-        return datetime.fromtimestamp(int(value) / 1000, tz=UTC).isoformat(timespec="seconds")
+        timestamp = int(value)
+        if abs(timestamp) >= 1_000_000_000_000_000:
+            timestamp /= 1_000_000
+        elif abs(timestamp) >= 1_000_000_000_000:
+            timestamp /= 1_000
+        return datetime.fromtimestamp(timestamp, tz=UTC).isoformat(timespec="seconds")
     except (TypeError, ValueError, OSError) as exc:
         raise ValueError("行情时间戳无效") from exc
 
@@ -123,16 +136,72 @@ def _yahoo_range(request: RemoteImportRequest) -> str:
     return "2y"
 
 
+def _http_get(url: str, *, params: dict[str, Any], referer: str) -> httpx.Response:
+    headers = {**_REMOTE_HEADERS, "Referer": referer}
+    last_error: Exception | None = None
+    response: httpx.Response | None = None
+    for attempt in range(3):
+        try:
+            response = httpx.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=15.0,
+                follow_redirects=True,
+            )
+        except httpx.TransportError as exc:
+            last_error = exc
+        else:
+            if response.status_code not in _RETRY_STATUS_CODES:
+                return response
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+        time.sleep(min(2.0**attempt, 4.0))
+
+    if last_error:
+        raise last_error
+    if response is None:
+        raise ValueError("行情请求未获得响应")
+    response.raise_for_status()
+    return response
+
+
+def _parse_session_date(value: str, field_name: str) -> datetime:
+    text = value.strip()
+    if not text:
+        raise ValueError(f"{field_name} 不能为空")
+    try:
+        if len(text) == 8 and text.isdigit():
+            parsed = datetime.strptime(text, "%Y%m%d").replace(tzinfo=UTC)
+        else:
+            parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} 必须是 ISO-8601 或 YYYYMMDD 日期") from exc
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def _fetch_yahoo(request: RemoteImportRequest) -> list[dict[str, Any]]:
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(request.symbol, safe='')}"
-    response = httpx.get(
+    params = {
+        "interval": _YAHOO_INTERVALS[request.timeframe],
+        "includePrePost": "false",
+    }
+    if request.session_start:
+        params["period1"] = str(
+            int(_parse_session_date(request.session_start, "session_start").timestamp())
+        )
+        if request.session_end:
+            params["period2"] = str(
+                int(_parse_session_date(request.session_end, "session_end").timestamp())
+            )
+    else:
+        params["range"] = _yahoo_range(request)
+    response = _http_get(
         url,
-        params={
-            "interval": _YAHOO_INTERVALS[request.timeframe],
-            "range": _yahoo_range(request),
-            "includePrePost": "false",
-        },
-        timeout=15.0,
+        params=params,
+        referer="https://finance.yahoo.com/",
     )
     response.raise_for_status()
     payload = response.json()
@@ -146,7 +215,7 @@ def _fetch_yahoo(request: RemoteImportRequest) -> list[dict[str, Any]]:
     for index, timestamp in enumerate(timestamps):
         try:
             row = {
-                "session_id": _iso_ms(timestamp),
+                "session_id": _iso_timestamp(timestamp),
                 "open": quote_data["open"][index],
                 "high": quote_data["high"][index],
                 "low": quote_data["low"][index],
@@ -174,9 +243,15 @@ def _eastmoney_code(symbol: str) -> tuple[str, str]:
 
 def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
     market, code = _eastmoney_code(request.symbol)
-    begin = request.session_start or (datetime.now(UTC) - timedelta(days=1000)).strftime("%Y%m%d")
-    end = request.session_end or datetime.now(UTC).strftime("%Y%m%d")
-    response = httpx.get(
+    begin_default = (datetime.now(UTC) - timedelta(days=1000)).strftime("%Y%m%d")
+    end_default = datetime.now(UTC).strftime("%Y%m%d")
+    begin = request.session_start or begin_default
+    end = request.session_end or end_default
+    if request.session_start:
+        begin = _parse_session_date(request.session_start, "session_start").strftime("%Y%m%d")
+    if request.session_end:
+        end = _parse_session_date(request.session_end, "session_end").strftime("%Y%m%d")
+    response = _http_get(
         "https://push2his.eastmoney.com/api/qt/stock/kline/get",
         params={
             "secid": f"{market}.{code}",
@@ -188,7 +263,7 @@ def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
             "end": end,
             "lmt": str(max(request.lookback, 100)),
         },
-        timeout=15.0,
+        referer="https://quote.eastmoney.com/",
     )
     response.raise_for_status()
     klines = response.json().get("data", {}).get("klines") or []
@@ -221,6 +296,8 @@ def fetch_remote_bars(request: RemoteImportRequest | Mapping[str, Any]) -> dict[
     else:
         bars = _fetch_akshare(request)
         provider = "eastmoney_public_kline"
+    if not bars:
+        raise ValueError(f"{provider} 未返回有效行情数据")
     return {
         "symbol": request.symbol.upper(),
         "timeframe": request.timeframe,
