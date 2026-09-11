@@ -182,6 +182,111 @@ def test_stream_retries_without_unsupported_optional_fields(monkeypatch) -> None
     )
 
 
+def test_stream_falls_back_when_provider_ignores_stream_flag(monkeypatch) -> None:
+    settings = normalize_ai_settings(
+        {
+            "provider": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://model.test/v1",
+            },
+            "analysis_bar_count": 120,
+        }
+    )
+    snapshot = build_snapshot(
+        dataset_id="d1",
+        symbol="DEMO.RESEARCH",
+        timeframe="1d",
+        bars=_bars(),
+        settings=settings,
+    )
+    fallback_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal fallback_calls
+        payload = json.loads(request.content)
+        if payload.get("stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={"choices": [{"message": {"content": ""}}]},
+            )
+        fallback_calls += 1
+        content = (
+            {
+                "current_trend": {"direction": "bullish"},
+                "current_cycle": "markup",
+                "next_cycle": "distribution",
+                "diagnosis_summary": "fallback diagnosis",
+                "confidence": 70,
+            }
+            if fallback_calls == 1
+            else {
+                "decision": {"action": "WAIT", "confidence": 60, "reasoning": "fallback"},
+                "future_trend": {"label": "range"},
+                "next_cycle_prediction": {"cycle": "range"},
+                "next_bar_prediction": {"direction": "neutral"},
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": "fallback-request",
+                "model": "test-model",
+                "choices": [
+                    {
+                        "message": {"content": json.dumps(content, ensure_ascii=False)},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "xquant.ai.service._client",
+        lambda _provider: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    events = list(stream_two_stage(snapshot, settings))
+
+    assert fallback_calls == 2
+    assert events[-1]["type"] == "done"
+    assert events[-1]["record"]["status"] == "ok"
+    assert events[-1]["record"]["stage1_diagnosis"]["diagnosis_summary"] == "fallback diagnosis"
+    assert any("切换普通请求重试" in event.get("text", "") for event in events)
+
+
+def test_stream_always_finishes_after_unexpected_exception(monkeypatch) -> None:
+    settings = normalize_ai_settings(
+        {
+            "provider": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://model.test/v1",
+            },
+            "analysis_bar_count": 120,
+        }
+    )
+    snapshot = build_snapshot(
+        dataset_id="d1",
+        symbol="DEMO.RESEARCH",
+        timeframe="1d",
+        bars=_bars(),
+        settings=settings,
+    )
+
+    def fail_stream(*_args, **_kwargs):
+        raise RuntimeError("unexpected stream failure")
+
+    monkeypatch.setattr("xquant.ai.service._consume_stream_reply", fail_stream)
+
+    events = list(stream_two_stage(snapshot, settings))
+
+    assert [event["type"] for event in events[-2:]] == ["error", "done"]
+    assert events[-1]["record"]["status"] == "error"
+    assert events[-1]["record"]["exception"]["stage"] == "stage1"
+
+
 def test_remote_payload_normalization_and_feishu_signing() -> None:
     bars = normalize_remote_payload(
         [

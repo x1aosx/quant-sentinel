@@ -430,6 +430,10 @@ def stream_chat_completion_events(
                 except httpx.HTTPStatusError as exc:
                     raise ValueError(_upstream_error_message(response)) from exc
                 for line in response.iter_lines():
+                    if time.perf_counter() - started > provider.timeout_seconds:
+                        raise httpx.ReadTimeout(
+                            f"模型流式响应超过 {provider.timeout_seconds:g} 秒未完成"
+                        )
                     if not line or not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
@@ -1078,7 +1082,35 @@ def _consume_stream_reply(
             yield {"type": stage, "text": event.get("text", "")}
         elif event_type == "usage":
             final_reply = dict(event.get("reply") or final_reply)
+    if not str(final_reply.get("content") or "").strip():
+        yield {
+            "type": "log",
+            "text": f"{'阶段一' if stage == 'stage1' else '阶段二'}流式接口未返回正文，已切换普通请求重试。",
+        }
+        final_reply = _post_chat_completion(provider, messages)
+        if not str(final_reply.get("content") or "").strip():
+            raise ValueError(f"模型未返回{'阶段一诊断' if stage == 'stage1' else '阶段二决策'}内容")
+        yield {"type": stage, "text": final_reply["content"]}
     yield {"type": "__reply__", "reply": final_reply}
+
+
+def _mark_stream_error(
+    record: dict[str, Any],
+    settings: AISettings,
+    started: float,
+    exc: Exception,
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    record["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    record["status"] = "error"
+    record["exception"] = {
+        "type": type(exc).__name__,
+        "message": str(exc),
+        "stage": stage,
+    }
+    record["debug"] = _debug_payload(settings, attempts=1)
+    return record
 
 
 def stream_two_stage(
@@ -1095,12 +1127,19 @@ def stream_two_stage(
         "bar_count": len(snapshot.get("candles", [])),
     }
     if not settings.provider.api_key:
-        yield {"type": "log", "text": "进入本地确定性研究模式。"}
-        result = run_two_stage(snapshot, settings)
-        yield {"type": "done", "record": result}
+        try:
+            yield {"type": "log", "text": "进入本地确定性研究模式。"}
+            result = run_two_stage(snapshot, settings)
+            yield {"type": "done", "record": result}
+        except Exception as exc:
+            result = _mark_stream_error(record, settings, started, exc, stage="local")
+            yield {"type": "error", "message": str(exc), "record": result}
+            yield {"type": "done", "record": result}
         return
 
+    stage = "stage1"
     try:
+        yield {"type": "log", "text": "正在执行阶段一：市场诊断..."}
         stage1_reply: dict[str, Any] = {}
         for event in _consume_stream_reply(settings.provider, stage1_messages, "stage1"):
             if event["type"] == "__reply__":
@@ -1109,11 +1148,16 @@ def stream_two_stage(
                 yield event
         stage1_raw = extract_json_object(str(stage1_reply.get("content") or "")) or {}
         diagnosis = normalize_diagnosis(stage1_raw, snapshot)
+        record["stage1_diagnosis"] = dict(diagnosis)
+        record["stage1_response"] = dict(stage1_reply)
+        record["stage1_response_text"] = str(stage1_reply.get("content") or "")
         stage2_messages = build_stage2_prompt(snapshot, diagnosis)
         record["stage2_messages"] = stage2_messages
         record["raw_prompt"]["stage2"] = stage2_messages
         yield {"type": "stage1_diagnosis", "diagnosis": diagnosis}
+        yield {"type": "log", "text": "阶段一完成，正在执行阶段二：决策生成..."}
 
+        stage = "stage2"
         stage2_reply: dict[str, Any] = {}
         for event in _consume_stream_reply(settings.provider, stage2_messages, "stage2"):
             if event["type"] == "__reply__":
@@ -1125,17 +1169,7 @@ def stream_two_stage(
         yield {"type": "stage2_decision", "decision": record.get("stage2_decision", {})}
         yield {"type": "debug", "debug": record.get("debug", {})}
         yield {"type": "done", "record": record}
-    except (
-        httpx.HTTPError,
-        ImportError,
-        ValueError,
-        TypeError,
-        KeyError,
-        json.JSONDecodeError,
-    ) as exc:
-        record["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
-        record["status"] = "error"
-        record["exception"] = {"type": type(exc).__name__, "message": str(exc)}
-        record["debug"] = _debug_payload(settings, attempts=1)
+    except Exception as exc:
+        record = _mark_stream_error(record, settings, started, exc, stage=stage)
         yield {"type": "error", "message": str(exc), "record": record}
         yield {"type": "done", "record": record}

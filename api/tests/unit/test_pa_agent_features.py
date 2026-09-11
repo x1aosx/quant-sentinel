@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from xquant.api.app import create_app
+from xquant.api.routes.ai import _sse_payload
 from xquant.notifications.feishu import build_feishu_card, send_feishu_message
 from xquant.system_config import SystemConfigStore
 
@@ -123,5 +126,21 @@ def test_streaming_endpoint_returns_final_record(tmp_path) -> None:
             json={"dataset_id": dataset_id},
         )
         assert response.status_code == 200, response.text
-        assert '"type": "done"' in response.text
-        assert '"decision_tree_layout"' in response.text
+        events = [
+            json.loads(line[5:].strip())
+            for chunk in response.text.split("\n\n")
+            for line in chunk.splitlines()
+            if line.startswith("data:")
+        ]
+        assert events[-1]["type"] == "done"
+        assert events[-1]["record"]["decision_tree_layout"]
+        assert response.headers["cache-control"] == "no-cache, no-transform"
+        assert response.headers["x-accel-buffering"] == "no"
+
+
+def test_sse_payload_replaces_non_finite_numbers() -> None:
+    payload = _sse_payload(
+        {"type": "done", "record": {"value": float("nan"), "nested": [float("inf")]}}
+    )
+    event = json.loads(payload.removeprefix("data: ").strip())
+    assert event["record"] == {"value": None, "nested": [None]}

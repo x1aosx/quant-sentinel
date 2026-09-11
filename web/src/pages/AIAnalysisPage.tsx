@@ -141,7 +141,7 @@ export function AIAnalysisPage() {
     if (!datasetId) return;
     setRunning(true);
     setRecord(null);
-    setStreamLog('');
+    setStreamLog('正在连接分析服务...\n');
     setError('');
     setNotice('');
     setMode('single');
@@ -162,7 +162,11 @@ export function AIAnalysisPage() {
           };
           setStreamLog((current) => `${current}[${labels[event.type] ?? event.type}] ${event.text ?? ''}`);
         } else if (event.type === 'error') {
-          setError(event.message ?? '分析失败');
+          const message = event.message ?? '分析失败';
+          setError(message);
+          setStreamLog((current) => `${current}[错误] ${message}\n`);
+        } else if (event.type === 'done') {
+          setStreamLog((current) => `${current}[系统] 分析流程已结束。\n`);
         }
       });
       setRecord(result);

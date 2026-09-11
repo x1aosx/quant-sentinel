@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 import httpx
@@ -23,6 +25,26 @@ from xquant.system_config import SystemConfigStore
 from ..dependencies import get_database, get_dataset_or_404, get_monitor, get_system_config
 
 router = APIRouter(tags=["ai"])
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _sse_payload(event: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        _json_safe(event),
+        ensure_ascii=False,
+        default=str,
+        separators=(",", ":"),
+    )
+    return f"data: {payload}\n\n"
 
 
 def _merged_payload(
@@ -95,10 +117,33 @@ def analyze_ai_stream(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def event_stream():
-        for event in stream_two_stage(snapshot, ai_settings):
-            yield "data: " + json.dumps(event, ensure_ascii=False, default=str) + "\n\n"
+        try:
+            for event in stream_two_stage(snapshot, ai_settings):
+                yield _sse_payload(event)
+        except Exception as exc:
+            # The SSE response has already started, so failures must be delivered as events.
+            error_record = {
+                "id": f"ai-stream-{dataset['summary']['id']}",
+                "status": "error",
+                "symbol": snapshot.get("symbol"),
+                "timeframe": snapshot.get("timeframe"),
+                "exception": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "stage": "stream",
+                },
+            }
+            yield _sse_payload({"type": "error", "message": str(exc), "record": error_record})
+            yield _sse_payload({"type": "done", "record": error_record})
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/ai/followup")

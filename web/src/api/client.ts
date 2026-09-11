@@ -166,30 +166,40 @@ export async function streamAIAnalysis(
   const decoder = new TextDecoder();
   let buffer = '';
   let finalRecord: AIAnalysisRecord | null = null;
+  let streamError = '';
+  const consumeEvent = (chunk: string) => {
+    const data = chunk
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!data) return;
+    let event: Record<string, any>;
+    try {
+      event = JSON.parse(data) as Record<string, any>;
+    } catch {
+      return;
+    }
+    onEvent(event);
+    if (event.type === 'error') {
+      streamError = event.message ?? '模型分析失败';
+    }
+    if (event.type === 'done' && event.record) {
+      finalRecord = event.record as AIAnalysisRecord;
+    }
+  };
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
     const chunks = buffer.split('\n\n');
     buffer = chunks.pop() ?? '';
-    for (const chunk of chunks) {
-      const data = chunk
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trim())
-        .join('');
-      if (!data) continue;
-      let event: Record<string, any>;
-      try {
-        event = JSON.parse(data) as Record<string, any>;
-      } catch {
-        continue;
-      }
-      onEvent(event);
-      if (event.type === 'error') throw new Error(event.message ?? '模型分析失败');
-      if (event.type === 'done' && event.record) finalRecord = event.record as AIAnalysisRecord;
-    }
+    chunks.forEach(consumeEvent);
   }
-  if (!finalRecord) throw new Error('流式分析结束但未返回完整记录');
+  buffer += decoder.decode().replace(/\r\n/g, '\n');
+  if (buffer.trim()) consumeEvent(buffer);
+  if (!finalRecord) {
+    throw new Error(streamError || '流式分析结束但未返回完整记录');
+  }
   return finalRecord;
 }
