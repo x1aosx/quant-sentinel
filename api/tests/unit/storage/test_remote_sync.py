@@ -313,6 +313,64 @@ def test_yahoo_incremental_request_uses_session_start(monkeypatch) -> None:
     assert result["bars"][0]["session_id"] == "2026-01-01T00:00:00+00:00"
 
 
+def test_yahoo_incremental_request_defaults_end_to_now(monkeypatch) -> None:
+    requests: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "chart": {
+                    "result": [
+                        {
+                            "timestamp": [1_767_225_600_000, 1_767_312_000_000],
+                            "indicators": {
+                                "quote": [
+                                    {
+                                        "open": [100, 101],
+                                        "high": [102, 103],
+                                        "low": [99, 100],
+                                        "close": [101, 102],
+                                        "volume": [1_000, 1_100],
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+
+    def fake_get(
+        url: str,
+        params: dict[str, Any],
+        timeout: float,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> FakeResponse:
+        requests.append(params)
+        return FakeResponse()
+
+    monkeypatch.setattr("xquant.marketdata.remote.httpx.get", fake_get)
+    result = fetch_remote_bars(
+        RemoteImportRequest(
+            source="yfinance",
+            symbol="GC=F",
+            timeframe="1d",
+            lookback=10,
+            session_start="2026-01-01",
+        )
+    )
+
+    assert requests[0]["period1"] == "1767225600"
+    assert int(requests[0]["period2"]) > int(requests[0]["period1"])
+    assert "range" not in requests[0]
+    assert result["bars"][0]["session_id"] == "2026-01-01T00:00:00+00:00"
+
+
 def test_yahoo_seconds_timestamp_is_not_divided_by_one_thousand(monkeypatch) -> None:
     class FakeResponse:
         status_code = 200

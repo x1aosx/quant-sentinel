@@ -74,8 +74,8 @@ class InfluxSettings(BaseSettings):
     token: SecretStr = SecretStr("")
     database: str = "xquant_market"
     timeout_seconds: float = 30.0
-    write_path: str = "/api/v3/write"
-    query_path: str = "/api/v3/query"
+    write_path: str = "/api/v3/write_lp"
+    query_path: str = "/api/v3/query_sql"
 
     @property
     def auth_header(self) -> str:

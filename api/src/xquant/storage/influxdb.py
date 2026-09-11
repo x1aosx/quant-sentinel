@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -43,12 +42,15 @@ class InfluxDBStore:
                 "db": self.settings.database,
                 "q": sql,
                 "params": params or {},
-                "format": "jsonl",
+                "format": "json",
             },
-            headers={"Accept": "application/jsonl"},
+            headers={"Accept": "application/json"},
         )
         response.raise_for_status()
-        return [json.loads(line) for line in response.text.splitlines() if line.strip()]
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise TypeError("InfluxDB query response must be a JSON array")
+        return [dict(row) for row in payload]
 
     def health(self) -> dict[str, str]:
         response = self._client.get("/health")

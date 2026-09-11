@@ -192,10 +192,12 @@ def _fetch_yahoo(request: RemoteImportRequest) -> list[dict[str, Any]]:
         params["period1"] = str(
             int(_parse_session_date(request.session_start, "session_start").timestamp())
         )
-        if request.session_end:
-            params["period2"] = str(
-                int(_parse_session_date(request.session_end, "session_end").timestamp())
-            )
+        end = (
+            _parse_session_date(request.session_end, "session_end")
+            if request.session_end
+            else datetime.now(UTC)
+        )
+        params["period2"] = str(int(end.timestamp()))
     else:
         params["range"] = _yahoo_range(request)
     response = _http_get(
