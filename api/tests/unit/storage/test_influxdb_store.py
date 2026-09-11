@@ -62,7 +62,6 @@ def test_influxdb_3_uses_write_lp_and_query_sql_paths() -> None:
 
     written = store.write_line_protocol(["market_bar value=1i"])
     rows = store.query("SELECT 1 AS value", {"dataset_id": "dataset-1"})
-    store.delete_market_bars("dataset-1")
 
     assert written == 1
     assert rows == [{"value": 1}]
@@ -70,9 +69,3 @@ def test_influxdb_3_uses_write_lp_and_query_sql_paths() -> None:
     assert calls[1]["path"] == "/api/v3/query_sql"
     assert calls[1]["json"]["format"] == "json"
     assert calls[1]["headers"] == {"Accept": "application/json"}
-    assert calls[2]["path"] == "/api/v3/delete"
-    assert calls[2]["json"] == {
-        "db": "quant-sentinel",
-        "measurement": "market_bar",
-        "predicate": "dataset_id = 'dataset-1'",
-    }

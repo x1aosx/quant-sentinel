@@ -111,6 +111,7 @@ class Database:
                 source_provider TEXT,
                 exchange TEXT,
                 last_synced_at TIMESTAMPTZ,
+                deleted_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL
             );
             ALTER TABLE research.dataset
@@ -123,10 +124,15 @@ class Database:
                 ADD COLUMN IF NOT EXISTS exchange TEXT;
             ALTER TABLE research.dataset
                 ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
+            ALTER TABLE research.dataset
+                ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
             CREATE INDEX IF NOT EXISTS idx_dataset_created_at
                 ON research.dataset (created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_dataset_symbol_timeframe
                 ON research.dataset (symbol, timeframe);
+            CREATE INDEX IF NOT EXISTS idx_dataset_active
+                ON research.dataset (deleted_at)
+                WHERE deleted_at IS NULL;
             """
         )
 
@@ -236,6 +242,7 @@ class Database:
                 source_provider = excluded.source_provider,
                 exchange = excluded.exchange,
                 last_synced_at = excluded.last_synced_at,
+                deleted_at = NULL,
                 created_at = excluded.created_at
             """,
             {
@@ -363,6 +370,7 @@ class Database:
                        COALESCE(last_synced_at, created_at) AS last_synced_at,
                        created_at
                 FROM research.dataset
+                WHERE deleted_at IS NULL
                 ORDER BY created_at DESC
                 """
             ),
@@ -384,6 +392,7 @@ class Database:
                    created_at
             FROM research.dataset
             WHERE id = CAST(:dataset_id AS uuid)
+              AND deleted_at IS NULL
             """,
             {"dataset_id": dataset_id},
         )
@@ -407,16 +416,18 @@ class Database:
             SELECT id::text
             FROM research.dataset
             WHERE id = CAST(:dataset_id AS uuid)
+              AND deleted_at IS NULL
             """,
             {"dataset_id": dataset_id},
         )
         if metadata is None:
             raise KeyError(f"dataset not found: {dataset_id}")
-        self.influx.delete_market_bars(dataset_id)
         self.postgres.execute(
             """
-            DELETE FROM research.dataset
+            UPDATE research.dataset
+            SET deleted_at = now()
             WHERE id = CAST(:dataset_id AS uuid)
+              AND deleted_at IS NULL
             """,
             {"dataset_id": dataset_id},
         )
@@ -568,7 +579,8 @@ class Database:
                 source = excluded.source,
                 source_provider = excluded.source_provider,
                 exchange = excluded.exchange,
-                last_synced_at = excluded.last_synced_at
+                last_synced_at = excluded.last_synced_at,
+                deleted_at = NULL
             """,
             {
                 "id": dataset_id,

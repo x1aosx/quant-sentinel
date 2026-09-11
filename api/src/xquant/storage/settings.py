@@ -76,7 +76,6 @@ class InfluxSettings(BaseSettings):
     timeout_seconds: float = 30.0
     write_path: str = "/api/v3/write_lp"
     query_path: str = "/api/v3/query_sql"
-    delete_path: str = "/api/v3/delete"
 
     @property
     def auth_header(self) -> str:

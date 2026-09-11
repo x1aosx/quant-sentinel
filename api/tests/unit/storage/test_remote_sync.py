@@ -36,13 +36,15 @@ class FakePostgres:
     ) -> None:
         values = dict(params or {})
         self.statements.append((statement, values))
+        if "SET deleted_at = now()" in statement:
+            dataset_id = str(values["dataset_id"])
+            if dataset_id in self.rows:
+                self.rows[dataset_id]["deleted_at"] = "deleted"
+            return
         if "UPDATE research.dataset" in statement:
             dataset_id = str(values["dataset_id"])
             if dataset_id in self.rows:
                 self.rows[dataset_id]["title"] = values["title"]
-            return
-        if "DELETE FROM research.dataset" in statement:
-            self.rows.pop(str(values["dataset_id"]), None)
             return
         if "INSERT INTO research.dataset" not in statement:
             return
@@ -51,10 +53,16 @@ class FakePostgres:
         row = {**existing, **values} if existing else values
         if existing and "created_at = excluded.created_at" not in statement:
             row["created_at"] = existing["created_at"]
+        if existing and "deleted_at = NULL" in statement:
+            row.pop("deleted_at", None)
         self.rows[dataset_id] = row
 
     def query(self, statement: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        return [self._summary(row) for row in self.rows.values()]
+        return [
+            self._summary(row)
+            for row in self.rows.values()
+            if not row.get("deleted_at")
+        ]
 
     def query_one(
         self,
@@ -64,6 +72,8 @@ class FakePostgres:
         values = params or {}
         if "WHERE id" in statement:
             row = self.rows.get(str(values["dataset_id"]))
+            if row and "deleted_at IS NULL" in statement and row.get("deleted_at"):
+                return None
             return self._summary(row) if row else None
         if "UPPER(symbol)" in statement:
             matches = [
@@ -97,7 +107,6 @@ class FakeInflux:
     def __init__(self) -> None:
         self.points: dict[tuple[Any, ...], dict[str, Any]] = {}
         self.write_batches: list[list[dict[str, Any]]] = []
-        self.deleted_dataset_ids: list[str] = []
 
     def write_points(self, points: list[dict[str, Any]]) -> int:
         self.write_batches.append(deepcopy(points))
@@ -118,14 +127,6 @@ class FakeInflux:
             rows,
             key=lambda row: (str(row["session_id"]), int(row.get("source_seq", 0))),
         )
-
-    def delete_market_bars(self, dataset_id: str) -> None:
-        self.deleted_dataset_ids.append(dataset_id)
-        self.points = {
-            key: point
-            for key, point in self.points.items()
-            if point["tags"]["dataset_id"] != dataset_id
-        }
 
     def close(self) -> None:
         return None
@@ -281,7 +282,7 @@ def test_dataset_writer_uses_stable_session_timestamp() -> None:
     assert len(influx.points) == 3
 
 
-def test_database_delete_dataset_cleans_storage_and_cache() -> None:
+def test_database_delete_dataset_soft_deletes_metadata_and_cache() -> None:
     postgres = FakePostgres()
     influx = FakeInflux()
     redis = FakeRedis()
@@ -304,9 +305,9 @@ def test_database_delete_dataset_cleans_storage_and_cache() -> None:
     deleted = database.delete_dataset(created["id"])
 
     assert deleted == {"deleted": True, "id": created["id"]}
-    assert postgres.rows == {}
-    assert influx.points == {}
-    assert influx.deleted_dataset_ids == [created["id"]]
+    assert postgres.rows[created["id"]]["deleted_at"] == "deleted"
+    assert influx.points
+    assert database.list_datasets() == []
     assert redis.deleted_keys[-1] == (
         "dataset:list",
         f"dataset:{created['id']}:bars",
