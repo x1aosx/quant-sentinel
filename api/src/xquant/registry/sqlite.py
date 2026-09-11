@@ -71,6 +71,7 @@ class Database:
                 created_at TEXT NOT NULL,
                 source TEXT,
                 source_provider TEXT,
+                exchange TEXT,
                 last_synced_at TEXT,
                 bars_json TEXT NOT NULL
             );
@@ -80,7 +81,7 @@ class Database:
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(datasets)").fetchall()
         }
-        for name in ("source", "source_provider", "last_synced_at"):
+        for name in ("source", "source_provider", "exchange", "last_synced_at"):
             if name not in columns:
                 conn.execute(f"ALTER TABLE datasets ADD COLUMN {name} TEXT")
         conn.commit()
@@ -146,9 +147,10 @@ class Database:
             """
             INSERT INTO datasets
             (id, symbol, timeframe, bar_count, first_session, last_session, created_at,
-             source, source_provider, last_synced_at, bars_json)
+             source, source_provider, exchange, last_synced_at, bars_json)
             VALUES (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
-                    :created_at, :source, :source_provider, :last_synced_at, :bars_json)
+                    :created_at, :source, :source_provider, :exchange, :last_synced_at,
+                    :bars_json)
             ON CONFLICT(id) DO UPDATE SET
                 symbol=excluded.symbol,
                 timeframe=excluded.timeframe,
@@ -157,6 +159,7 @@ class Database:
                 last_session=excluded.last_session,
                 source=excluded.source,
                 source_provider=excluded.source_provider,
+                exchange=excluded.exchange,
                 last_synced_at=excluded.last_synced_at,
                 bars_json=excluded.bars_json
             """,
@@ -170,6 +173,7 @@ class Database:
                 "created_at": created_at,
                 "source": payload.get("source"),
                 "source_provider": payload.get("source_provider"),
+                "exchange": payload.get("exchange"),
                 "last_synced_at": payload.get("last_synced_at"),
                 "bars_json": json.dumps(bars, ensure_ascii=False, separators=(",", ":")),
             },
@@ -235,6 +239,7 @@ class Database:
                 "created_at": created_at,
                 "source": remote["source"],
                 "source_provider": remote["source_provider"],
+                "exchange": remote.get("exchange"),
                 "last_synced_at": synced_at,
             }
         )
@@ -243,6 +248,7 @@ class Database:
             "dataset": summary,
             "source": remote["source"],
             "source_provider": remote["source_provider"],
+            "exchange": remote.get("exchange"),
             "inserted_count": inserted_count,
             "updated_count": len(incoming_ids) - inserted_count,
             "total_count": len(bars),
@@ -256,7 +262,7 @@ class Database:
         rows = conn.execute(
             """
             SELECT id, symbol, timeframe, bar_count, first_session, last_session,
-                   created_at, source, source_provider, last_synced_at
+                   created_at, source, source_provider, exchange, last_synced_at
             FROM datasets
             ORDER BY created_at DESC, rowid DESC
             """

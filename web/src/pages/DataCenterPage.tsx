@@ -4,7 +4,7 @@ import { Database, Globe, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import type { DatasetSummary, SyncDatasetResponse } from '../types';
 
-type DatasetSource = 'yfinance' | 'akshare';
+type DatasetSource = 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
 type DatasetAdjust = 'qfq' | 'hfq' | 'none';
 
 interface SyncPayload {
@@ -13,10 +13,13 @@ interface SyncPayload {
   timeframe: string;
   lookback: number;
   adjust: DatasetAdjust;
+  exchange?: string;
 }
 
 function sourceLabel(source?: DatasetSummary['source']): string {
   if (source === 'akshare') return 'AkShare';
+  if (source === 'tradingview') return 'TradingView';
+  if (source === 'mt5') return 'MT5';
   if (source === 'local') return '本地文件';
   return 'YFinance';
 }
@@ -47,6 +50,7 @@ export function DataCenterPage() {
   const [timeframe, setTimeframe] = useState('1d');
   const [lookback, setLookback] = useState('500');
   const [adjust, setAdjust] = useState<DatasetAdjust>('qfq');
+  const [exchange, setExchange] = useState('');
   const [syncingKey, setSyncingKey] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<SyncDatasetResponse | null>(null);
   const [notice, setNotice] = useState('');
@@ -104,6 +108,7 @@ export function DataCenterPage() {
       timeframe: timeframeValue,
       lookback: lookbackValue,
       adjust,
+      exchange: source === 'tradingview' ? exchange : undefined,
     });
   };
 
@@ -118,11 +123,17 @@ export function DataCenterPage() {
 
     setSyncingKey(dataset.id);
     syncMutation.mutate({
-      source: dataset.source === 'akshare' ? 'akshare' : 'yfinance',
+      source:
+        dataset.source === 'akshare' ||
+        dataset.source === 'tradingview' ||
+        dataset.source === 'mt5'
+          ? dataset.source
+          : 'yfinance',
       symbol: dataset.symbol,
       timeframe: dataset.timeframe,
       lookback: lookbackValue,
       adjust,
+      exchange: dataset.exchange,
     });
   };
 
@@ -153,6 +164,8 @@ export function DataCenterPage() {
               >
                 <option value="yfinance">YFinance</option>
                 <option value="akshare">AkShare / A股</option>
+                <option value="tradingview">TradingView</option>
+                <option value="mt5">MT5</option>
               </select>
             </div>
             <div className="field">
@@ -161,9 +174,37 @@ export function DataCenterPage() {
                 id="sync-symbol"
                 value={symbol}
                 onChange={(event) => setSymbol(event.target.value)}
-                placeholder={source === 'akshare' ? '如 600519 或 SH600519' : '如 GC=F 或 AAPL'}
+                placeholder={
+                  source === 'akshare'
+                    ? '如 600519 或 SH600519'
+                    : source === 'mt5'
+                      ? '如 XAUUSDm 或 EURUSDm'
+                      : '如 GC=F、AAPL、800865'
+                }
               />
             </div>
+            {source === 'tradingview' ? (
+              <div className="field">
+                <label htmlFor="sync-exchange">exchange</label>
+                <select
+                  id="sync-exchange"
+                  value={exchange}
+                  onChange={(event) => setExchange(event.target.value)}
+                >
+                  <option value="">自动</option>
+                  <option value="SSE">SSE</option>
+                  <option value="SZSE">SZSE</option>
+                  <option value="BSE">BSE</option>
+                  <option value="HKEX">HKEX</option>
+                  <option value="NASDAQ">NASDAQ</option>
+                  <option value="NYSE">NYSE</option>
+                  <option value="OANDA">OANDA</option>
+                  <option value="TVC">TVC</option>
+                  <option value="BINANCE">BINANCE</option>
+                  <option value="CME_MINI">CME_MINI</option>
+                </select>
+              </div>
+            ) : null}
             <div className="field">
               <label htmlFor="sync-timeframe">timeframe</label>
               <select
@@ -192,18 +233,20 @@ export function DataCenterPage() {
                 onChange={(event) => setLookback(event.target.value)}
               />
             </div>
-            <div className="field">
-              <label htmlFor="sync-adjust">复权</label>
-              <select
-                id="sync-adjust"
-                value={adjust}
-                onChange={(event) => setAdjust(event.target.value as DatasetAdjust)}
-              >
-                <option value="qfq">前复权</option>
-                <option value="hfq">后复权</option>
-                <option value="none">不复权</option>
-              </select>
-            </div>
+            {source === 'yfinance' || source === 'akshare' ? (
+              <div className="field">
+                <label htmlFor="sync-adjust">复权</label>
+                <select
+                  id="sync-adjust"
+                  value={adjust}
+                  onChange={(event) => setAdjust(event.target.value as DatasetAdjust)}
+                >
+                  <option value="qfq">前复权</option>
+                  <option value="hfq">后复权</option>
+                  <option value="none">不复权</option>
+                </select>
+              </div>
+            ) : null}
           </div>
           <div className="row" style={{ marginTop: 14 }}>
             <button className="button button-primary" type="submit" disabled={syncMutation.isPending}>
@@ -287,6 +330,7 @@ export function DataCenterPage() {
                   <td>{dataset.timeframe}</td>
                   <td>
                     <div>{sourceLabel(dataset.source)}</div>
+                    {dataset.exchange ? <div className="muted">{dataset.exchange}</div> : null}
                     {dataset.source_provider ? <div className="muted">{dataset.source_provider}</div> : null}
                   </td>
                   <td>{dataset.bar_count}</td>

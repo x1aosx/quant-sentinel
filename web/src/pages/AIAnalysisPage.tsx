@@ -84,7 +84,10 @@ export function AIAnalysisPage() {
   const [datasetId, setDatasetId] = useState('');
   const [importSymbol, setImportSymbol] = useState('GC=F');
   const [importTimeframe, setImportTimeframe] = useState('1d');
-  const [importSource, setImportSource] = useState<'yfinance' | 'akshare'>('yfinance');
+  const [importSource, setImportSource] = useState<
+    'yfinance' | 'akshare' | 'tradingview' | 'mt5'
+  >('yfinance');
+  const [importExchange, setImportExchange] = useState('');
   const [record, setRecord] = useState<AIAnalysisRecord | null>(null);
   const [streamLog, setStreamLog] = useState('');
   const [running, setRunning] = useState(false);
@@ -122,6 +125,7 @@ export function AIAnalysisPage() {
         symbol: importSymbol,
         timeframe: importTimeframe,
         lookback: 500,
+        exchange: importSource === 'tradingview' ? importExchange : undefined,
       }),
     onSuccess: (created) => {
       setDatasetId(created.id);
@@ -343,10 +347,16 @@ export function AIAnalysisPage() {
                 <select
                   id="ai-source"
                   value={importSource}
-                  onChange={(event) => setImportSource(event.target.value as 'yfinance' | 'akshare')}
+                  onChange={(event) =>
+                    setImportSource(
+                      event.target.value as 'yfinance' | 'akshare' | 'tradingview' | 'mt5',
+                    )
+                  }
                 >
                   <option value="yfinance">YFinance</option>
                   <option value="akshare">AkShare / A股</option>
+                  <option value="tradingview">TradingView</option>
+                  <option value="mt5">MT5</option>
                 </select>
               </div>
               <div className="field">
@@ -358,6 +368,28 @@ export function AIAnalysisPage() {
                   placeholder="GC=F、EURUSD=X 或 600519"
                 />
               </div>
+              {importSource === 'tradingview' ? (
+                <div className="field">
+                  <label htmlFor="ai-exchange">交易所</label>
+                  <select
+                    id="ai-exchange"
+                    value={importExchange}
+                    onChange={(event) => setImportExchange(event.target.value)}
+                  >
+                    <option value="">自动</option>
+                    <option value="SSE">SSE</option>
+                    <option value="SZSE">SZSE</option>
+                    <option value="BSE">BSE</option>
+                    <option value="HKEX">HKEX</option>
+                    <option value="NASDAQ">NASDAQ</option>
+                    <option value="NYSE">NYSE</option>
+                    <option value="OANDA">OANDA</option>
+                    <option value="TVC">TVC</option>
+                    <option value="BINANCE">BINANCE</option>
+                    <option value="CME_MINI">CME_MINI</option>
+                  </select>
+                </div>
+              ) : null}
               <div className="field">
                 <label htmlFor="ai-timeframe">周期</label>
                 <select
@@ -475,7 +507,19 @@ export function AIAnalysisPage() {
                           >
                             <option value="yfinance">YFinance</option>
                             <option value="akshare">AkShare</option>
+                            <option value="tradingview">TradingView</option>
+                            <option value="mt5">MT5</option>
                           </select>
+                          {target.source === 'tradingview' ? (
+                            <input
+                              value={target.exchange ?? ''}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) =>
+                                updateTarget(index, { exchange: event.target.value })
+                              }
+                              placeholder="交易所，如 BSE"
+                            />
+                          ) : null}
                         </td>
                         <td>
                           <input

@@ -17,8 +17,9 @@ export interface DatasetSummary {
   first_session: string;
   last_session: string;
   created_at: string;
-  source?: 'yfinance' | 'akshare' | 'local';
+  source?: 'yfinance' | 'akshare' | 'tradingview' | 'mt5' | 'local';
   source_provider?: string;
+  exchange?: string;
   synced_at?: string;
   last_synced_at?: string;
 }
@@ -32,8 +33,9 @@ export interface SyncDatasetResponse {
   first_session: string;
   last_session: string;
   created_at: string;
-  source: 'yfinance' | 'akshare';
+  source: 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
   source_provider: string;
+  exchange?: string;
   inserted_count: number;
   updated_count: number;
   total_count: number;
@@ -389,6 +391,7 @@ export interface MonitorTarget {
   symbol: string;
   timeframe: string;
   source: string;
+  exchange?: string;
   dataset_id?: string;
   enabled: boolean;
   analysis?: Partial<AnalysisSettingsPayload>;

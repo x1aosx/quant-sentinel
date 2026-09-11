@@ -22,7 +22,8 @@ def _target_key(target: Mapping[str, Any]) -> str:
     return (
         f"{str(target.get('source') or '').strip().lower()}:"
         f"{str(target.get('symbol') or '').strip().upper()}:"
-        f"{str(target.get('timeframe') or '').strip().lower()}"
+        f"{str(target.get('timeframe') or '').strip().lower()}:"
+        f"{str(target.get('exchange') or '').strip().upper()}"
     )
 
 
@@ -52,6 +53,7 @@ class BatchAnalyzer:
                 "timeframe": timeframe,
                 "lookback": int(target.get("lookback") or 500),
                 "adjust": str(target.get("adjust") or "qfq"),
+                "exchange": str(target.get("exchange") or ""),
             }
         )
         return self.db.get_dataset(str(sync_result["id"])), sync_result

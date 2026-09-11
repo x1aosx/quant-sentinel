@@ -406,7 +406,18 @@ export function SystemConfigPage() {
                       >
                         <option value="yfinance">YFinance</option>
                         <option value="akshare">AkShare</option>
+                        <option value="tradingview">TradingView</option>
+                        <option value="mt5">MT5</option>
                       </select>
+                      {target.source === 'tradingview' ? (
+                        <input
+                          value={target.exchange ?? ''}
+                          onChange={(event) =>
+                            updateTarget(index, { exchange: event.target.value })
+                          }
+                          placeholder="交易所，如 BSE"
+                        />
+                      ) : null}
                     </td>
                     <td>
                       <input

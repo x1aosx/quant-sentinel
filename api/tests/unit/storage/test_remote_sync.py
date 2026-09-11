@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import sys
+import types
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+import pandas as pd
+
+from xquant.marketdata import remote as remote_module
 from xquant.marketdata.remote import RemoteImportRequest, fetch_remote_bars
 from xquant.registry import database as database_module
 from xquant.registry.database import Database
@@ -409,3 +414,234 @@ def test_yahoo_seconds_timestamp_is_not_divided_by_one_thousand(monkeypatch) -> 
     )
 
     assert result["bars"][0]["session_id"] == "2026-01-01T00:00:00+00:00"
+
+
+def test_remote_request_accepts_tradingview_and_mt5_sources() -> None:
+    tradingview = remote_module.validate_remote_request(
+        {
+            "source": "TradingView",
+            "symbol": "800865",
+            "timeframe": "1D",
+            "lookback": 120,
+            "exchange": "bse",
+        }
+    )
+    mt5 = remote_module.validate_remote_request(
+        {
+            "source": "MT5",
+            "symbol": "XAUUSDm",
+            "timeframe": "1h",
+            "lookback": 120,
+        }
+    )
+
+    assert tradingview.source == "tradingview"
+    assert tradingview.timeframe == "1d"
+    assert tradingview.exchange == "BSE"
+    assert mt5.source == "mt5"
+
+
+def test_yahoo_numeric_code_uses_exchange_suffix(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "chart": {
+                    "result": [
+                        {
+                            "timestamp": [1_767_225_600_000, 1_767_312_000_000],
+                            "indicators": {
+                                "quote": [
+                                    {
+                                        "open": [100, 101],
+                                        "high": [102, 103],
+                                        "low": [99, 100],
+                                        "close": [101, 102],
+                                        "volume": [1_000, 1_100],
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        requested_urls.append(url)
+        return FakeResponse()
+
+    monkeypatch.setattr(remote_module.httpx, "get", fake_get)
+    result = fetch_remote_bars(
+        RemoteImportRequest(
+            source="yfinance",
+            symbol="600519",
+            timeframe="1d",
+            lookback=10,
+        )
+    )
+
+    assert requested_urls == [
+        "https://query1.finance.yahoo.com/v8/finance/chart/600519.SS"
+    ]
+    assert result["source"] == "yfinance"
+    assert result["symbol"] == "600519"
+
+
+def test_tradingview_source_returns_closed_bars(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "open": [100.0, 101.0, 102.0],
+            "high": [102.0, 103.0, 104.0],
+            "low": [99.0, 100.0, 101.0],
+            "close": [101.0, 102.0, 103.0],
+            "volume": [1_000.0, 1_100.0, 1_200.0],
+        },
+        index=pd.DatetimeIndex(
+            [
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-02T00:00:00+00:00",
+                "2026-01-03T00:00:00+00:00",
+            ],
+            name="datetime",
+        ),
+    )
+    calls: list[dict[str, Any]] = []
+
+    class FakeInterval:
+        in_daily = "1d"
+
+    class FakeTvDatafeed:
+        def __init__(self) -> None:
+            self.ws = None
+
+        def get_hist(self, **kwargs: Any) -> pd.DataFrame:
+            calls.append(kwargs)
+            return frame
+
+    fake_module = types.ModuleType("tvDatafeed")
+    fake_module.Interval = FakeInterval
+    fake_module.TvDatafeed = FakeTvDatafeed
+    monkeypatch.setitem(sys.modules, "tvDatafeed", fake_module)
+
+    result = fetch_remote_bars(
+        RemoteImportRequest(
+            source="tradingview",
+            symbol="800865",
+            timeframe="1d",
+            lookback=10,
+            exchange="BSE",
+        )
+    )
+
+    assert calls[0]["symbol"] == "800865"
+    assert calls[0]["exchange"] == "BSE"
+    assert result["source"] == "tradingview"
+    assert result["source_provider"] == "tradingview_tvdatafeed"
+    assert result["exchange"] == "BSE"
+    assert len(result["bars"]) == 2
+    assert result["bars"][-1]["session_id"] == "2026-01-02T00:00:00+00:00"
+
+
+def test_mt5_source_returns_closed_bars(monkeypatch) -> None:
+    shutdown_calls: list[bool] = []
+
+    class FakeMt5:
+        TIMEFRAME_D1 = 1440
+
+        @staticmethod
+        def initialize() -> bool:
+            return True
+
+        @staticmethod
+        def symbol_info(symbol: str) -> dict[str, str]:
+            return {"name": symbol}
+
+        @staticmethod
+        def symbol_select(symbol: str, selected: bool) -> bool:
+            return selected
+
+        @staticmethod
+        def copy_rates_from_pos(symbol: str, timeframe: int, start: int, count: int):
+            return [
+                {
+                    "time": 1_767_225_600,
+                    "open": 100,
+                    "high": 102,
+                    "low": 99,
+                    "close": 101,
+                    "tick_volume": 1_000,
+                },
+                {
+                    "time": 1_767_312_000,
+                    "open": 101,
+                    "high": 103,
+                    "low": 100,
+                    "close": 102,
+                    "tick_volume": 1_100,
+                },
+                {
+                    "time": 1_767_398_400,
+                    "open": 102,
+                    "high": 104,
+                    "low": 101,
+                    "close": 103,
+                    "tick_volume": 1_200,
+                },
+            ]
+
+        @staticmethod
+        def last_error() -> tuple[int, str]:
+            return (0, "ok")
+
+        @staticmethod
+        def shutdown() -> None:
+            shutdown_calls.append(True)
+
+    monkeypatch.setitem(sys.modules, "MetaTrader5", FakeMt5)
+    result = fetch_remote_bars(
+        RemoteImportRequest(
+            source="mt5",
+            symbol="XAUUSDm",
+            timeframe="1d",
+            lookback=10,
+        )
+    )
+
+    assert shutdown_calls == [True]
+    assert result["source"] == "mt5"
+    assert result["source_provider"] == "mt5_terminal"
+    assert len(result["bars"]) == 2
+    assert result["bars"][-1]["session_id"] == "2026-01-02T00:00:00+00:00"
+
+
+def test_numeric_yfinance_symbol_falls_back_to_tradingview(monkeypatch) -> None:
+    def fake_yahoo(_request: RemoteImportRequest) -> list[dict[str, Any]]:
+        raise remote_module.RemoteSymbolNotFound("not found")
+
+    def fake_tradingview(
+        _request: RemoteImportRequest,
+    ) -> tuple[list[dict[str, Any]], str]:
+        return ([_bar(1), _bar(2)], "BSE")
+
+    monkeypatch.setattr(remote_module, "_fetch_yahoo", fake_yahoo)
+    monkeypatch.setattr(remote_module, "_fetch_tradingview", fake_tradingview)
+
+    result = fetch_remote_bars(
+        RemoteImportRequest(
+            source="yfinance",
+            symbol="800865",
+            timeframe="1d",
+            lookback=10,
+        )
+    )
+
+    assert result["source"] == "tradingview"
+    assert result["source_provider"] == "tradingview_tvdatafeed"
+    assert result["fallback_from"] == "yfinance"
+    assert result["exchange"] == "BSE"

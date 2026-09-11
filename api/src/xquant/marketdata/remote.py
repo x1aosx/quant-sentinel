@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import math
+import re
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -9,6 +12,8 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _YAHOO_INTERVALS = {
     "1m": "1m",
@@ -30,6 +35,30 @@ _EASTMONEY_KLT = {
     "1w": "102",
 }
 
+_TRADINGVIEW_INTERVALS = {
+    "1m": "in_1_minute",
+    "5m": "in_5_minute",
+    "15m": "in_15_minute",
+    "30m": "in_30_minute",
+    "1h": "in_1_hour",
+    "1d": "in_daily",
+    "1w": "in_weekly",
+}
+
+_MT5_TIMEFRAMES = {
+    "1m": "TIMEFRAME_M1",
+    "5m": "TIMEFRAME_M5",
+    "15m": "TIMEFRAME_M15",
+    "30m": "TIMEFRAME_M30",
+    "1h": "TIMEFRAME_H1",
+    "1d": "TIMEFRAME_D1",
+    "1w": "TIMEFRAME_W1",
+}
+
+_SUPPORTED_SOURCES = {"yfinance", "akshare", "tradingview", "mt5"}
+_SUPPORTED_TIMEFRAMES = frozenset(_YAHOO_INTERVALS)
+_MT5_LOCK = threading.Lock()
+
 _REMOTE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Accept": "application/json,text/plain,*/*",
@@ -45,8 +74,13 @@ class RemoteImportRequest:
     timeframe: str = "1d"
     lookback: int = 250
     adjust: str = "qfq"
+    exchange: str | None = None
     session_start: str | None = None
     session_end: str | None = None
+
+
+class RemoteSymbolNotFound(ValueError):
+    """Raised when a remote provider does not recognize the requested symbol."""
 
 
 def validate_remote_request(raw: Mapping[str, Any] | RemoteImportRequest) -> RemoteImportRequest:
@@ -59,20 +93,34 @@ def validate_remote_request(raw: Mapping[str, Any] | RemoteImportRequest) -> Rem
             timeframe=str(raw.get("timeframe") or "1d"),
             lookback=int(raw.get("lookback") or 250),
             adjust=str(raw.get("adjust") or "qfq"),
+            exchange=str(raw.get("exchange") or "") or None,
             session_start=str(raw.get("session_start") or "") or None,
             session_end=str(raw.get("session_end") or "") or None,
         )
-    if request.source not in {"yfinance", "akshare"}:
-        raise ValueError("数据源仅支持 yfinance 或 akshare")
-    if not request.symbol.strip():
+    source = str(request.source or "").strip().lower()
+    if source not in _SUPPORTED_SOURCES:
+        raise ValueError("数据源仅支持 yfinance、akshare、tradingview 或 mt5")
+    symbol = str(request.symbol or "").strip()
+    if not symbol:
         raise ValueError("symbol 不能为空")
-    if request.timeframe not in _YAHOO_INTERVALS:
+    timeframe = str(request.timeframe or "1d").strip().lower()
+    if timeframe not in _SUPPORTED_TIMEFRAMES:
         raise ValueError("周期仅支持 1m/5m/15m/30m/1h/1d/1w")
     if not 10 <= request.lookback <= 5000:
         raise ValueError("lookback 必须在 10 到 5000 之间")
-    if request.adjust not in {"qfq", "hfq", "none"}:
+    adjust = str(request.adjust or "qfq").strip().lower()
+    if adjust not in {"qfq", "hfq", "none"}:
         raise ValueError("adjust 仅支持 qfq/hfq/none")
-    return request
+    return RemoteImportRequest(
+        source=source,
+        symbol=symbol,
+        timeframe=timeframe,
+        lookback=request.lookback,
+        adjust=adjust,
+        exchange=(request.exchange or "").strip().upper() or None,
+        session_start=request.session_start,
+        session_end=request.session_end,
+    )
 
 
 def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -97,6 +145,8 @@ def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict
             continue
         if high < max(open_price, close) or low > min(open_price, close) or high < low:
             continue
+        if not math.isfinite(volume):
+            volume = 0.0
         if closed is False:
             continue
         seen.add(session_id)
@@ -182,8 +232,31 @@ def _parse_session_date(value: str, field_name: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+def _yahoo_symbol_candidates(symbol: str) -> list[str]:
+    text = symbol.strip().upper()
+    candidates: list[str] = []
+
+    if re.fullmatch(r"(SH|SZ|BJ)\d{6}", text):
+        suffix = {"SH": ".SS", "SZ": ".SZ", "BJ": ".BJ"}[text[:2]]
+        candidates.append(f"{text[2:]}{suffix}")
+    elif text.isdigit() and len(text) == 6:
+        if text.startswith(("4", "8")):
+            candidates.append(f"{text}.BJ")
+        elif text.startswith(("0", "1", "2", "3")):
+            candidates.append(f"{text}.SZ")
+        else:
+            candidates.append(f"{text}.SS")
+
+    if text not in candidates:
+        candidates.append(text)
+    return candidates
+
+
+def _is_numeric_market_symbol(symbol: str) -> bool:
+    return bool(re.fullmatch(r"(?:SH|SZ|BJ)?\d{5,6}", symbol.strip().upper()))
+
+
 def _fetch_yahoo(request: RemoteImportRequest) -> list[dict[str, Any]]:
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(request.symbol, safe='')}"
     params = {
         "interval": _YAHOO_INTERVALS[request.timeframe],
         "includePrePost": "false",
@@ -200,35 +273,223 @@ def _fetch_yahoo(request: RemoteImportRequest) -> list[dict[str, Any]]:
         params["period2"] = str(int(end.timestamp()))
     else:
         params["range"] = _yahoo_range(request)
-    response = _http_get(
-        url,
-        params=params,
-        referer="https://finance.yahoo.com/",
-    )
-    response.raise_for_status()
-    payload = response.json()
-    result = payload.get("chart", {}).get("result") or []
-    if not result:
-        raise ValueError("YFinance 未返回行情数据")
-    bars = result[0]
-    timestamps = bars.get("timestamp") or []
-    quote_data = bars.get("indicators", {}).get("quote", [{}])[0]
-    rows: list[dict[str, Any]] = []
-    for index, timestamp in enumerate(timestamps):
-        try:
-            row = {
-                "session_id": _iso_timestamp(timestamp),
-                "open": quote_data["open"][index],
-                "high": quote_data["high"][index],
-                "low": quote_data["low"][index],
-                "close": quote_data["close"][index],
-                "volume": quote_data["volume"][index],
-                "closed": index < len(timestamps) - 1,
-            }
-        except (KeyError, IndexError, TypeError):
+
+    candidates = _yahoo_symbol_candidates(request.symbol)
+    for candidate in candidates:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(candidate, safe='')}"
+        response = _http_get(
+            url,
+            params=params,
+            referer="https://finance.yahoo.com/",
+        )
+        if response.status_code in {400, 404}:
             continue
-        rows.append(row)
-    return normalize_remote_payload(rows)[-request.lookback :]
+        response.raise_for_status()
+        payload = response.json()
+        result = payload.get("chart", {}).get("result") or []
+        if not result:
+            continue
+        bars = result[0]
+        timestamps = bars.get("timestamp") or []
+        quote_data = bars.get("indicators", {}).get("quote", [{}])[0]
+        rows: list[dict[str, Any]] = []
+        for index, timestamp in enumerate(timestamps):
+            try:
+                row = {
+                    "session_id": _iso_timestamp(timestamp),
+                    "open": quote_data["open"][index],
+                    "high": quote_data["high"][index],
+                    "low": quote_data["low"][index],
+                    "close": quote_data["close"][index],
+                    "volume": quote_data["volume"][index],
+                    "closed": index < len(timestamps) - 1,
+                }
+            except (KeyError, IndexError, TypeError):
+                continue
+            rows.append(row)
+        normalized = normalize_remote_payload(rows)[-request.lookback :]
+        if normalized:
+            return normalized
+
+    tried = "、".join(candidates)
+    raise RemoteSymbolNotFound(
+        f"YFinance 未找到 symbol「{request.symbol}」（已尝试 {tried}）。"
+        "Yahoo Finance 不保证收录新三板、北交所或券商内部代码；"
+        "请改用 tradingview、mt5 或 akshare，并确认行情代码。"
+    )
+
+
+def _datetime_session_id(value: Any) -> str:
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        parsed = value if value.tzinfo else value.replace(tzinfo=UTC)
+        return parsed.isoformat(timespec="seconds")
+    return _iso_timestamp(value)
+
+
+def _infer_tradingview_exchange(symbol: str) -> str:
+    text = symbol.strip().upper()
+    if not (text.isdigit() and len(text) == 6):
+        return ""
+    if text.startswith(("4", "8")):
+        return "BSE"
+    if text.startswith(("6", "5", "9")):
+        return "SSE"
+    return "SZSE"
+
+
+def _tradingview_exchange_candidates(request: RemoteImportRequest) -> list[str]:
+    exchange = (request.exchange or "").strip().upper()
+    if exchange and exchange != "AUTO":
+        return [exchange]
+    inferred = _infer_tradingview_exchange(request.symbol)
+    return [inferred] if inferred else [""]
+
+
+def _close_tradingview_socket(client: Any) -> None:
+    socket = getattr(client, "ws", None)
+    if socket is None:
+        return
+    try:
+        socket.close()
+    except Exception as exc:  # noqa: BLE001 - third-party socket close is best effort
+        logger.debug("TradingView socket close failed: %s", exc)
+    finally:
+        try:
+            client.ws = None
+        except Exception as exc:  # noqa: BLE001 - third-party client cleanup is best effort
+            logger.debug("TradingView socket reset failed: %s", exc)
+
+
+def _fetch_tradingview(request: RemoteImportRequest) -> tuple[list[dict[str, Any]], str]:
+    try:
+        from tvDatafeed import Interval, TvDatafeed
+    except ImportError as exc:
+        raise ValueError(
+            "TradingView 数据源依赖未安装，请执行 "
+            "pip install git+https://github.com/rongardF/tvdatafeed.git"
+        ) from exc
+
+    interval_name = _TRADINGVIEW_INTERVALS[request.timeframe]
+    try:
+        interval = getattr(Interval, interval_name)
+    except AttributeError as exc:
+        raise ValueError(f"TradingView 不支持周期：{request.timeframe}") from exc
+
+    last_error: Exception | None = None
+    tried: list[str] = []
+    for exchange in _tradingview_exchange_candidates(request):
+        label = f"{exchange or 'AUTO'}:{request.symbol}"
+        tried.append(label)
+        client: Any | None = None
+        try:
+            client = TvDatafeed()
+            try:
+                client._TvDatafeed__ws_timeout = 10.0
+            except Exception as exc:  # noqa: BLE001 - private optional setting
+                logger.debug("TradingView timeout override failed: %s", exc)
+            frame = client.get_hist(
+                symbol=request.symbol,
+                exchange=exchange,
+                interval=interval,
+                n_bars=min(request.lookback + 1, 5001),
+            )
+        except Exception as exc:  # noqa: BLE001 - tvDatafeed raises library-specific errors
+            last_error = exc
+            continue
+        finally:
+            if client is not None:
+                _close_tradingview_socket(client)
+
+        if frame is None or getattr(frame, "empty", True):
+            continue
+
+        frame = frame.reset_index()
+        columns = {str(column).lower(): column for column in frame.columns}
+        timestamp_column = columns.get("datetime") or columns.get("date") or frame.columns[0]
+        rows: list[dict[str, Any]] = []
+        for index, row in frame.iterrows():
+            try:
+                rows.append(
+                    {
+                        "session_id": _datetime_session_id(row[timestamp_column]),
+                        "open": row[columns["open"]],
+                        "high": row[columns["high"]],
+                        "low": row[columns["low"]],
+                        "close": row[columns["close"]],
+                        "volume": row[columns.get("volume", frame.columns[0])]
+                        if "volume" in columns
+                        else 0.0,
+                        "closed": index < len(frame) - 1,
+                    }
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        bars = normalize_remote_payload(rows)[-request.lookback :]
+        if bars:
+            return bars, exchange
+
+    detail = f"；最后错误：{last_error}" if last_error else ""
+    raise ValueError(
+        f"TradingView 未返回有效行情数据（{request.symbol}，已尝试 {', '.join(tried)}）{detail}"
+    )
+
+
+def _fetch_mt5(request: RemoteImportRequest) -> list[dict[str, Any]]:
+    try:
+        import MetaTrader5 as mt5
+    except ImportError as exc:
+        raise ValueError(
+            "MT5 数据源仅在 Windows 可用，请安装 MetaTrader5 并保持终端已登录"
+        ) from exc
+
+    timeframe_name = _MT5_TIMEFRAMES[request.timeframe]
+    try:
+        timeframe = getattr(mt5, timeframe_name)
+    except AttributeError as exc:
+        raise ValueError(f"MT5 不支持周期：{request.timeframe}") from exc
+
+    with _MT5_LOCK:
+        if not mt5.initialize():
+            raise ValueError(f"MT5 初始化失败：{mt5.last_error()}，请确认终端已启动并登录")
+        try:
+            symbol_info = mt5.symbol_info(request.symbol)
+            if symbol_info is None:
+                raise ValueError(f"MT5 品种不存在：{request.symbol}")
+            if not mt5.symbol_select(request.symbol, True):
+                raise ValueError(f"MT5 无法订阅品种：{request.symbol}")
+            rates = mt5.copy_rates_from_pos(
+                request.symbol,
+                timeframe,
+                0,
+                min(request.lookback + 1, 5001),
+            )
+            if rates is None or len(rates) == 0:
+                raise ValueError(
+                    f"MT5 未返回行情数据：{request.symbol} {request.timeframe}，"
+                    f"错误：{mt5.last_error()}"
+                )
+
+            rows: list[dict[str, Any]] = []
+            for index, rate in enumerate(rates):
+                try:
+                    rows.append(
+                        {
+                            "session_id": _iso_timestamp(rate["time"]),
+                            "open": rate["open"],
+                            "high": rate["high"],
+                            "low": rate["low"],
+                            "close": rate["close"],
+                            "volume": rate["tick_volume"],
+                            "closed": index < len(rates) - 1,
+                        }
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+            return normalize_remote_payload(rows)[-request.lookback :]
+        finally:
+            mt5.shutdown()
 
 
 def _eastmoney_code(symbol: str) -> tuple[str, str]:
@@ -237,10 +498,14 @@ def _eastmoney_code(symbol: str) -> tuple[str, str]:
         return "1", text[2:]
     if text.startswith("SZ") and text[2:].isdigit():
         return "0", text[2:]
+    if text.startswith("BJ") and text[2:].isdigit():
+        return "2", text[2:]
     if text.isdigit() and len(text) == 6:
+        if text.startswith(("4", "8")):
+            return "2", text
         market = "1" if text.startswith(("6", "9", "5")) else "0"
         return market, text
-    raise ValueError("akshare/A股 品种请使用 600519、SH600519 或 SZ000001")
+    raise ValueError("akshare/A股 品种请使用 600519、SH600519、SZ000001 或 BJ800865")
 
 
 def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
@@ -292,19 +557,47 @@ def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
 
 def fetch_remote_bars(request: RemoteImportRequest | Mapping[str, Any]) -> dict[str, Any]:
     request = validate_remote_request(request)
+    exchange = request.exchange or ""
+    fallback_from: str | None = None
     if request.source == "yfinance":
-        bars = _fetch_yahoo(request)
-        provider = "yfinance_public_chart"
-    else:
+        try:
+            bars = _fetch_yahoo(request)
+        except RemoteSymbolNotFound as exc:
+            if not _is_numeric_market_symbol(request.symbol):
+                raise
+            try:
+                bars, exchange = _fetch_tradingview(request)
+            except (ImportError, ValueError) as fallback_exc:
+                raise ValueError(f"{exc}；TradingView 回退失败：{fallback_exc}") from fallback_exc
+            provider = "tradingview_tvdatafeed"
+            source = "tradingview"
+            fallback_from = "yfinance"
+        else:
+            provider = "yfinance_public_chart"
+            source = "yfinance"
+    elif request.source == "akshare":
         bars = _fetch_akshare(request)
         provider = "eastmoney_public_kline"
+        source = "akshare"
+    elif request.source == "tradingview":
+        bars, exchange = _fetch_tradingview(request)
+        provider = "tradingview_tvdatafeed"
+        source = "tradingview"
+    else:
+        bars = _fetch_mt5(request)
+        provider = "mt5_terminal"
+        source = "mt5"
     if not bars:
         raise ValueError(f"{provider} 未返回有效行情数据")
-    return {
+    result = {
         "symbol": request.symbol.upper(),
         "timeframe": request.timeframe,
-        "source": request.source,
+        "source": source,
         "source_provider": provider,
+        "exchange": exchange or None,
         "simulation_only": True,
         "bars": bars,
     }
+    if fallback_from:
+        result["fallback_from"] = fallback_from
+    return result

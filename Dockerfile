@@ -40,6 +40,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         libpq-dev \
+        git \
         gcc \
         logrotate \
         tzdata; \

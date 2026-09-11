@@ -108,6 +108,7 @@ class Database:
                 last_session TEXT NOT NULL,
                 source TEXT,
                 source_provider TEXT,
+                exchange TEXT,
                 last_synced_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL
             );
@@ -115,6 +116,8 @@ class Database:
                 ADD COLUMN IF NOT EXISTS source TEXT;
             ALTER TABLE research.dataset
                 ADD COLUMN IF NOT EXISTS source_provider TEXT;
+            ALTER TABLE research.dataset
+                ADD COLUMN IF NOT EXISTS exchange TEXT;
             ALTER TABLE research.dataset
                 ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
             CREATE INDEX IF NOT EXISTS idx_dataset_created_at
@@ -207,15 +210,16 @@ class Database:
         created_at = payload.get("created_at") or datetime.now(UTC)
         source = str(payload.get("source") or "local")
         source_provider = str(payload.get("source_provider") or "local_file")
+        exchange = str(payload.get("exchange") or "")
         last_synced_at = payload.get("last_synced_at") or created_at
         self.postgres.execute(
             """
             INSERT INTO research.dataset
                 (id, symbol, timeframe, bar_count, first_session, last_session,
-                 source, source_provider, last_synced_at, created_at)
+                 source, source_provider, exchange, last_synced_at, created_at)
             VALUES
                 (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
-                 :source, :source_provider, CAST(:last_synced_at AS timestamptz),
+                 :source, :source_provider, :exchange, CAST(:last_synced_at AS timestamptz),
                  CAST(:created_at AS timestamptz))
             ON CONFLICT (id) DO UPDATE SET
                 symbol = excluded.symbol,
@@ -225,6 +229,7 @@ class Database:
                 last_session = excluded.last_session,
                 source = excluded.source,
                 source_provider = excluded.source_provider,
+                exchange = excluded.exchange,
                 last_synced_at = excluded.last_synced_at,
                 created_at = excluded.created_at
             """,
@@ -237,6 +242,7 @@ class Database:
                 "last_session": bars[-1]["session_id"] if bars else "",
                 "source": source,
                 "source_provider": source_provider,
+                "exchange": exchange,
                 "last_synced_at": last_synced_at,
                 "created_at": created_at,
             },
@@ -248,7 +254,7 @@ class Database:
     def sync_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_payload = dict(payload)
         requested_symbol = str(request_payload.get("symbol") or "").strip().upper()
-        requested_timeframe = str(request_payload.get("timeframe") or "1d").strip() or "1d"
+        requested_timeframe = str(request_payload.get("timeframe") or "1d").strip().lower() or "1d"
         existing = (
             self._find_dataset(requested_symbol, requested_timeframe) if requested_symbol else None
         )
@@ -287,6 +293,7 @@ class Database:
         merged_bars = [merged[session_id] for session_id in sorted(merged)]
         source = str(remote.get("source") or request_payload.get("source") or "unknown")
         source_provider = str(remote.get("source_provider") or source)
+        exchange = str(remote.get("exchange") or request_payload.get("exchange") or "")
 
         if new_bars:
             self._write_dataset_bars(
@@ -303,6 +310,7 @@ class Database:
             bars=merged_bars,
             source=source,
             source_provider=source_provider,
+            exchange=exchange,
             last_synced_at=now,
             created_at=created_at,
         )
@@ -319,6 +327,7 @@ class Database:
             "created_at": summary["created_at"],
             "source": source,
             "source_provider": source_provider,
+            "exchange": exchange or None,
             "inserted_count": len(new_bars),
             "updated_count": updated_count,
             "total_count": len(merged_bars),
@@ -334,6 +343,7 @@ class Database:
                 SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
                        COALESCE(source, 'local') AS source,
                        COALESCE(source_provider, 'local_file') AS source_provider,
+                       exchange,
                        COALESCE(last_synced_at, created_at) AS last_synced_at,
                        created_at
                 FROM research.dataset
@@ -349,6 +359,7 @@ class Database:
             SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
                    COALESCE(source, 'local') AS source,
                    COALESCE(source_provider, 'local_file') AS source_provider,
+                   exchange,
                    COALESCE(last_synced_at, created_at) AS last_synced_at,
                    created_at
             FROM research.dataset
@@ -465,6 +476,7 @@ class Database:
             SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
                    COALESCE(source, 'local') AS source,
                    COALESCE(source_provider, 'local_file') AS source_provider,
+                   exchange,
                    COALESCE(last_synced_at, created_at) AS last_synced_at,
                    created_at
             FROM research.dataset
@@ -484,6 +496,7 @@ class Database:
         bars: list[dict[str, Any]],
         source: str,
         source_provider: str,
+        exchange: str,
         last_synced_at: datetime,
         created_at: datetime,
     ) -> None:
@@ -491,10 +504,10 @@ class Database:
             """
             INSERT INTO research.dataset
                 (id, symbol, timeframe, bar_count, first_session, last_session,
-                 source, source_provider, last_synced_at, created_at)
+                 source, source_provider, exchange, last_synced_at, created_at)
             VALUES
                 (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
-                 :source, :source_provider, CAST(:last_synced_at AS timestamptz),
+                 :source, :source_provider, :exchange, CAST(:last_synced_at AS timestamptz),
                  CAST(:created_at AS timestamptz))
             ON CONFLICT (id) DO UPDATE SET
                 symbol = excluded.symbol,
@@ -504,6 +517,7 @@ class Database:
                 last_session = excluded.last_session,
                 source = excluded.source,
                 source_provider = excluded.source_provider,
+                exchange = excluded.exchange,
                 last_synced_at = excluded.last_synced_at
             """,
             {
@@ -515,6 +529,7 @@ class Database:
                 "last_session": bars[-1]["session_id"] if bars else "",
                 "source": source,
                 "source_provider": source_provider,
+                "exchange": exchange,
                 "last_synced_at": last_synced_at,
                 "created_at": created_at,
             },

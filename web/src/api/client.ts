@@ -60,22 +60,24 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   syncRemoteDataset: (payload: {
-    source: 'yfinance' | 'akshare';
+    source: 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
     symbol: string;
     timeframe: string;
     lookback: number;
     adjust: 'qfq' | 'hfq' | 'none';
+    exchange?: string;
   }) =>
     apiRequest<SyncDatasetResponse>('/datasets/remote/sync', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
   importRemoteDataset: async (payload: {
-    source: 'yfinance' | 'akshare';
+    source: 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
     symbol: string;
     timeframe: string;
     lookback?: number;
     adjust?: 'qfq' | 'hfq' | 'none';
+    exchange?: string;
   }) => {
     const response = await api.syncRemoteDataset({
       source: payload.source,
@@ -83,6 +85,7 @@ export const api = {
       timeframe: payload.timeframe,
       lookback: payload.lookback ?? 500,
       adjust: payload.adjust ?? 'qfq',
+      exchange: payload.exchange,
     });
     return response.dataset;
   },
