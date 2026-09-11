@@ -10,6 +10,12 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from xquant.marketdata.remote import fetch_remote_bars, resolve_instrument_title
 
 
+def _title_needs_resolution(title: Any, symbol: Any) -> bool:
+    normalized_title = str(title or "").strip()
+    normalized_symbol = str(symbol or "").strip()
+    return not normalized_title or normalized_title == normalized_symbol
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = path
@@ -292,16 +298,21 @@ class Database:
         datasets = [dict(row) for row in rows]
         changed = False
         for dataset in datasets:
-            if dataset.pop("stored_title", None):
+            symbol = str(dataset.get("symbol") or "").strip()
+            stored_title = str(dataset.pop("stored_title", None) or "").strip()
+            if not _title_needs_resolution(stored_title, symbol):
                 continue
             title = resolve_instrument_title(
-                str(dataset.get("symbol") or ""),
+                symbol,
                 exchange=str(dataset.get("exchange") or ""),
                 source=str(dataset.get("source") or ""),
             )
             if not title:
+                dataset["title"] = stored_title or str(dataset.get("title") or "") or symbol
                 continue
             dataset["title"] = title
+            if title == stored_title:
+                continue
             conn.execute(
                 "UPDATE datasets SET title = ? WHERE id = ?",
                 (title, dataset["id"]),
@@ -315,10 +326,26 @@ class Database:
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         conn = self._connect()
         row = conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
-        conn.close()
         if row is None:
+            conn.close()
             raise KeyError(f"dataset not found: {dataset_id}")
         record = dict(row)
+        symbol = str(record.get("symbol") or "").strip()
+        stored_title = str(record.get("title") or "").strip()
+        if _title_needs_resolution(stored_title, symbol):
+            title = resolve_instrument_title(
+                symbol,
+                exchange=str(record.get("exchange") or ""),
+                source=str(record.get("source") or ""),
+            )
+            if title and title != stored_title:
+                record["title"] = title
+                conn.execute(
+                    "UPDATE datasets SET title = ? WHERE id = ?",
+                    (title, dataset_id),
+                )
+                conn.commit()
+        conn.close()
         bars = json.loads(record.pop("bars_json"))
         summary = {
             "id": record["id"],

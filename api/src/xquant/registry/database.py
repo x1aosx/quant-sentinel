@@ -562,20 +562,23 @@ class Database:
 
     def _resolve_missing_dataset_titles(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
-            if row.get("stored_title"):
-                row.pop("stored_title", None)
-                continue
             symbol = str(row.get("symbol") or "").strip()
+            stored_title = str(row.pop("stored_title", "") or "").strip()
+            if stored_title and stored_title != symbol:
+                continue
             if not symbol:
+                row["title"] = stored_title
                 continue
             title = resolve_instrument_title(
                 symbol,
                 exchange=str(row.get("exchange") or ""),
                 source=str(row.get("source") or ""),
             )
-            row.pop("stored_title", None)
-            row["title"] = title or symbol
             if not title:
+                row["title"] = stored_title or symbol
+                continue
+            row["title"] = title
+            if title == stored_title:
                 continue
             try:
                 self.postgres.execute(

@@ -214,6 +214,28 @@ a {
   font-size: 15px;
 }
 
+.section-title-main,
+.section-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-title-main {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.section-title-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.section-title-actions select {
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -498,6 +520,16 @@ a {
 
 .table tbody tr:hover {
   background: #fafbfc;
+}
+
+.dataset-table td {
+  white-space: nowrap;
+}
+
+.dataset-id {
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .progress {
@@ -900,6 +932,20 @@ textarea {
   .page-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .section-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .section-title-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .section-title-actions > .muted {
+    flex-basis: 100%;
   }
 }
 
