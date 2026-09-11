@@ -52,6 +52,12 @@ function fmt100(value: number | null | undefined, digits = 2): string {
   return `${value.toFixed(digits)}%`;
 }
 
+function fmtDirectionScore(direction?: string, score?: number): string {
+  const label = direction ? DIRECTION_LABELS[direction] ?? direction : '--';
+  if (score === undefined || !Number.isFinite(score)) return label;
+  return `${label} ${score > 0 ? '+' : ''}${score}`;
+}
+
 const DIRECTION_LABELS: Record<string, string> = {
   bullish: '偏多',
   bearish: '偏空',
@@ -296,7 +302,11 @@ export function PriceActionPage() {
                 </div>
                 <div className="feature-item">
                   <div className="label">趋势细节</div>
-                  <div className="value">{context.trend_detail ?? '--'}</div>
+                  <div className="value stack" style={{ gap: 2 }}>
+                    <div>短线：{fmtDirectionScore(context.trend_detail?.recent, context.trend_detail?.recent_score)}</div>
+                    <div>交易：{fmtDirectionScore(context.trend_detail?.trading, context.trend_detail?.trading_score)}</div>
+                    <div>背景：{fmtDirectionScore(context.trend_detail?.background, context.trend_detail?.background_score)}</div>
+                  </div>
                 </div>
               </div>
             </div>

@@ -99,7 +99,14 @@ export interface PaAnalysisResult {
     range_high?: number | null;
     range_low?: number | null;
     overlap_mean_10?: number | null;
-    trend_detail?: string;
+    trend_detail?: {
+      recent?: string;
+      recent_score?: number;
+      trading?: string;
+      trading_score?: number;
+      background?: string;
+      background_score?: number;
+    };
     background_direction?: string;
     recent_spike?: string | null;
     scale_conflict?: boolean;
