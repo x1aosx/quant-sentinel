@@ -38,6 +38,10 @@ export const api = {
     mode: string;
   }>('/dashboard'),
   listDatasets: () => apiRequest<{ items: DatasetSummary[] }>('/datasets'),
+  deleteDataset: (datasetId: string) =>
+    apiRequest<{ deleted: boolean; id: string }>(`/datasets/${encodeURIComponent(datasetId)}`, {
+      method: 'DELETE',
+    }),
   analyzeSupportResistance: (payload: {
     dataset_id: string;
     lookback?: number;

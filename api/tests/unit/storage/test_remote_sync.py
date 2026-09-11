@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from xquant.marketdata import remote as remote_module
 from xquant.marketdata.remote import (
@@ -35,6 +36,11 @@ class FakePostgres:
     ) -> None:
         values = dict(params or {})
         self.statements.append((statement, values))
+        if "SET deleted_at = now()" in statement:
+            dataset_id = str(values["dataset_id"])
+            if dataset_id in self.rows:
+                self.rows[dataset_id]["deleted_at"] = "deleted"
+            return
         if "UPDATE research.dataset" in statement:
             dataset_id = str(values["dataset_id"])
             if dataset_id in self.rows:
@@ -47,10 +53,16 @@ class FakePostgres:
         row = {**existing, **values} if existing else values
         if existing and "created_at = excluded.created_at" not in statement:
             row["created_at"] = existing["created_at"]
+        if existing and "deleted_at = NULL" in statement:
+            row.pop("deleted_at", None)
         self.rows[dataset_id] = row
 
     def query(self, statement: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        return [self._summary(row) for row in self.rows.values()]
+        return [
+            self._summary(row)
+            for row in self.rows.values()
+            if not row.get("deleted_at")
+        ]
 
     def query_one(
         self,
@@ -60,6 +72,8 @@ class FakePostgres:
         values = params or {}
         if "WHERE id" in statement:
             row = self.rows.get(str(values["dataset_id"]))
+            if row and "deleted_at IS NULL" in statement and row.get("deleted_at"):
+                return None
             return self._summary(row) if row else None
         if "UPPER(symbol)" in statement:
             matches = [
@@ -116,6 +130,20 @@ class FakeInflux:
 
     def close(self) -> None:
         return None
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.deleted_keys: list[tuple[str, ...]] = []
+
+    def get_json(self, key: str) -> Any | None:
+        return None
+
+    def set_json(self, key: str, value: Any, ttl_seconds: int) -> None:
+        return None
+
+    def delete(self, *keys: str) -> None:
+        self.deleted_keys.append(tuple(keys))
 
 
 def _bar(day: int, close: float = 100.0) -> dict[str, Any]:
@@ -252,6 +280,62 @@ def test_dataset_writer_uses_stable_session_timestamp() -> None:
     second_time = influx.write_batches[1][0]["time"]
     assert second_time == first_time
     assert len(influx.points) == 3
+
+
+def test_database_delete_dataset_soft_deletes_metadata_and_cache() -> None:
+    postgres = FakePostgres()
+    influx = FakeInflux()
+    redis = FakeRedis()
+    database = Database(
+        settings=StorageSettings(storage_backend="postgres", auto_migrate=False),
+        postgres=postgres,
+        redis_store=redis,  # type: ignore[arg-type]
+        influx=influx,
+    )
+    created = database.insert_dataset(
+        {
+            "symbol": "TEST",
+            "title": "测试数据",
+            "timeframe": "1d",
+            "bars": [_bar(1)],
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+    )
+
+    deleted = database.delete_dataset(created["id"])
+
+    assert deleted == {"deleted": True, "id": created["id"]}
+    assert postgres.rows[created["id"]]["deleted_at"] == "deleted"
+    assert influx.points
+    assert database.list_datasets() == []
+    assert redis.deleted_keys[-1] == (
+        "dataset:list",
+        f"dataset:{created['id']}:bars",
+    )
+    with pytest.raises(KeyError):
+        database.delete_dataset(created["id"])
+    with pytest.raises(KeyError):
+        database.delete_dataset("not-a-uuid")
+
+
+def test_legacy_sqlite_delete_dataset(tmp_path) -> None:
+    database = LegacySqliteDatabase(tmp_path / "legacy.db")
+    created = database.insert_dataset(
+        {
+            "symbol": "TEST",
+            "title": "测试数据",
+            "timeframe": "1d",
+            "bars": [_bar(1)],
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        }
+    )
+
+    deleted = database.delete_dataset(created["id"])
+
+    assert deleted == {"deleted": True, "id": created["id"]}
+    assert database.list_datasets() == []
+    with pytest.raises(KeyError):
+        database.delete_dataset(created["id"])
 
 
 def test_existing_dataset_metadata_defaults_are_compatible() -> None:

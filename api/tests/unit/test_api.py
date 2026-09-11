@@ -97,6 +97,22 @@ def test_dataset_validation_rejects_short_and_bad_bars(tmp_path) -> None:
         assert bad.status_code == 400
 
 
+def test_delete_dataset_removes_it_and_returns_404_on_repeat(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        created = client.post("/api/v1/datasets/sample", json={"timeframe": "1d"}).json()
+
+        deleted = client.delete(f"/api/v1/datasets/{created['id']}")
+
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": True, "id": created["id"]}
+        assert client.get("/api/v1/datasets").json()["items"] == []
+        assert client.get(f"/api/v1/datasets/{created['id']}").status_code == 404
+
+        repeated = client.delete(f"/api/v1/datasets/{created['id']}")
+        assert repeated.status_code == 404
+        assert repeated.json()["detail"] == "数据集不存在"
+
+
 def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
     tmp_path, monkeypatch
 ) -> None:
