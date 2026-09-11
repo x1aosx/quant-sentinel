@@ -27,14 +27,16 @@ ENV TZ=Asia/Shanghai \
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i \
-            -e 's@deb.debian.org@mirrors.tuna.tsinghua.edu.cn@g' \
-            -e 's@security.debian.org@mirrors.tuna.tsinghua.edu.cn@g' \
+            -e 's@deb.debian.org@mirrors.cloud.tencent.com@g' \
+            -e 's@security.debian.org@mirrors.cloud.tencent.com@g' \
+            -e 's@http://mirrors.cloud.tencent.com@https://mirrors.cloud.tencent.com@g' \
             /etc/apt/sources.list.d/debian.sources; \
     fi; \
     if [ -f /etc/apt/sources.list ]; then \
         sed -i \
-            -e 's@deb.debian.org@mirrors.tuna.tsinghua.edu.cn@g' \
-            -e 's@security.debian.org@mirrors.tuna.tsinghua.edu.cn@g' \
+            -e 's@deb.debian.org@mirrors.cloud.tencent.com@g' \
+            -e 's@security.debian.org@mirrors.cloud.tencent.com@g' \
+            -e 's@http://mirrors.cloud.tencent.com@https://mirrors.cloud.tencent.com@g' \
             /etc/apt/sources.list; \
     fi; \
     apt-get update; \
