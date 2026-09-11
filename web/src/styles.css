@@ -325,59 +325,86 @@ a {
 }
 
 .kline-chart {
+  --kline-up: #157f6a;
+  --kline-down: #c32f22;
   width: 100%;
   overflow: hidden;
 }
 
-.kline-chart svg {
-  display: block;
+.kline-chart.china-colors {
+  --kline-up: #c62828;
+  --kline-down: #16855f;
+}
+
+.kline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 8px;
+}
+
+.kline-toolbar-actions,
+.kline-toolbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kline-toolbar-meta {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.kline-icon-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.kline-readout {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kline-readout-time {
+  color: var(--heading);
+  font-weight: 700;
+}
+
+.kline-value {
+  font-weight: 700;
+}
+
+.kline-value.up {
+  color: var(--kline-up);
+}
+
+.kline-value.down {
+  color: var(--kline-down);
+}
+
+.kline-locale-toggle {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fafbfc;
+}
+
+.kline-canvas {
   width: 100%;
-  height: auto;
-}
-
-.kline-grid {
-  stroke: #e6ebf1;
-  stroke-width: 1;
-}
-
-.kline-text {
-  fill: var(--muted);
-  font-size: 11px;
-}
-
-.kline-level-text {
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.kline-level-text.support {
-  fill: var(--accent);
-}
-
-.kline-level-text.resistance {
-  fill: var(--danger);
-}
-
-.kline-candle .wick.bullish {
-  stroke: #157f6a;
-  stroke-width: 1.2;
-}
-
-.kline-candle .wick.bearish {
-  stroke: #c32f22;
-  stroke-width: 1.2;
-}
-
-.kline-candle .body.bullish {
-  fill: #d9f3ec;
-  stroke: #157f6a;
-  stroke-width: 1;
-}
-
-.kline-candle .body.bearish {
-  fill: #fde3e0;
-  stroke: #c32f22;
-  stroke-width: 1;
+  min-height: 300px;
 }
 
 .tag {
