@@ -29,6 +29,7 @@ RUN set -eux; \
         sed -i \
             -e 's@deb.debian.org@mirrors.cloud.tencent.com@g' \
             -e 's@security.debian.org@mirrors.cloud.tencent.com@g' \
+            -e 's@mirrors.tuna.tsinghua.edu.cn@mirrors.cloud.tencent.com@g' \
             -e 's@http://mirrors.cloud.tencent.com@https://mirrors.cloud.tencent.com@g' \
             /etc/apt/sources.list.d/debian.sources; \
     fi; \
@@ -36,6 +37,7 @@ RUN set -eux; \
         sed -i \
             -e 's@deb.debian.org@mirrors.cloud.tencent.com@g' \
             -e 's@security.debian.org@mirrors.cloud.tencent.com@g' \
+            -e 's@mirrors.tuna.tsinghua.edu.cn@mirrors.cloud.tencent.com@g' \
             -e 's@http://mirrors.cloud.tencent.com@https://mirrors.cloud.tencent.com@g' \
             /etc/apt/sources.list; \
     fi; \
