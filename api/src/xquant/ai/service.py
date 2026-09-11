@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -359,6 +360,86 @@ def _reply_from_response(data: Mapping[str, Any], latency_ms: float) -> dict[str
     }
 
 
+def _reply_from_sse_text(text: str, latency_ms: float) -> dict[str, Any]:
+    """Parse SSE chunks that a compatible gateway returns even for stream=false."""
+
+    request_id = ""
+    model = ""
+    usage: dict[str, Any] = {}
+    finish_reason: str | None = None
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    choices_seen = False
+
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, Mapping):
+            continue
+        request_id = str(chunk.get("id") or request_id)
+        model = str(chunk.get("model") or model)
+        if isinstance(chunk.get("usage"), Mapping):
+            usage = dict(chunk["usage"])
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        choices_seen = True
+        choice = choices[0]
+        finish_reason = choice.get("finish_reason") or finish_reason
+        message = choice.get("message") or choice.get("delta") or {}
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
+        if reasoning:
+            reasoning_parts.append(str(reasoning))
+        content = message.get("content")
+        if content:
+            content_parts.append(str(content))
+
+    if not choices_seen:
+        raise ValueError("模型响应不是有效的 JSON 或 SSE")
+    return {
+        "id": request_id,
+        "model": model,
+        "content": "".join(content_parts),
+        "reasoning_content": "".join(reasoning_parts),
+        "usage": usage,
+        "latency_ms": round(latency_ms, 2),
+        "finish_reason": finish_reason,
+    }
+
+
+def _reply_from_http_response(
+    response: httpx.Response,
+    latency_ms: float,
+) -> dict[str, Any]:
+    text = response.text
+    if not text.strip():
+        raise ValueError(f"模型响应为空（HTTP {response.status_code}）")
+    try:
+        data = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return _reply_from_sse_text(text, latency_ms)
+    if not isinstance(data, Mapping):
+        data = {}
+    return _reply_from_response(data, latency_ms)
+
+
+def _chat_completion_urls(provider: AIProviderSettings) -> list[str]:
+    base_url = provider.base_url.rstrip("/")
+    urls = [f"{base_url}/chat/completions"]
+    path = urlsplit(base_url).path.strip("/")
+    last_segment = path.rsplit("/", 1)[-1] if path else ""
+    if not re.fullmatch(r"v\d+", last_segment, re.IGNORECASE):
+        urls.append(f"{base_url}/v1/chat/completions")
+    return list(dict.fromkeys(urls))
+
+
 def _post_chat_completion(
     provider: AIProviderSettings,
     messages: list[dict[str, str]],
@@ -366,18 +447,35 @@ def _post_chat_completion(
     if not provider.api_key:
         raise ValueError("未配置 API Key")
     started = time.perf_counter()
+    urls = _chat_completion_urls(provider)
+    last_error: Exception | None = None
     with _client(provider) as client:
-        response = client.post(
-            f"{provider.base_url}/chat/completions",
-            headers=_chat_headers(provider),
-            json=_request_payload(provider, messages, stream=False),
-        )
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise ValueError(_upstream_error_message(response)) from exc
-        data = response.json()
-    return _reply_from_response(data, (time.perf_counter() - started) * 1000)
+        for index, url in enumerate(urls):
+            response = client.post(
+                url,
+                headers=_chat_headers(provider),
+                json=_request_payload(provider, messages, stream=False),
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                last_error = ValueError(_upstream_error_message(response))
+                if response.status_code not in {404, 405} and index < len(urls) - 1:
+                    continue
+                raise last_error from exc
+            try:
+                reply = _reply_from_http_response(response, (time.perf_counter() - started) * 1000)
+            except (ValueError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if index < len(urls) - 1:
+                    continue
+                raise
+            if not str(reply.get("content") or "").strip() and index < len(urls) - 1:
+                continue
+            return reply
+    if last_error:
+        raise last_error
+    raise ValueError("模型未返回内容")
 
 
 def call_chat_completion(
@@ -414,53 +512,67 @@ def stream_chat_completion_events(
     usage: dict[str, Any] = {}
     finish_reason: str | None = None
     payload_variants = _stream_payload_variants(provider, messages)
+    urls = _chat_completion_urls(provider)
     with _client(provider) as client:
         for index, request_payload in enumerate(payload_variants):
-            with client.stream(
-                "POST",
-                f"{provider.base_url}/chat/completions",
-                headers=_chat_headers(provider),
-                json=request_payload,
-            ) as response:
-                if response.status_code in {400, 422} and index < len(payload_variants) - 1:
-                    response.read()
-                    continue
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    raise ValueError(_upstream_error_message(response)) from exc
-                for line in response.iter_lines():
-                    if time.perf_counter() - started > provider.timeout_seconds:
-                        raise httpx.ReadTimeout(
-                            f"模型流式响应超过 {provider.timeout_seconds:g} 秒未完成"
-                        )
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
+            for url_index, url in enumerate(urls):
+                with client.stream(
+                    "POST",
+                    url,
+                    headers=_chat_headers(provider),
+                    json=request_payload,
+                ) as response:
+                    if response.status_code in {400, 422} and index < len(payload_variants) - 1:
+                        response.read()
                         break
+                    if response.status_code in {404, 405} and url_index < len(urls) - 1:
+                        response.read()
+                        continue
                     try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    request_id = chunk.get("id") or request_id
-                    model = chunk.get("model") or model
-                    if isinstance(chunk.get("usage"), Mapping):
-                        usage = dict(chunk["usage"])
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    finish_reason = choice.get("finish_reason") or finish_reason
-                    delta = choice.get("delta") or {}
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    if reasoning:
-                        reasoning_parts.append(str(reasoning))
-                        yield {"type": "reasoning", "text": str(reasoning)}
-                    content = delta.get("content")
-                    if content:
-                        content_parts.append(str(content))
-                        yield {"type": "content", "text": str(content)}
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise ValueError(_upstream_error_message(response)) from exc
+                    for line in response.iter_lines():
+                        if time.perf_counter() - started > provider.timeout_seconds:
+                            raise httpx.ReadTimeout(
+                                f"模型流式响应超过 {provider.timeout_seconds:g} 秒未完成"
+                            )
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        request_id = chunk.get("id") or request_id
+                        model = chunk.get("model") or model
+                        if isinstance(chunk.get("usage"), Mapping):
+                            usage = dict(chunk["usage"])
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        finish_reason = choice.get("finish_reason") or finish_reason
+                        message = choice.get("message") or {}
+                        delta = choice.get("delta") or {}
+                        reasoning = (
+                            delta.get("reasoning_content")
+                            or delta.get("reasoning")
+                            or message.get("reasoning_content")
+                            or message.get("reasoning")
+                        )
+                        if reasoning:
+                            reasoning_parts.append(str(reasoning))
+                            yield {"type": "reasoning", "text": str(reasoning)}
+                        content = delta.get("content") or message.get("content")
+                        if content:
+                            content_parts.append(str(content))
+                            yield {"type": "content", "text": str(content)}
+                if content_parts or reasoning_parts:
+                    break
+            if content_parts or reasoning_parts:
                 break
     yield {
         "type": "usage",
@@ -1131,7 +1243,7 @@ def stream_two_stage(
             yield {"type": "log", "text": "进入本地确定性研究模式。"}
             result = run_two_stage(snapshot, settings)
             yield {"type": "done", "record": result}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - SSE must always emit a final event
             result = _mark_stream_error(record, settings, started, exc, stage="local")
             yield {"type": "error", "message": str(exc), "record": result}
             yield {"type": "done", "record": result}
@@ -1169,7 +1281,7 @@ def stream_two_stage(
         yield {"type": "stage2_decision", "decision": record.get("stage2_decision", {})}
         yield {"type": "debug", "debug": record.get("debug", {})}
         yield {"type": "done", "record": record}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - SSE must always emit a final event
         record = _mark_stream_error(record, settings, started, exc, stage=stage)
         yield {"type": "error", "message": str(exc), "record": record}
         yield {"type": "done", "record": record}
