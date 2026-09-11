@@ -6,6 +6,7 @@ import {
   Database,
   Gauge,
   Hexagon,
+  Settings2,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -16,6 +17,7 @@ const nav = [
   { to: '/ai', label: 'AI 分析', icon: BrainCircuit },
   { to: '/support-resistance', label: '支撑阻力', icon: Crosshair },
   { to: '/price-action', label: '价格行为', icon: BrainCircuit },
+  { to: '/settings', label: '系统配置', icon: Settings2 },
 ];
 
 const titles: Record<string, string> = {
@@ -24,6 +26,7 @@ const titles: Record<string, string> = {
   '/ai': 'AI 分析',
   '/support-resistance': '支撑阻力',
   '/price-action': '价格行为',
+  '/settings': '系统配置',
 };
 
 export function Layout() {

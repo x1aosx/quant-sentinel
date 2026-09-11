@@ -899,3 +899,261 @@ textarea {
     font-size: 22px;
   }
 }
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mode-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  padding: 16px 18px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+}
+
+.mode-card span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mode-card strong {
+  color: var(--heading);
+  font-size: 14px;
+}
+
+.mode-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mode-card.active {
+  border-color: rgba(23, 116, 108, 0.48);
+  background: linear-gradient(135deg, var(--accent-soft), #fff 65%);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.segmented-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.segmented-scroll .button {
+  white-space: nowrap;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table-wrap .table input:not([type="checkbox"]),
+.table-wrap .table select {
+  width: 100%;
+  min-width: 112px;
+}
+
+.table-wrap .table td:first-child,
+.table-wrap .table th:first-child {
+  width: 54px;
+  text-align: center;
+}
+
+.stack.compact {
+  gap: 6px;
+}
+
+.stream-log {
+  min-height: 280px;
+  max-height: 520px;
+}
+
+.batch-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.batch-summary span {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-muted);
+  color: var(--muted);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.probability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.probability-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.7fr) minmax(120px, 2fr) 56px;
+  align-items: center;
+  gap: 10px;
+}
+
+.probability-row .progress {
+  width: 100%;
+}
+
+.flow-viz {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.flow-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.flow-canvas {
+  min-height: 430px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(rgba(220, 227, 234, 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(220, 227, 234, 0.35) 1px, transparent 1px),
+    #fbfcfd;
+  background-size: 24px 24px;
+}
+
+.flow-canvas svg {
+  display: block;
+  min-width: 880px;
+  height: auto;
+}
+
+.flow-edge {
+  fill: none;
+  stroke: #c8d2dd;
+  stroke-width: 2;
+}
+
+.flow-edge.active {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.flow-node rect {
+  fill: #fff;
+  stroke: #c8d2dd;
+  stroke-width: 1.5;
+  cursor: pointer;
+  transition: filter 0.15s ease, stroke 0.15s ease;
+}
+
+.flow-node:hover rect,
+.flow-node.selected rect {
+  filter: drop-shadow(0 5px 10px rgba(22, 35, 45, 0.12));
+  stroke: var(--accent);
+}
+
+.flow-node.active rect {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.flow-node.gate rect {
+  fill: #f3f8ff;
+  stroke: #a9bfdc;
+}
+
+.flow-node.diagnosis rect {
+  fill: #f7f3ff;
+  stroke: #c8b6e5;
+}
+
+.flow-node.decision rect {
+  fill: #fff6e8;
+  stroke: #e7bc7b;
+}
+
+.flow-node.terminal rect {
+  fill: #eaf8f3;
+  stroke: #83c7b7;
+}
+
+.flow-node-kicker {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.flow-node-title {
+  fill: var(--heading);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.flow-node-question {
+  fill: #52616d;
+  font-size: 10px;
+}
+
+.flow-node-answer {
+  fill: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.flow-detail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fafbfc;
+  padding: 14px;
+}
+
+.flow-detail .label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.flow-reasoning {
+  grid-column: 1 / -1;
+}
+
+.flow-reasoning p {
+  margin: 5px 0 0;
+  color: #4c5a65;
+  font-size: 13px;
+}
+
+@media (max-width: 700px) {
+  .mode-switch,
+  .flow-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-card {
+    padding: 14px;
+  }
+
+  .flow-toolbar .button {
+    padding: 7px 9px;
+  }
+}

@@ -5,6 +5,7 @@ import { DataCenterPage } from './pages/DataCenterPage';
 import { AIAnalysisPage } from './pages/AIAnalysisPage';
 import { SupportResistancePage } from './pages/SupportResistancePage';
 import { PriceActionPage } from './pages/PriceActionPage';
+import { SystemConfigPage } from './pages/SystemConfigPage';
 
 export const router = createBrowserRouter(
   [
@@ -17,6 +18,7 @@ export const router = createBrowserRouter(
         { path: 'ai', element: <AIAnalysisPage /> },
         { path: 'support-resistance', element: <SupportResistancePage /> },
         { path: 'price-action', element: <PriceActionPage /> },
+        { path: 'settings', element: <SystemConfigPage /> },
       ],
     },
   ],

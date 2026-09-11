@@ -1,9 +1,9 @@
 """AI analysis service for local research snapshots."""
 
 from .service import (
+    AIProviderSettings,
     AISettings,
     AnalysisSnapshot,
-    AIProviderSettings,
     build_decision_tree_layout,
     build_followup_prompt,
     build_snapshot,
@@ -17,9 +17,9 @@ from .service import (
 )
 
 __all__ = [
+    "AIProviderSettings",
     "AISettings",
     "AnalysisSnapshot",
-    "AIProviderSettings",
     "build_decision_tree_layout",
     "build_followup_prompt",
     "build_snapshot",

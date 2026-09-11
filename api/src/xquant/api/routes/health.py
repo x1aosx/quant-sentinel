@@ -19,7 +19,7 @@ def health(
 ) -> dict[str, Any]:
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "mode": "local_research",
         "storage_backend": settings.storage_backend,
         "dataset_count": len(db.list_datasets()),

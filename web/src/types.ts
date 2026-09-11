@@ -312,14 +312,24 @@ export interface AIAnalysisRecord {
   status: string;
   symbol: string;
   timeframe: string;
+  created_at?: string;
+  duration_ms?: number;
   snapshot: Record<string, any>;
   stage1_messages: Array<{ role: string; content: string }>;
   stage2_messages: Array<{ role: string; content: string }>;
   raw_prompt: Record<string, unknown>;
-  stage1_response: string;
-  stage2_response: string;
+  stage1_response: string | Record<string, any>;
+  stage2_response: string | Record<string, any>;
+  stage1_response_text?: string;
+  stage2_response_text?: string;
   stage1_diagnosis?: Record<string, any>;
   stage2_decision?: Record<string, any>;
+  decision_trace?: Array<Record<string, any>>;
+  future_trend?: Record<string, any>;
+  next_cycle_prediction?: Record<string, any>;
+  next_bar_prediction?: Record<string, any>;
+  usage_total?: Record<string, number>;
+  debug?: Record<string, any>;
   decision_tree_layout?: {
     nodes: Array<{
       id: string;
@@ -328,8 +338,98 @@ export interface AIAnalysisRecord {
       answer: string;
       x: number;
       y: number;
+      phase?: string;
+      status?: string;
+      reasoning?: string;
     }>;
     edges: Array<{ from: string; to: string }>;
   };
   exception?: Record<string, any> | null;
+}
+
+export interface AnalysisSettingsPayload {
+  analysis_bar_count: number;
+  decision_stance: 'conservative' | 'balanced' | 'aggressive' | 'extreme_aggressive';
+  enable_next_bar_prediction: boolean;
+  keep_analysis: boolean;
+  incremental_max_new_bars: number;
+  monitor_interval_seconds: number;
+  concurrency: number;
+}
+
+export interface ProviderConfig {
+  model: string;
+  base_url: string;
+  api_key: string;
+  thinking: boolean;
+  reasoning_effort: string;
+  context_window: number;
+  proxy_url: string;
+  timeout_seconds: number;
+  configured?: boolean;
+  api_key_configured?: boolean;
+  proxy_configured?: boolean;
+}
+
+export interface FeishuConfig {
+  enabled: boolean;
+  webhook_url: string;
+  secret: string;
+  app_id: string;
+  app_secret: string;
+  notify_on_order_only: boolean;
+  confidence_threshold: number;
+  configured?: boolean;
+  webhook_configured?: boolean;
+  secret_configured?: boolean;
+  app_configured?: boolean;
+}
+
+export interface MonitorTarget {
+  symbol: string;
+  timeframe: string;
+  source: string;
+  dataset_id?: string;
+  enabled: boolean;
+  analysis?: Partial<AnalysisSettingsPayload>;
+}
+
+export interface SystemConfig {
+  provider: ProviderConfig;
+  analysis: AnalysisSettingsPayload;
+  feishu: FeishuConfig;
+  monitor_watchlist: MonitorTarget[];
+}
+
+export interface MonitorTargetStatus {
+  target: MonitorTarget;
+  status: string;
+  last_session?: string | null;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  last_error?: Record<string, any> | null;
+  last_record?: AIAnalysisRecord | null;
+  run_count: number;
+  new_bar_count: number;
+}
+
+export interface MonitorStatus {
+  running: boolean;
+  interval_seconds: number;
+  auto_notify: boolean;
+  last_cycle_at?: string | null;
+  items: MonitorTargetStatus[];
+}
+
+export interface BatchAnalyzeResponse {
+  status: string;
+  summary: Record<string, number>;
+  items: Array<{
+    index: number;
+    target: MonitorTarget;
+    status: string;
+    duration_ms: number;
+    record?: AIAnalysisRecord;
+    error?: Record<string, any> | null;
+  }>;
 }
