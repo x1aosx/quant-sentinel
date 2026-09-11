@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Database, Globe, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
+import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
 import type { DatasetSummary, SyncDatasetResponse } from '../types';
 
 type DatasetSource = 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
@@ -186,23 +187,11 @@ export function DataCenterPage() {
             {source === 'tradingview' ? (
               <div className="field">
                 <label htmlFor="sync-exchange">exchange</label>
-                <select
+                <TradingViewExchangeSelect
                   id="sync-exchange"
                   value={exchange}
-                  onChange={(event) => setExchange(event.target.value)}
-                >
-                  <option value="">自动</option>
-                  <option value="SSE">SSE</option>
-                  <option value="SZSE">SZSE</option>
-                  <option value="BSE">BSE</option>
-                  <option value="HKEX">HKEX</option>
-                  <option value="NASDAQ">NASDAQ</option>
-                  <option value="NYSE">NYSE</option>
-                  <option value="OANDA">OANDA</option>
-                  <option value="TVC">TVC</option>
-                  <option value="BINANCE">BINANCE</option>
-                  <option value="CME_MINI">CME_MINI</option>
-                </select>
+                  onChange={setExchange}
+                />
               </div>
             ) : null}
             <div className="field">

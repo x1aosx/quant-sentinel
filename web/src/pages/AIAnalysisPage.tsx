@@ -22,6 +22,7 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import { api, streamAIAnalysis } from '../api/client';
+import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
 import { DecisionVisualization } from '../components/ai/DecisionVisualization';
 import { KlineChart } from '../components/KlineChart';
 import type {
@@ -371,23 +372,11 @@ export function AIAnalysisPage() {
               {importSource === 'tradingview' ? (
                 <div className="field">
                   <label htmlFor="ai-exchange">交易所</label>
-                  <select
+                  <TradingViewExchangeSelect
                     id="ai-exchange"
                     value={importExchange}
-                    onChange={(event) => setImportExchange(event.target.value)}
-                  >
-                    <option value="">自动</option>
-                    <option value="SSE">SSE</option>
-                    <option value="SZSE">SZSE</option>
-                    <option value="BSE">BSE</option>
-                    <option value="HKEX">HKEX</option>
-                    <option value="NASDAQ">NASDAQ</option>
-                    <option value="NYSE">NYSE</option>
-                    <option value="OANDA">OANDA</option>
-                    <option value="TVC">TVC</option>
-                    <option value="BINANCE">BINANCE</option>
-                    <option value="CME_MINI">CME_MINI</option>
-                  </select>
+                    onChange={setImportExchange}
+                  />
                 </div>
               ) : null}
               <div className="field">
@@ -511,13 +500,11 @@ export function AIAnalysisPage() {
                             <option value="mt5">MT5</option>
                           </select>
                           {target.source === 'tradingview' ? (
-                            <input
+                            <TradingViewExchangeSelect
                               value={target.exchange ?? ''}
+                              onChange={(value) => updateTarget(index, { exchange: value })}
+                              ariaLabel="交易所"
                               onClick={(event) => event.stopPropagation()}
-                              onChange={(event) =>
-                                updateTarget(index, { exchange: event.target.value })
-                              }
-                              placeholder="交易所，如 BSE"
                             />
                           ) : null}
                         </td>

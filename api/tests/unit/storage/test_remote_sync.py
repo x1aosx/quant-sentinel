@@ -548,6 +548,61 @@ def test_tradingview_source_returns_closed_bars(monkeypatch) -> None:
     assert result["bars"][-1]["session_id"] == "2026-01-02T00:00:00+00:00"
 
 
+def test_akshare_falls_back_to_tencent_when_eastmoney_disconnects(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "code": 0,
+                "data": {
+                    "sh600519": {
+                        "qfqday": [
+                            ["2026-01-01", "100", "101", "102", "99", "1000"],
+                            ["2026-01-02", "101", "102", "103", "100", "1100"],
+                            ["2026-01-03", "102", "103", "104", "101", "1200"],
+                        ]
+                    }
+                },
+            }
+
+    def fake_eastmoney(_request: RemoteImportRequest) -> list[dict[str, Any]]:
+        raise remote_module.httpx.RemoteProtocolError(
+            "Server disconnected without sending a response."
+        )
+
+    def fake_get(url: str, **_kwargs: Any) -> FakeResponse:
+        requested_urls.append(url)
+        return FakeResponse()
+
+    monkeypatch.setattr(remote_module, "_fetch_eastmoney", fake_eastmoney)
+    monkeypatch.setattr(remote_module.httpx, "get", fake_get)
+
+    result = fetch_remote_bars(
+        RemoteImportRequest(
+            source="akshare",
+            symbol="600519",
+            timeframe="1d",
+            lookback=10,
+        )
+    )
+
+    assert requested_urls == ["https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"]
+    assert result["source"] == "akshare"
+    assert result["source_provider"] == "tencent_public_kline"
+    assert result["fallback_from"] == "eastmoney"
+    assert len(result["bars"]) == 2
+    assert result["bars"][0]["open"] == 100.0
+    assert result["bars"][0]["high"] == 102.0
+    assert result["bars"][0]["low"] == 99.0
+    assert result["bars"][0]["close"] == 101.0
+
+
 def test_mt5_source_returns_closed_bars(monkeypatch) -> None:
     shutdown_calls: list[bool] = []
 

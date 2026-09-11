@@ -35,6 +35,16 @@ _EASTMONEY_KLT = {
     "1w": "102",
 }
 
+_TENCENT_KLINE_TYPES = {
+    "1m": "m1",
+    "5m": "m5",
+    "15m": "m15",
+    "30m": "m30",
+    "1h": "m60",
+    "1d": "day",
+    "1w": "week",
+}
+
 _TRADINGVIEW_INTERVALS = {
     "1m": "in_1_minute",
     "5m": "in_5_minute",
@@ -186,11 +196,17 @@ def _yahoo_range(request: RemoteImportRequest) -> str:
     return "2y"
 
 
-def _http_get(url: str, *, params: dict[str, Any], referer: str) -> httpx.Response:
+def _http_get(
+    url: str,
+    *,
+    params: dict[str, Any],
+    referer: str,
+    attempts: int = 3,
+) -> httpx.Response:
     headers = {**_REMOTE_HEADERS, "Referer": referer}
     last_error: Exception | None = None
     response: httpx.Response | None = None
-    for attempt in range(3):
+    for attempt in range(max(1, attempts)):
         try:
             response = httpx.get(
                 url,
@@ -208,7 +224,8 @@ def _http_get(url: str, *, params: dict[str, Any], referer: str) -> httpx.Respon
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-        time.sleep(min(2.0**attempt, 4.0))
+        if attempt < attempts - 1:
+            time.sleep(min(2.0**attempt, 4.0))
 
     if last_error:
         raise last_error
@@ -508,7 +525,7 @@ def _eastmoney_code(symbol: str) -> tuple[str, str]:
     raise ValueError("akshare/A股 品种请使用 600519、SH600519、SZ000001 或 BJ800865")
 
 
-def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
+def _fetch_eastmoney(request: RemoteImportRequest) -> list[dict[str, Any]]:
     market, code = _eastmoney_code(request.symbol)
     begin_default = (datetime.now(UTC) - timedelta(days=1000)).strftime("%Y%m%d")
     end_default = datetime.now(UTC).strftime("%Y%m%d")
@@ -531,6 +548,7 @@ def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
             "lmt": str(max(request.lookback, 100)),
         },
         referer="https://quote.eastmoney.com/",
+        attempts=1,
     )
     response.raise_for_status()
     klines = response.json().get("data", {}).get("klines") or []
@@ -555,6 +573,88 @@ def _fetch_akshare(request: RemoteImportRequest) -> list[dict[str, Any]]:
     return normalize_remote_payload(rows)[-request.lookback :]
 
 
+def _fetch_tencent(request: RemoteImportRequest) -> list[dict[str, Any]]:
+    market, code = _eastmoney_code(request.symbol)
+    prefix = {"0": "sz", "1": "sh", "2": "bj"}[market]
+    tencent_symbol = f"{prefix}{code}"
+    period = _TENCENT_KLINE_TYPES[request.timeframe]
+    count = min(max(request.lookback + 1, 10), 5000)
+    adjustment = {"qfq": "qfq", "hfq": "hfq", "none": ""}[request.adjust]
+
+    if request.timeframe in {"1d", "1w"}:
+        begin = (
+            _parse_session_date(request.session_start, "session_start").strftime("%Y-%m-%d")
+            if request.session_start
+            else ""
+        )
+        end = (
+            _parse_session_date(request.session_end, "session_end").strftime("%Y-%m-%d")
+            if request.session_end
+            else ""
+        )
+        param = f"{tencent_symbol},{period},{begin},{end},{count},{adjustment}"
+        response = _http_get(
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+            params={"param": param},
+            referer="https://gu.qq.com/",
+        )
+        series_key = f"{adjustment}{period}" if adjustment else period
+    else:
+        response = _http_get(
+            "https://ifzq.gtimg.cn/appstock/app/kline/mkline",
+            params={"param": f"{tencent_symbol},{period},,{count}"},
+            referer="https://gu.qq.com/",
+        )
+        series_key = period
+
+    response.raise_for_status()
+    section = (response.json().get("data") or {}).get(tencent_symbol) or {}
+    raw_rows = section.get(series_key) or []
+    rows: list[dict[str, Any]] = []
+    for index, cells in enumerate(raw_rows):
+        if not isinstance(cells, Sequence) or len(cells) < 6:
+            continue
+        try:
+            rows.append(
+                {
+                    "session_id": str(cells[0]),
+                    "open": cells[1],
+                    "high": cells[3],
+                    "low": cells[4],
+                    "close": cells[2],
+                    "volume": cells[5],
+                    "closed": index < len(raw_rows) - 1,
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return normalize_remote_payload(rows)[-request.lookback :]
+
+
+def _fetch_akshare(request: RemoteImportRequest) -> tuple[list[dict[str, Any]], str]:
+    eastmoney_error: Exception | None = None
+    try:
+        bars = _fetch_eastmoney(request)
+        if bars:
+            return bars, "eastmoney_public_kline"
+        eastmoney_error = ValueError("未返回有效 K 线")
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        eastmoney_error = exc
+
+    try:
+        bars = _fetch_tencent(request)
+        if bars:
+            return bars, "tencent_public_kline"
+        tencent_error = ValueError("未返回有效 K 线")
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        tencent_error = exc
+
+    raise ValueError(
+        f"A股行情获取失败：东方财富接口不可用（{eastmoney_error}）；"
+        f"腾讯接口不可用（{tencent_error}）"
+    ) from tencent_error
+
+
 def fetch_remote_bars(request: RemoteImportRequest | Mapping[str, Any]) -> dict[str, Any]:
     request = validate_remote_request(request)
     exchange = request.exchange or ""
@@ -576,9 +676,10 @@ def fetch_remote_bars(request: RemoteImportRequest | Mapping[str, Any]) -> dict[
             provider = "yfinance_public_chart"
             source = "yfinance"
     elif request.source == "akshare":
-        bars = _fetch_akshare(request)
-        provider = "eastmoney_public_kline"
+        bars, provider = _fetch_akshare(request)
         source = "akshare"
+        if provider == "tencent_public_kline":
+            fallback_from = "eastmoney"
     elif request.source == "tradingview":
         bars, exchange = _fetch_tradingview(request)
         provider = "tradingview_tvdatafeed"

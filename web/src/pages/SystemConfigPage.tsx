@@ -12,6 +12,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { api } from '../api/client';
+import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
 import type { MonitorTarget, SystemConfig } from '../types';
 
 const EMPTY_TARGET: MonitorTarget = {
@@ -410,12 +411,10 @@ export function SystemConfigPage() {
                         <option value="mt5">MT5</option>
                       </select>
                       {target.source === 'tradingview' ? (
-                        <input
+                        <TradingViewExchangeSelect
                           value={target.exchange ?? ''}
-                          onChange={(event) =>
-                            updateTarget(index, { exchange: event.target.value })
-                          }
-                          placeholder="交易所，如 BSE"
+                          onChange={(value) => updateTarget(index, { exchange: value })}
+                          ariaLabel="交易所"
                         />
                       ) : null}
                     </td>
