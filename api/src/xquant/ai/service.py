@@ -295,6 +295,53 @@ def _request_payload(
     return payload
 
 
+def _stream_payload_variants(
+    provider: AIProviderSettings,
+    messages: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Return progressively smaller payloads for compatible stream endpoints."""
+
+    base = _request_payload(provider, messages, stream=True)
+    variants = [base]
+    without_usage = dict(base)
+    without_usage.pop("stream_options", None)
+    if without_usage != variants[-1]:
+        variants.append(without_usage)
+    without_reasoning = dict(without_usage)
+    without_reasoning.pop("reasoning_effort", None)
+    if without_reasoning != variants[-1]:
+        variants.append(without_reasoning)
+    return variants
+
+
+def _upstream_error_detail(response: httpx.Response) -> str:
+    try:
+        response.read()
+    except httpx.HTTPError:
+        pass
+    payload: Any
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return response.text.strip()[:1000]
+    if isinstance(payload, Mapping):
+        error = payload.get("error")
+        if isinstance(error, Mapping):
+            detail = error.get("message") or error.get("detail")
+            if detail:
+                return str(detail)[:1000]
+        detail = payload.get("detail") or payload.get("message")
+        if detail:
+            return str(detail)[:1000]
+    return str(payload)[:1000]
+
+
+def _upstream_error_message(response: httpx.Response) -> str:
+    detail = _upstream_error_detail(response)
+    suffix = f"：{detail}" if detail else ""
+    return f"模型服务返回 HTTP {response.status_code}{suffix}"
+
+
 def _reply_from_response(data: Mapping[str, Any], latency_ms: float) -> dict[str, Any]:
     choices = data.get("choices") or []
     if not choices:
@@ -325,7 +372,10 @@ def _post_chat_completion(
             headers=_chat_headers(provider),
             json=_request_payload(provider, messages, stream=False),
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(_upstream_error_message(response)) from exc
         data = response.json()
     return _reply_from_response(data, (time.perf_counter() - started) * 1000)
 
@@ -363,41 +413,51 @@ def stream_chat_completion_events(
     model = ""
     usage: dict[str, Any] = {}
     finish_reason: str | None = None
-    with _client(provider) as client, client.stream(
-        "POST",
-        f"{provider.base_url}/chat/completions",
-        headers=_chat_headers(provider),
-        json=_request_payload(provider, messages, stream=True),
-    ) as response:
-        response.raise_for_status()
-        for line in response.iter_lines():
-            if not line or not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
+    payload_variants = _stream_payload_variants(provider, messages)
+    with _client(provider) as client:
+        for index, request_payload in enumerate(payload_variants):
+            with client.stream(
+                "POST",
+                f"{provider.base_url}/chat/completions",
+                headers=_chat_headers(provider),
+                json=request_payload,
+            ) as response:
+                if response.status_code in {400, 422} and index < len(payload_variants) - 1:
+                    response.read()
+                    continue
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise ValueError(_upstream_error_message(response)) from exc
+                for line in response.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    request_id = chunk.get("id") or request_id
+                    model = chunk.get("model") or model
+                    if isinstance(chunk.get("usage"), Mapping):
+                        usage = dict(chunk["usage"])
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    finish_reason = choice.get("finish_reason") or finish_reason
+                    delta = choice.get("delta") or {}
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if reasoning:
+                        reasoning_parts.append(str(reasoning))
+                        yield {"type": "reasoning", "text": str(reasoning)}
+                    content = delta.get("content")
+                    if content:
+                        content_parts.append(str(content))
+                        yield {"type": "content", "text": str(content)}
                 break
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            request_id = chunk.get("id") or request_id
-            model = chunk.get("model") or model
-            if isinstance(chunk.get("usage"), Mapping):
-                usage = dict(chunk["usage"])
-            choices = chunk.get("choices") or []
-            if not choices:
-                continue
-            choice = choices[0]
-            finish_reason = choice.get("finish_reason") or finish_reason
-            delta = choice.get("delta") or {}
-            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-            if reasoning:
-                reasoning_parts.append(str(reasoning))
-                yield {"type": "reasoning", "text": str(reasoning)}
-            content = delta.get("content")
-            if content:
-                content_parts.append(str(content))
-                yield {"type": "content", "text": str(content)}
     yield {
         "type": "usage",
         "reply": {
@@ -947,7 +1007,14 @@ def run_two_stage(snapshot: Mapping[str, Any], settings: AISettings) -> dict[str
             settings=settings,
             attempts=1,
         )
-    except (httpx.HTTPError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+    except (
+        httpx.HTTPError,
+        ImportError,
+        ValueError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError,
+    ) as exc:
         record["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
         record["status"] = "error"
         record["exception"] = {
@@ -1058,7 +1125,14 @@ def stream_two_stage(
         yield {"type": "stage2_decision", "decision": record.get("stage2_decision", {})}
         yield {"type": "debug", "debug": record.get("debug", {})}
         yield {"type": "done", "record": record}
-    except (httpx.HTTPError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+    except (
+        httpx.HTTPError,
+        ImportError,
+        ValueError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError,
+    ) as exc:
         record["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
         record["status"] = "error"
         record["exception"] = {"type": type(exc).__name__, "message": str(exc)}

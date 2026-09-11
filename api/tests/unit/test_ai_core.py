@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from xquant.ai.service import (
+    _client,
     build_decision_tree_layout,
     build_snapshot,
     build_stage1_prompt,
     mask_provider,
     normalize_ai_settings,
     run_two_stage,
+    stream_two_stage,
 )
 from xquant.marketdata.remote import (
     RemoteImportRequest,
@@ -78,6 +82,104 @@ def test_tree_layout_and_provider_masking() -> None:
     provider = mask_provider({"api_key": "secret-key", "model": "demo"})
     assert provider["api_key"] == "***"
     assert "secret-key" not in str(provider)
+
+
+def test_socks_proxy_client_is_supported() -> None:
+    settings = normalize_ai_settings(
+        {"provider": {"proxy_url": "socks5://127.0.0.1:1080"}}
+    )
+    client = _client(settings.provider)
+    client.close()
+
+
+def test_stream_retries_without_unsupported_optional_fields(monkeypatch) -> None:
+    settings = normalize_ai_settings(
+        {
+            "provider": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://model.test/v1",
+                "thinking": True,
+            },
+            "analysis_bar_count": 120,
+        }
+    )
+    snapshot = build_snapshot(
+        dataset_id="d1",
+        symbol="DEMO.RESEARCH",
+        timeframe="1d",
+        bars=_bars(),
+        settings=settings,
+    )
+    requests: list[dict] = []
+    accepted = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal accepted
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if "stream_options" in payload or "reasoning_effort" in payload:
+            return httpx.Response(
+                400,
+                json={"error": {"message": "unsupported optional field"}},
+            )
+        accepted += 1
+        if accepted == 1:
+            content = {
+                "current_trend": {"direction": "bullish"},
+                "current_cycle": "markup",
+                "next_cycle": "distribution",
+                "diagnosis_summary": "test diagnosis",
+                "confidence": 70,
+            }
+        else:
+            content = {
+                "decision": {"action": "WAIT", "confidence": 60, "reasoning": "test"},
+                "future_trend": {"label": "range"},
+                "next_cycle_prediction": {"cycle": "range"},
+                "next_bar_prediction": {"direction": "neutral"},
+            }
+        body = (
+            "data: "
+            + json.dumps(
+                {
+                    "id": "request-1",
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "delta": {"content": json.dumps(content, ensure_ascii=False)},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            + "\n\n"
+            + "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setattr(
+        "xquant.ai.service._client",
+        lambda _provider: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    events = list(stream_two_stage(snapshot, settings))
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["record"]["status"] == "ok"
+    assert len(requests) == 6
+    assert sum("stream_options" not in payload for payload in requests) == 4
+    assert (
+        sum(
+            "stream_options" not in payload and "reasoning_effort" not in payload
+            for payload in requests
+        )
+        == 2
+    )
 
 
 def test_remote_payload_normalization_and_feishu_signing() -> None:
