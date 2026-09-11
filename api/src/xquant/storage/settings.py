@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote_plus
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,7 +16,10 @@ class PostgresSettings(BaseSettings):
     port: int = 5432
     user: str = "postgres"
     password: SecretStr = SecretStr("")
-    database: str = "xquant"
+    database: str = Field(
+        default="xquant",
+        validation_alias=AliasChoices("POSTGRES_DB", "POSTGRES_DATABASE", "database"),
+    )
 
     @property
     def url(self) -> str:

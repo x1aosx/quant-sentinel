@@ -34,3 +34,18 @@ def test_storage_backend_can_be_selected(monkeypatch) -> None:
     monkeypatch.setenv("STORAGE_BACKEND", "postgres")
 
     assert StorageSettings().storage_backend == "postgres"
+
+
+def test_postgres_database_uses_compose_environment_name(monkeypatch) -> None:
+    monkeypatch.setenv("POSTGRES_DB", "quant-sentinel")
+    monkeypatch.delenv("POSTGRES_DATABASE", raising=False)
+
+    assert PostgresSettings().database == "quant-sentinel"
+    assert StorageSettings().postgres.database == "quant-sentinel"
+
+
+def test_postgres_database_keeps_legacy_environment_name(monkeypatch) -> None:
+    monkeypatch.delenv("POSTGRES_DB", raising=False)
+    monkeypatch.setenv("POSTGRES_DATABASE", "legacy-db")
+
+    assert PostgresSettings().database == "legacy-db"
