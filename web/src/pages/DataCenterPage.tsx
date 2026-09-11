@@ -4,6 +4,7 @@ import { Database, Globe, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
 import type { DatasetSummary, SyncDatasetResponse } from '../types';
+import { formatSessionTime, formatTimeframeLabel } from '../utils/datasetDisplay';
 
 type DatasetSource = 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
 type DatasetAdjust = 'qfq' | 'hfq' | 'none';
@@ -44,6 +45,12 @@ function formatTimestamp(value?: string): string {
   });
 }
 
+function formatRefreshTime(timestamp: number): string {
+  if (!timestamp) return '尚未更新';
+  const value = new Date(timestamp).toISOString();
+  return formatTimestamp(value);
+}
+
 export function DataCenterPage() {
   const queryClient = useQueryClient();
   const [source, setSource] = useState<DatasetSource>('yfinance');
@@ -56,8 +63,15 @@ export function DataCenterPage() {
   const [lastSync, setLastSync] = useState<SyncDatasetResponse | null>(null);
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [updateInterval, setUpdateInterval] = useState(60_000);
 
-  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
+  const datasetsQuery = useQuery({
+    queryKey: ['datasets'],
+    queryFn: api.listDatasets,
+    refetchInterval: autoUpdate ? updateInterval : false,
+    refetchIntervalInBackground: autoUpdate,
+  });
   const datasets = datasetsQuery.data?.items ?? [];
 
   const syncMutation = useMutation({
@@ -195,7 +209,7 @@ export function DataCenterPage() {
               </div>
             ) : null}
             <div className="field">
-              <label htmlFor="sync-timeframe">timeframe</label>
+              <label htmlFor="sync-timeframe">周期</label>
               <select
                 id="sync-timeframe"
                 value={timeframe}
@@ -287,13 +301,49 @@ export function DataCenterPage() {
 
       <div className="panel">
         <div className="section-title">
-          <Database size={15} />
-          数据集列表
-          {lastSync ? (
-            <span className="tag">
-              最近同步 {lastSync.title || lastSync.symbol} {lastSync.timeframe}
+          <div className="section-title-main">
+            <Database size={15} />
+            数据集列表
+            {lastSync ? (
+              <span className="tag">
+                最近同步 {lastSync.title || lastSync.symbol}{' '}
+                {formatTimeframeLabel(lastSync.timeframe)}
+              </span>
+            ) : null}
+          </div>
+          <div className="section-title-actions">
+            <label className="checkbox-row" htmlFor="dataset-auto-update">
+              <input
+                id="dataset-auto-update"
+                type="checkbox"
+                checked={autoUpdate}
+                onChange={(event) => setAutoUpdate(event.target.checked)}
+              />
+              自动更新
+            </label>
+            <select
+              aria-label="自动更新间隔"
+              value={updateInterval}
+              disabled={!autoUpdate}
+              onChange={(event) => setUpdateInterval(Number(event.target.value))}
+            >
+              <option value={30_000}>30 秒</option>
+              <option value={60_000}>1 分钟</option>
+              <option value={300_000}>5 分钟</option>
+            </select>
+            <button
+              className="button"
+              type="button"
+              onClick={() => void datasetsQuery.refetch()}
+              disabled={datasetsQuery.isFetching}
+            >
+              <RefreshCw size={14} />
+              {datasetsQuery.isFetching ? '更新中...' : '立即更新'}
+            </button>
+            <span className="muted">
+              {formatRefreshTime(datasetsQuery.dataUpdatedAt)}
             </span>
-          ) : null}
+          </div>
         </div>
         {datasetsQuery.isPending ? (
           <div className="empty">加载中...</div>
@@ -302,15 +352,15 @@ export function DataCenterPage() {
         ) : datasets.length === 0 ? (
           <div className="empty">暂无数据集。请在上方同步在线行情。</div>
         ) : (
-          <table className="table">
+          <table className="table dataset-table">
             <thead>
               <tr>
                 <th scope="col">中文名称</th>
-                <th scope="col">timeframe</th>
+                <th scope="col">周期</th>
                 <th scope="col">数据源</th>
                 <th scope="col">K线数</th>
-                <th scope="col">起始 session</th>
-                <th scope="col">结束 session</th>
+                <th scope="col">起始时间</th>
+                <th scope="col">结束时间</th>
                 <th scope="col">最后同步</th>
                 <th scope="col">dataset_id</th>
                 <th scope="col">操作</th>
@@ -323,19 +373,24 @@ export function DataCenterPage() {
                     <div>{dataset.title || dataset.symbol}</div>
                     <div className="muted code">{dataset.symbol}</div>
                   </td>
-                  <td>{dataset.timeframe}</td>
+                  <td>
+                    <div>{formatTimeframeLabel(dataset.timeframe)}</div>
+                    <div className="muted code">{dataset.timeframe}</div>
+                  </td>
                   <td>
                     <div>{sourceLabel(dataset.source)}</div>
                     {dataset.exchange ? <div className="muted">{dataset.exchange}</div> : null}
                     {dataset.source_provider ? <div className="muted">{dataset.source_provider}</div> : null}
                   </td>
                   <td>{dataset.bar_count}</td>
-                  <td>{dataset.first_session}</td>
-                  <td>{dataset.last_session}</td>
+                  <td>{formatSessionTime(dataset.first_session)}</td>
+                  <td>{formatSessionTime(dataset.last_session)}</td>
                   <td className="muted">
                     {formatTimestamp(dataset.synced_at ?? dataset.last_synced_at)}
                   </td>
-                  <td className="code">{dataset.id}</td>
+                  <td className="code dataset-id" title={dataset.id}>
+                    {dataset.id}
+                  </td>
                   <td>
                     <button
                       className="button"

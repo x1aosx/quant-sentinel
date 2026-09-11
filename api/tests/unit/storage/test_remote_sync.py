@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 import types
 from copy import deepcopy
@@ -16,6 +17,7 @@ from xquant.marketdata.remote import (
 )
 from xquant.registry import database as database_module
 from xquant.registry.database import Database
+from xquant.registry.sqlite import Database as LegacySqliteDatabase
 from xquant.storage import StorageSettings
 
 
@@ -33,6 +35,11 @@ class FakePostgres:
     ) -> None:
         values = dict(params or {})
         self.statements.append((statement, values))
+        if "UPDATE research.dataset" in statement:
+            dataset_id = str(values["dataset_id"])
+            if dataset_id in self.rows:
+                self.rows[dataset_id]["title"] = values["title"]
+            return
         if "INSERT INTO research.dataset" not in statement:
             return
         dataset_id = str(values["id"])
@@ -74,6 +81,7 @@ class FakePostgres:
         assert row is not None
         return {
             **row,
+            "stored_title": row.get("title"),
             "title": row.get("title") or row["symbol"],
             "source": row.get("source") or "local",
             "source_provider": row.get("source_provider") or "local_file",
@@ -265,6 +273,132 @@ def test_existing_dataset_metadata_defaults_are_compatible() -> None:
     assert summary["source_provider"] == "local_file"
     assert summary["title"] == "LEGACY"
     assert summary["last_synced_at"] == created_at
+
+
+def test_dataset_titles_refresh_legacy_symbols_without_overwriting_custom_titles() -> None:
+    database, postgres, _influx = _database()
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    postgres.rows.update(
+        {
+            "list-symbol": {
+                "id": "list-symbol",
+                "symbol": "GC=F",
+                "title": "GC=F",
+                "timeframe": "1d",
+                "bar_count": 0,
+                "first_session": "",
+                "last_session": "",
+                "created_at": created_at,
+            },
+            "list-custom": {
+                "id": "list-custom",
+                "symbol": "GC=F",
+                "title": "我的黄金",
+                "timeframe": "1d",
+                "bar_count": 0,
+                "first_session": "",
+                "last_session": "",
+                "created_at": created_at,
+            },
+            "get-symbol": {
+                "id": "get-symbol",
+                "symbol": "^GSPC",
+                "title": "^GSPC",
+                "timeframe": "1d",
+                "bar_count": 0,
+                "first_session": "",
+                "last_session": "",
+                "created_at": created_at,
+            },
+            "get-custom": {
+                "id": "get-custom",
+                "symbol": "^GSPC",
+                "title": "我的标普",
+                "timeframe": "1d",
+                "bar_count": 0,
+                "first_session": "",
+                "last_session": "",
+                "created_at": created_at,
+            },
+        }
+    )
+
+    listed = {dataset["id"]: dataset for dataset in database.list_datasets()}
+    listed_symbol = database.get_dataset("get-symbol")["summary"]
+    listed_custom = database.get_dataset("get-custom")["summary"]
+
+    assert listed["list-symbol"]["title"] == "黄金期货"
+    assert listed["list-custom"]["title"] == "我的黄金"
+    assert listed_symbol["title"] == "标普500指数"
+    assert listed_custom["title"] == "我的标普"
+    assert postgres.rows["list-symbol"]["title"] == "黄金期货"
+    assert postgres.rows["list-custom"]["title"] == "我的黄金"
+    assert postgres.rows["get-symbol"]["title"] == "标普500指数"
+    assert postgres.rows["get-custom"]["title"] == "我的标普"
+
+
+def test_legacy_sqlite_dataset_titles_refresh_without_overwriting_custom_titles(
+    tmp_path,
+) -> None:
+    database = LegacySqliteDatabase(tmp_path / "legacy.db")
+    conn = sqlite3.connect(database.path)
+    conn.executemany(
+        """
+        INSERT INTO datasets
+            (id, symbol, title, timeframe, bar_count, first_session, last_session,
+             created_at, source, source_provider, exchange, last_synced_at, bars_json)
+        VALUES (?, ?, ?, '1d', 0, '', '', ?, 'yfinance', 'yfinance_public_chart',
+                NULL, ?, '[]')
+        """,
+        [
+            (
+                "list-symbol",
+                "GC=F",
+                "GC=F",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+            (
+                "list-custom",
+                "GC=F",
+                "我的黄金",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+            (
+                "get-symbol",
+                "^GSPC",
+                "^GSPC",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+            (
+                "get-custom",
+                "^GSPC",
+                "我的标普",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    listed = {dataset["id"]: dataset for dataset in database.list_datasets()}
+    listed_symbol = database.get_dataset("get-symbol")["summary"]
+    listed_custom = database.get_dataset("get-custom")["summary"]
+
+    assert listed["list-symbol"]["title"] == "黄金期货"
+    assert listed["list-custom"]["title"] == "我的黄金"
+    assert listed_symbol["title"] == "标普500指数"
+    assert listed_custom["title"] == "我的标普"
+    conn = sqlite3.connect(database.path)
+    stored_titles = dict(conn.execute("SELECT id, title FROM datasets"))
+    conn.close()
+    assert stored_titles["list-symbol"] == "黄金期货"
+    assert stored_titles["list-custom"] == "我的黄金"
+    assert stored_titles["get-symbol"] == "标普500指数"
+    assert stored_titles["get-custom"] == "我的标普"
 
 
 def test_instrument_title_resolves_local_market_aliases() -> None:
