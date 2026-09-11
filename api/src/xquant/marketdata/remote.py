@@ -68,6 +68,78 @@ _MT5_TIMEFRAMES = {
 _SUPPORTED_SOURCES = {"yfinance", "akshare", "tradingview", "mt5"}
 _SUPPORTED_TIMEFRAMES = frozenset(_YAHOO_INTERVALS)
 _MT5_LOCK = threading.Lock()
+_INSTRUMENT_TITLE_LOCK = threading.Lock()
+_INSTRUMENT_TITLE_CACHE: dict[str, str] = {}
+
+_INSTRUMENT_TITLE_OVERRIDES = {
+    "000001.SS": "上证指数",
+    "000300.SS": "沪深300指数",
+    "000905.SS": "中证500指数",
+    "399001.SZ": "深证成指",
+    "399006.SZ": "创业板指",
+    "^DJI": "道琼斯工业指数",
+    "^GSPC": "标普500指数",
+    "^HSI": "恒生指数",
+    "^IXIC": "纳斯达克综合指数",
+    "^N225": "日经225指数",
+    "^RUT": "罗素2000指数",
+    "^VIX": "芝加哥期权交易所波动率指数",
+    "BZ=F": "布伦特原油期货",
+    "CL=F": "WTI原油期货",
+    "GC=F": "黄金期货",
+    "GLD": "黄金ETF",
+    "HG=F": "铜期货",
+    "NG=F": "天然气期货",
+    "QQQ": "纳斯达克100ETF",
+    "SI=F": "白银期货",
+    "SLV": "白银ETF",
+    "SPY": "标普500ETF",
+    "TLT": "美国长期国债ETF",
+    "USO": "美国原油基金",
+}
+
+_ASSET_TITLES = {
+    "AED": "阿联酋迪拉姆",
+    "AUD": "澳元",
+    "BRL": "巴西雷亚尔",
+    "BTC": "比特币",
+    "CAD": "加元",
+    "CHF": "瑞士法郎",
+    "CNH": "离岸人民币",
+    "CNY": "人民币",
+    "DKK": "丹麦克朗",
+    "ETH": "以太坊",
+    "EUR": "欧元",
+    "GBP": "英镑",
+    "HKD": "港元",
+    "IDR": "印尼盾",
+    "INR": "印度卢比",
+    "JPY": "日元",
+    "KRW": "韩元",
+    "MXN": "墨西哥比索",
+    "MYR": "马来西亚林吉特",
+    "NOK": "挪威克朗",
+    "NZD": "新西兰元",
+    "PHP": "菲律宾比索",
+    "PLN": "波兰兹罗提",
+    "RUB": "俄罗斯卢布",
+    "SAR": "沙特里亚尔",
+    "SEK": "瑞典克朗",
+    "SGD": "新加坡元",
+    "THB": "泰铢",
+    "TRY": "土耳其里拉",
+    "TWD": "新台币",
+    "USD": "美元",
+    "USDT": "泰达币",
+    "VND": "越南盾",
+    "XAG": "白银",
+    "XAU": "黄金",
+    "XPD": "钯金",
+    "XPT": "铂金",
+    "ZAR": "南非兰特",
+}
+
+_EASTMONEY_SUGGEST_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
 
 _REMOTE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -91,6 +163,107 @@ class RemoteImportRequest:
 
 class RemoteSymbolNotFound(ValueError):
     """Raised when a remote provider does not recognize the requested symbol."""
+
+
+def _currency_pair_title(symbol: str) -> str | None:
+    compact = re.sub(r"[^A-Z]", "", symbol.strip().upper())
+    if not compact:
+        return None
+    bases = sorted(_ASSET_TITLES, key=len, reverse=True)
+    quote_assets = sorted(_ASSET_TITLES, key=len, reverse=True)
+    for base in bases:
+        if not compact.startswith(base):
+            continue
+        remainder = compact[len(base) :]
+        for quote_asset in quote_assets:
+            if not remainder.startswith(quote_asset):
+                continue
+            suffix = remainder[len(quote_asset) :]
+            if len(suffix) <= 3:
+                return f"{_ASSET_TITLES[base]}/{_ASSET_TITLES[quote_asset]}"
+    return None
+
+
+def _eastmoney_title_query(symbol: str) -> str | None:
+    text = symbol.strip().upper()
+    if not text:
+        return None
+    if re.fullmatch(r"(SH|SZ|BJ)\d{6}", text):
+        return text[2:]
+    if re.fullmatch(r"\d{6}\.(SS|SZ|BJ)", text):
+        return text[:6]
+    if re.fullmatch(r"\d{4,5}\.HK", text):
+        return text[:-3].zfill(5)
+    if re.fullmatch(r"HK\d{4,5}", text):
+        return text[2:].zfill(5)
+    if re.fullmatch(r"\d{5}", text):
+        return text
+    if "=" in text or text.startswith("^"):
+        return None
+    if re.fullmatch(r"[A-Z][A-Z0-9.-]{0,4}", text):
+        return text
+    return None
+
+
+def _fetch_eastmoney_title(symbol: str) -> str | None:
+    query = _eastmoney_title_query(symbol)
+    if not query:
+        return None
+    try:
+        response = _http_get(
+            "https://searchapi.eastmoney.com/api/suggest/get",
+            params={
+                "input": query,
+                "type": "14",
+                "token": _EASTMONEY_SUGGEST_TOKEN,
+                "count": "10",
+            },
+            referer="https://quote.eastmoney.com/",
+            attempts=1,
+        )
+        response.raise_for_status()
+        candidates = (
+            (response.json().get("QuotationCodeTable") or {}).get("Data") or []
+        )
+        exact_matches = [
+            item
+            for item in candidates
+            if str(item.get("Code") or "").strip().upper() == query.upper()
+            and str(item.get("Name") or "").strip()
+        ]
+        if not exact_matches:
+            return None
+        return str(exact_matches[0]["Name"]).strip()
+    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+        return None
+
+
+def resolve_instrument_title(
+    symbol: str,
+    *,
+    exchange: str | None = None,
+    source: str | None = None,
+) -> str | None:
+    """Resolve a human-readable Chinese title without making market-data optional."""
+    del exchange, source
+    text = str(symbol or "").strip().upper()
+    if not text:
+        return None
+    override = _INSTRUMENT_TITLE_OVERRIDES.get(text)
+    if override:
+        return override
+    currency_pair = _currency_pair_title(text)
+    if currency_pair:
+        return currency_pair
+    with _INSTRUMENT_TITLE_LOCK:
+        cached = _INSTRUMENT_TITLE_CACHE.get(text)
+    if cached:
+        return cached
+    title = _fetch_eastmoney_title(text)
+    if title:
+        with _INSTRUMENT_TITLE_LOCK:
+            _INSTRUMENT_TITLE_CACHE[text] = title
+    return title
 
 
 def validate_remote_request(raw: Mapping[str, Any] | RemoteImportRequest) -> RemoteImportRequest:

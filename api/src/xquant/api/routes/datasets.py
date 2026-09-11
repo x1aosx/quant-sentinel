@@ -32,6 +32,7 @@ def create_dataset(
         dataset = db.insert_dataset(
             {
                 "symbol": symbol,
+                "title": str(payload.get("title") or symbol).strip(),
                 "timeframe": timeframe,
                 "bars": bars,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -68,6 +69,7 @@ def create_sample_dataset(
     return db.insert_dataset(
         {
             "symbol": "DEMO.RESEARCH",
+            "title": "研究示例数据",
             "timeframe": timeframe,
             "bars": bars,
             "created_at": datetime.now(UTC).isoformat(),

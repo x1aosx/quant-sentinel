@@ -9,7 +9,11 @@ from typing import Any
 import pandas as pd
 
 from xquant.marketdata import remote as remote_module
-from xquant.marketdata.remote import RemoteImportRequest, fetch_remote_bars
+from xquant.marketdata.remote import (
+    RemoteImportRequest,
+    fetch_remote_bars,
+    resolve_instrument_title,
+)
 from xquant.registry import database as database_module
 from xquant.registry.database import Database
 from xquant.storage import StorageSettings
@@ -70,6 +74,7 @@ class FakePostgres:
         assert row is not None
         return {
             **row,
+            "title": row.get("title") or row["symbol"],
             "source": row.get("source") or "local",
             "source_provider": row.get("source_provider") or "local_file",
             "last_synced_at": row.get("last_synced_at") or row["created_at"],
@@ -119,6 +124,7 @@ def _bar(day: int, close: float = 100.0) -> dict[str, Any]:
 def _remote_payload(*bars: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol": "GC=F",
+        "title": "黄金期货",
         "timeframe": "1d",
         "source": "yfinance",
         "source_provider": "yfinance_public_chart",
@@ -169,6 +175,7 @@ def test_remote_sync_is_incremental_and_reuses_dataset_metadata(monkeypatch) -> 
     assert first["synced_at"].endswith("+00:00")
     assert first["dataset"]["source"] == "yfinance"
     assert first["dataset"]["source_provider"] == "yfinance_public_chart"
+    assert first["dataset"]["title"] == "黄金期货"
     assert first["dataset"]["last_synced_at"] is not None
     assert "session_start" not in calls[0]
 
@@ -256,7 +263,70 @@ def test_existing_dataset_metadata_defaults_are_compatible() -> None:
 
     assert summary["source"] == "local"
     assert summary["source_provider"] == "local_file"
+    assert summary["title"] == "LEGACY"
     assert summary["last_synced_at"] == created_at
+
+
+def test_instrument_title_resolves_local_market_aliases() -> None:
+    assert resolve_instrument_title("GC=F") == "黄金期货"
+    assert resolve_instrument_title("XAUUSDm") == "黄金/美元"
+    assert resolve_instrument_title("^GSPC") == "标普500指数"
+
+
+def test_instrument_title_uses_eastmoney_exact_code_match(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, Any]:
+            return {
+                "QuotationCodeTable": {
+                    "Data": [
+                        {"Code": "AAPL", "Name": "苹果"},
+                        {"Code": "AAPL22", "Name": "Apple Inc Notes 2022"},
+                    ]
+                }
+            }
+
+    def fake_get(*_args: Any, **_kwargs: Any) -> FakeResponse:
+        return FakeResponse()
+
+    monkeypatch.setattr(remote_module, "_http_get", fake_get)
+
+    assert resolve_instrument_title("AAPL") == "苹果"
+
+
+def test_instrument_title_normalizes_hong_kong_symbols(monkeypatch) -> None:
+    requested_inputs: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, Any]:
+            return {
+                "QuotationCodeTable": {
+                    "Data": [{"Code": "00700", "Name": "腾讯控股"}]
+                }
+            }
+
+    def fake_get(*_args: Any, **kwargs: Any) -> FakeResponse:
+        requested_inputs.append(str(kwargs["params"]["input"]))
+        return FakeResponse()
+
+    monkeypatch.setattr(remote_module, "_http_get", fake_get)
+
+    assert resolve_instrument_title("0700.HK") == "腾讯控股"
+    assert resolve_instrument_title("00700") == "腾讯控股"
+    assert requested_inputs == ["00700", "00700"]
 
 
 def test_yahoo_incremental_request_uses_session_start(monkeypatch) -> None:

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from xquant.marketdata.remote import fetch_remote_bars
+from xquant.marketdata.remote import fetch_remote_bars, resolve_instrument_title
 
 
 class Database:
@@ -64,6 +64,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS datasets (
                 id TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
+                title TEXT,
                 timeframe TEXT NOT NULL,
                 bar_count INTEGER NOT NULL,
                 first_session TEXT NOT NULL,
@@ -81,7 +82,7 @@ class Database:
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(datasets)").fetchall()
         }
-        for name in ("source", "source_provider", "exchange", "last_synced_at"):
+        for name in ("title", "source", "source_provider", "exchange", "last_synced_at"):
             if name not in columns:
                 conn.execute(f"ALTER TABLE datasets ADD COLUMN {name} TEXT")
         conn.commit()
@@ -142,17 +143,19 @@ class Database:
         bars = payload.get("bars", [])
         dataset_id = str(payload.get("id") or uuid4())
         created_at = payload.get("created_at") or datetime.now(UTC).isoformat()
+        title = str(payload.get("title") or payload["symbol"]).strip()
         conn = self._connect()
         conn.execute(
             """
             INSERT INTO datasets
-            (id, symbol, timeframe, bar_count, first_session, last_session, created_at,
+            (id, symbol, title, timeframe, bar_count, first_session, last_session, created_at,
              source, source_provider, exchange, last_synced_at, bars_json)
-            VALUES (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
+            VALUES (:id, :symbol, :title, :timeframe, :bar_count, :first_session, :last_session,
                     :created_at, :source, :source_provider, :exchange, :last_synced_at,
                     :bars_json)
             ON CONFLICT(id) DO UPDATE SET
                 symbol=excluded.symbol,
+                title=excluded.title,
                 timeframe=excluded.timeframe,
                 bar_count=excluded.bar_count,
                 first_session=excluded.first_session,
@@ -166,6 +169,7 @@ class Database:
             {
                 "id": dataset_id,
                 "symbol": payload["symbol"],
+                "title": title,
                 "timeframe": payload["timeframe"],
                 "bar_count": len(bars),
                 "first_session": bars[0]["session_id"] if bars else "",
@@ -208,10 +212,12 @@ class Database:
             )
         )
         created_at = datetime.now(UTC).isoformat()
+        title_from_existing = ""
         if existing is not None:
             existing_record = self.get_dataset(str(existing["id"]))
             dataset_id = str(existing_record["summary"]["id"])
             created_at = str(existing_record["summary"]["created_at"])
+            title_from_existing = str(existing_record["summary"].get("title") or "")
             previous_bars = list(existing_record["bars"])
 
         merged: dict[str, dict[str, Any]] = {
@@ -230,25 +236,39 @@ class Database:
                 merged[session_id] = {**bar, "session_id": session_id}
         bars = [merged[key] for key in sorted(merged)]
         synced_at = datetime.now(UTC).isoformat()
+        source = str(remote["source"])
+        source_provider = str(remote["source_provider"])
+        exchange = str(remote.get("exchange") or "")
+        title = (
+            str(remote.get("title") or "").strip()
+            or resolve_instrument_title(
+                str(remote["symbol"]),
+                exchange=exchange,
+                source=source,
+            )
+            or title_from_existing
+            or str(remote["symbol"])
+        )
         summary = self.insert_dataset(
             {
                 "id": dataset_id,
                 "symbol": remote["symbol"],
+                "title": title,
                 "timeframe": remote["timeframe"],
                 "bars": bars,
                 "created_at": created_at,
-                "source": remote["source"],
-                "source_provider": remote["source_provider"],
-                "exchange": remote.get("exchange"),
+                "source": source,
+                "source_provider": source_provider,
+                "exchange": exchange or None,
                 "last_synced_at": synced_at,
             }
         )
         return {
             **summary,
             "dataset": summary,
-            "source": remote["source"],
-            "source_provider": remote["source_provider"],
-            "exchange": remote.get("exchange"),
+            "source": source,
+            "source_provider": source_provider,
+            "exchange": exchange or None,
             "inserted_count": inserted_count,
             "updated_count": len(incoming_ids) - inserted_count,
             "total_count": len(bars),
@@ -262,13 +282,35 @@ class Database:
         rows = conn.execute(
             """
             SELECT id, symbol, timeframe, bar_count, first_session, last_session,
+                   NULLIF(title, '') AS stored_title,
+                   COALESCE(NULLIF(title, ''), symbol) AS title,
                    created_at, source, source_provider, exchange, last_synced_at
             FROM datasets
             ORDER BY created_at DESC, rowid DESC
             """
         ).fetchall()
+        datasets = [dict(row) for row in rows]
+        changed = False
+        for dataset in datasets:
+            if dataset.pop("stored_title", None):
+                continue
+            title = resolve_instrument_title(
+                str(dataset.get("symbol") or ""),
+                exchange=str(dataset.get("exchange") or ""),
+                source=str(dataset.get("source") or ""),
+            )
+            if not title:
+                continue
+            dataset["title"] = title
+            conn.execute(
+                "UPDATE datasets SET title = ? WHERE id = ?",
+                (title, dataset["id"]),
+            )
+            changed = True
+        if changed:
+            conn.commit()
         conn.close()
-        return [dict(row) for row in rows]
+        return datasets
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         conn = self._connect()
@@ -281,6 +323,7 @@ class Database:
         summary = {
             "id": record["id"],
             "symbol": record["symbol"],
+            "title": record.get("title") or record["symbol"],
             "timeframe": record["timeframe"],
             "bar_count": record["bar_count"],
             "first_session": record["first_session"],
@@ -288,6 +331,7 @@ class Database:
             "created_at": record["created_at"],
             "source": record.get("source"),
             "source_provider": record.get("source_provider"),
+            "exchange": record.get("exchange"),
             "last_synced_at": record.get("last_synced_at"),
         }
         return {"summary": summary, "bars": bars}

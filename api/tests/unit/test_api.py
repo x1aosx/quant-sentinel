@@ -23,6 +23,7 @@ def test_dataset_and_analysis_endpoints(tmp_path) -> None:
         assert sample.status_code == 200, sample.text
         dataset = sample.json()
         assert dataset["symbol"] == "DEMO.RESEARCH"
+        assert dataset["title"] == "研究示例数据"
         assert dataset["bar_count"] == 180
 
         dashboard = client.get("/api/v1/dashboard")
@@ -115,6 +116,7 @@ def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
             "timeframe": request_seen.timeframe,
             "source": request_seen.source,
             "source_provider": "yfinance_public_chart",
+            "title": "黄金期货",
             "simulation_only": True,
             "bars": [
                 {
@@ -147,6 +149,7 @@ def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
         assert response.status_code == 200, response.text
         created = response.json()
         assert created["symbol"] == "GC=F"
+        assert created["title"] == "黄金期货"
         assert created["bar_count"] == 80
         assert created["source"] == "yfinance"
         assert created["source_provider"] == "yfinance_public_chart"
@@ -177,6 +180,7 @@ def test_remote_dataset_import_uses_provider_payload_and_stores_dataset(
 
         datasets = client.get("/api/v1/datasets").json()["items"]
         assert [item["id"] for item in datasets] == [created["id"]]
+        assert datasets[0]["title"] == "黄金期货"
 
 
 def test_quotes_download_returns_deterministic_csv(tmp_path) -> None:

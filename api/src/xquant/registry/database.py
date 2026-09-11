@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
-from ..marketdata.remote import fetch_remote_bars
+from ..marketdata.remote import fetch_remote_bars, resolve_instrument_title
 from ..storage import (
     InfluxDBStore,
     PostgresStore,
@@ -102,6 +102,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS research.dataset (
                 id UUID PRIMARY KEY,
                 symbol TEXT NOT NULL,
+                title TEXT,
                 timeframe TEXT NOT NULL,
                 bar_count INTEGER NOT NULL,
                 first_session TEXT NOT NULL,
@@ -114,6 +115,8 @@ class Database:
             );
             ALTER TABLE research.dataset
                 ADD COLUMN IF NOT EXISTS source TEXT;
+            ALTER TABLE research.dataset
+                ADD COLUMN IF NOT EXISTS title TEXT;
             ALTER TABLE research.dataset
                 ADD COLUMN IF NOT EXISTS source_provider TEXT;
             ALTER TABLE research.dataset
@@ -211,18 +214,20 @@ class Database:
         source = str(payload.get("source") or "local")
         source_provider = str(payload.get("source_provider") or "local_file")
         exchange = str(payload.get("exchange") or "")
+        title = str(payload.get("title") or payload["symbol"]).strip()
         last_synced_at = payload.get("last_synced_at") or created_at
         self.postgres.execute(
             """
             INSERT INTO research.dataset
-                (id, symbol, timeframe, bar_count, first_session, last_session,
+                (id, symbol, title, timeframe, bar_count, first_session, last_session,
                  source, source_provider, exchange, last_synced_at, created_at)
             VALUES
-                (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
+                (:id, :symbol, :title, :timeframe, :bar_count, :first_session, :last_session,
                  :source, :source_provider, :exchange, CAST(:last_synced_at AS timestamptz),
                  CAST(:created_at AS timestamptz))
             ON CONFLICT (id) DO UPDATE SET
                 symbol = excluded.symbol,
+                title = excluded.title,
                 timeframe = excluded.timeframe,
                 bar_count = excluded.bar_count,
                 first_session = excluded.first_session,
@@ -236,6 +241,7 @@ class Database:
             {
                 "id": dataset_id,
                 "symbol": payload["symbol"],
+                "title": title,
                 "timeframe": payload["timeframe"],
                 "bar_count": len(bars),
                 "first_session": bars[0]["session_id"] if bars else "",
@@ -294,6 +300,12 @@ class Database:
         source = str(remote.get("source") or request_payload.get("source") or "unknown")
         source_provider = str(remote.get("source_provider") or source)
         exchange = str(remote.get("exchange") or request_payload.get("exchange") or "")
+        title = (
+            str(remote.get("title") or "").strip()
+            or resolve_instrument_title(symbol, exchange=exchange, source=source)
+            or str(existing.get("title") if existing else "").strip()
+            or symbol
+        )
 
         if new_bars:
             self._write_dataset_bars(
@@ -306,6 +318,7 @@ class Database:
         self._upsert_dataset_metadata(
             dataset_id=dataset_id,
             symbol=symbol,
+            title=title,
             timeframe=timeframe,
             bars=merged_bars,
             source=source,
@@ -320,6 +333,7 @@ class Database:
             "dataset": summary,
             "id": dataset_id,
             "symbol": symbol,
+            "title": title,
             "timeframe": timeframe,
             "bar_count": len(merged_bars),
             "first_session": merged_bars[0]["session_id"] if merged_bars else "",
@@ -336,11 +350,13 @@ class Database:
         }
 
     def list_datasets(self) -> list[dict[str, Any]]:
-        return self._cache_get_or_set(
+        datasets = self._cache_get_or_set(
             "dataset:list",
             lambda: self.postgres.query(
                 """
                 SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
+                       NULLIF(title, '') AS stored_title,
+                       COALESCE(NULLIF(title, ''), symbol) AS title,
                        COALESCE(source, 'local') AS source,
                        COALESCE(source_provider, 'local_file') AS source_provider,
                        exchange,
@@ -352,11 +368,15 @@ class Database:
             ),
             ttl_seconds=30,
         )
+        self._resolve_missing_dataset_titles(datasets)
+        return datasets
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         metadata = self.postgres.query_one(
             """
             SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
+                   NULLIF(title, '') AS stored_title,
+                   COALESCE(NULLIF(title, ''), symbol) AS title,
                    COALESCE(source, 'local') AS source,
                    COALESCE(source_provider, 'local_file') AS source_provider,
                    exchange,
@@ -369,6 +389,7 @@ class Database:
         )
         if metadata is None:
             raise KeyError(f"dataset not found: {dataset_id}")
+        self._resolve_missing_dataset_titles([metadata])
         bars = self._cache_get_or_set(
             f"dataset:{metadata['id']}:bars",
             lambda: self._fetch_dataset_bars(metadata["id"]),
@@ -474,6 +495,7 @@ class Database:
         return self.postgres.query_one(
             """
             SELECT id::text, symbol, timeframe, bar_count, first_session, last_session,
+                   COALESCE(NULLIF(title, ''), symbol) AS title,
                    COALESCE(source, 'local') AS source,
                    COALESCE(source_provider, 'local_file') AS source_provider,
                    exchange,
@@ -492,6 +514,7 @@ class Database:
         *,
         dataset_id: str,
         symbol: str,
+        title: str,
         timeframe: str,
         bars: list[dict[str, Any]],
         source: str,
@@ -503,14 +526,15 @@ class Database:
         self.postgres.execute(
             """
             INSERT INTO research.dataset
-                (id, symbol, timeframe, bar_count, first_session, last_session,
+                (id, symbol, title, timeframe, bar_count, first_session, last_session,
                  source, source_provider, exchange, last_synced_at, created_at)
             VALUES
-                (:id, :symbol, :timeframe, :bar_count, :first_session, :last_session,
+                (:id, :symbol, :title, :timeframe, :bar_count, :first_session, :last_session,
                  :source, :source_provider, :exchange, CAST(:last_synced_at AS timestamptz),
                  CAST(:created_at AS timestamptz))
             ON CONFLICT (id) DO UPDATE SET
                 symbol = excluded.symbol,
+                title = excluded.title,
                 timeframe = excluded.timeframe,
                 bar_count = excluded.bar_count,
                 first_session = excluded.first_session,
@@ -523,6 +547,7 @@ class Database:
             {
                 "id": dataset_id,
                 "symbol": symbol,
+                "title": title,
                 "timeframe": timeframe,
                 "bar_count": len(bars),
                 "first_session": bars[0]["session_id"] if bars else "",
@@ -534,6 +559,35 @@ class Database:
                 "created_at": created_at,
             },
         )
+
+    def _resolve_missing_dataset_titles(self, rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            if row.get("stored_title"):
+                row.pop("stored_title", None)
+                continue
+            symbol = str(row.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            title = resolve_instrument_title(
+                symbol,
+                exchange=str(row.get("exchange") or ""),
+                source=str(row.get("source") or ""),
+            )
+            row.pop("stored_title", None)
+            row["title"] = title or symbol
+            if not title:
+                continue
+            try:
+                self.postgres.execute(
+                    """
+                    UPDATE research.dataset
+                    SET title = :title
+                    WHERE id = CAST(:dataset_id AS uuid)
+                    """,
+                    {"dataset_id": row["id"], "title": title},
+                )
+            except SQLAlchemyError:
+                continue
 
     def _fetch_dataset_bars(self, dataset_id: str) -> list[dict[str, Any]]:
         rows = self.influx.query(

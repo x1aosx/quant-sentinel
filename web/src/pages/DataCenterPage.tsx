@@ -289,7 +289,11 @@ export function DataCenterPage() {
         <div className="section-title">
           <Database size={15} />
           数据集列表
-          {lastSync ? <span className="tag">最近同步 {lastSync.symbol} {lastSync.timeframe}</span> : null}
+          {lastSync ? (
+            <span className="tag">
+              最近同步 {lastSync.title || lastSync.symbol} {lastSync.timeframe}
+            </span>
+          ) : null}
         </div>
         {datasetsQuery.isPending ? (
           <div className="empty">加载中...</div>
@@ -301,7 +305,7 @@ export function DataCenterPage() {
           <table className="table">
             <thead>
               <tr>
-                <th scope="col">symbol</th>
+                <th scope="col">中文名称</th>
                 <th scope="col">timeframe</th>
                 <th scope="col">数据源</th>
                 <th scope="col">K线数</th>
@@ -315,7 +319,10 @@ export function DataCenterPage() {
             <tbody>
               {datasets.map((dataset) => (
                 <tr key={dataset.id}>
-                  <td className="code">{dataset.symbol}</td>
+                  <td>
+                    <div>{dataset.title || dataset.symbol}</div>
+                    <div className="muted code">{dataset.symbol}</div>
+                  </td>
                   <td>{dataset.timeframe}</td>
                   <td>
                     <div>{sourceLabel(dataset.source)}</div>

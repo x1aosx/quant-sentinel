@@ -12,6 +12,7 @@ export interface DatasetBar {
 export interface DatasetSummary {
   id: string;
   symbol: string;
+  title?: string;
   timeframe: string;
   bar_count: number;
   first_session: string;
@@ -28,6 +29,7 @@ export interface SyncDatasetResponse {
   dataset: DatasetSummary;
   id: string;
   symbol: string;
+  title?: string;
   timeframe: string;
   bar_count: number;
   first_session: string;

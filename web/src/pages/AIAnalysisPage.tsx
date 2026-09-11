@@ -419,7 +419,8 @@ export function AIAnalysisPage() {
                 {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
                 {datasets.map((dataset) => (
                   <option key={dataset.id} value={dataset.id}>
-                    {dataset.symbol} · {dataset.timeframe} · {dataset.bar_count} 根
+                    {dataset.title || dataset.symbol} · {dataset.symbol} · {dataset.timeframe} ·{' '}
+                    {dataset.bar_count} 根
                   </option>
                 ))}
               </select>
