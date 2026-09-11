@@ -391,7 +391,7 @@ export function SystemConfigPage() {
                 </tr>
               ) : (
                 form.monitor_watchlist.map((target, index) => (
-                  <tr key={`${target.source}-${target.symbol}-${target.timeframe}-${index}`}>
+                  <tr key={`watchlist-${index}`}>
                     <td>
                       <input
                         type="checkbox"
