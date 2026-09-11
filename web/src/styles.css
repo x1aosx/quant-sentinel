@@ -526,10 +526,39 @@ a {
   white-space: nowrap;
 }
 
+.dataset-symbol-cell,
+.dataset-title-cell {
+  vertical-align: middle;
+}
+
+.dataset-title-cell {
+  max-width: 180px;
+  white-space: normal;
+}
+
+.dataset-group-count {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.dataset-group-end td {
+  border-bottom: 2px solid var(--border-strong);
+}
+
+.dataset-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .dataset-id {
   max-width: 230px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.auto-update-target {
+  max-width: 220px;
 }
 
 .progress {

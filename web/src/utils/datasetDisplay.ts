@@ -12,12 +12,28 @@ export function formatTimeframeLabel(value: string): string {
   return TIMEFRAME_LABELS[value] ?? value;
 }
 
+function formatCompactSessionTime(value: string): string | null {
+  const match = /^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2})?)?$/.exec(value);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second] = match;
+  const date = `${year}-${month}-${day}`;
+  if (!hour) return date;
+
+  const time = second ? `${hour}:${minute}:${second}` : `${hour}:${minute}`;
+  return `${date} ${time}`;
+}
+
 export function formatSessionTime(value?: string): string {
   if (!value) return '--';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const normalized = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  const compactTime = formatCompactSessionTime(normalized);
+  if (compactTime) return compactTime;
+
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return normalized;
 
   const pad = (part: number): string => String(part).padStart(2, '0');
   return [
