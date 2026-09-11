@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from xquant.marketdata import remote as remote_module
 from xquant.marketdata.remote import (
@@ -39,6 +40,9 @@ class FakePostgres:
             dataset_id = str(values["dataset_id"])
             if dataset_id in self.rows:
                 self.rows[dataset_id]["title"] = values["title"]
+            return
+        if "DELETE FROM research.dataset" in statement:
+            self.rows.pop(str(values["dataset_id"]), None)
             return
         if "INSERT INTO research.dataset" not in statement:
             return
@@ -93,6 +97,7 @@ class FakeInflux:
     def __init__(self) -> None:
         self.points: dict[tuple[Any, ...], dict[str, Any]] = {}
         self.write_batches: list[list[dict[str, Any]]] = []
+        self.deleted_dataset_ids: list[str] = []
 
     def write_points(self, points: list[dict[str, Any]]) -> int:
         self.write_batches.append(deepcopy(points))
@@ -114,8 +119,30 @@ class FakeInflux:
             key=lambda row: (str(row["session_id"]), int(row.get("source_seq", 0))),
         )
 
+    def delete_market_bars(self, dataset_id: str) -> None:
+        self.deleted_dataset_ids.append(dataset_id)
+        self.points = {
+            key: point
+            for key, point in self.points.items()
+            if point["tags"]["dataset_id"] != dataset_id
+        }
+
     def close(self) -> None:
         return None
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.deleted_keys: list[tuple[str, ...]] = []
+
+    def get_json(self, key: str) -> Any | None:
+        return None
+
+    def set_json(self, key: str, value: Any, ttl_seconds: int) -> None:
+        return None
+
+    def delete(self, *keys: str) -> None:
+        self.deleted_keys.append(tuple(keys))
 
 
 def _bar(day: int, close: float = 100.0) -> dict[str, Any]:
@@ -252,6 +279,62 @@ def test_dataset_writer_uses_stable_session_timestamp() -> None:
     second_time = influx.write_batches[1][0]["time"]
     assert second_time == first_time
     assert len(influx.points) == 3
+
+
+def test_database_delete_dataset_cleans_storage_and_cache() -> None:
+    postgres = FakePostgres()
+    influx = FakeInflux()
+    redis = FakeRedis()
+    database = Database(
+        settings=StorageSettings(storage_backend="postgres", auto_migrate=False),
+        postgres=postgres,
+        redis_store=redis,  # type: ignore[arg-type]
+        influx=influx,
+    )
+    created = database.insert_dataset(
+        {
+            "symbol": "TEST",
+            "title": "测试数据",
+            "timeframe": "1d",
+            "bars": [_bar(1)],
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+    )
+
+    deleted = database.delete_dataset(created["id"])
+
+    assert deleted == {"deleted": True, "id": created["id"]}
+    assert postgres.rows == {}
+    assert influx.points == {}
+    assert influx.deleted_dataset_ids == [created["id"]]
+    assert redis.deleted_keys[-1] == (
+        "dataset:list",
+        f"dataset:{created['id']}:bars",
+    )
+    with pytest.raises(KeyError):
+        database.delete_dataset(created["id"])
+    with pytest.raises(KeyError):
+        database.delete_dataset("not-a-uuid")
+
+
+def test_legacy_sqlite_delete_dataset(tmp_path) -> None:
+    database = LegacySqliteDatabase(tmp_path / "legacy.db")
+    created = database.insert_dataset(
+        {
+            "symbol": "TEST",
+            "title": "测试数据",
+            "timeframe": "1d",
+            "bars": [_bar(1)],
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        }
+    )
+
+    deleted = database.delete_dataset(created["id"])
+
+    assert deleted == {"deleted": True, "id": created["id"]}
+    assert database.list_datasets() == []
+    with pytest.raises(KeyError):
+        database.delete_dataset(created["id"])
 
 
 def test_existing_dataset_metadata_defaults_are_compatible() -> None:

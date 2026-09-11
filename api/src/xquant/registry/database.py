@@ -6,7 +6,7 @@ import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
@@ -396,6 +396,32 @@ class Database:
             ttl_seconds=120,
         )
         return {"summary": metadata, "bars": bars}
+
+    def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
+        try:
+            UUID(dataset_id)
+        except ValueError as exc:
+            raise KeyError(f"dataset not found: {dataset_id}") from exc
+        metadata = self.postgres.query_one(
+            """
+            SELECT id::text
+            FROM research.dataset
+            WHERE id = CAST(:dataset_id AS uuid)
+            """,
+            {"dataset_id": dataset_id},
+        )
+        if metadata is None:
+            raise KeyError(f"dataset not found: {dataset_id}")
+        self.influx.delete_market_bars(dataset_id)
+        self.postgres.execute(
+            """
+            DELETE FROM research.dataset
+            WHERE id = CAST(:dataset_id AS uuid)
+            """,
+            {"dataset_id": dataset_id},
+        )
+        self._invalidate("dataset:list", f"dataset:{dataset_id}:bars")
+        return {"deleted": True, "id": dataset_id}
 
     def storage_health(self) -> dict[str, Any]:
         result: dict[str, Any] = {}

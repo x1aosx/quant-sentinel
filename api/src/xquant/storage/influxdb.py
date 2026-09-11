@@ -52,6 +52,18 @@ class InfluxDBStore:
             raise TypeError("InfluxDB query response must be a JSON array")
         return [dict(row) for row in payload]
 
+    def delete_market_bars(self, dataset_id: str) -> None:
+        escaped_dataset_id = _escape_predicate_string(dataset_id)
+        response = self._client.post(
+            self.settings.delete_path,
+            json={
+                "db": self.settings.database,
+                "measurement": "market_bar",
+                "predicate": f"dataset_id = '{escaped_dataset_id}'",
+            },
+        )
+        response.raise_for_status()
+
     def health(self) -> dict[str, str]:
         response = self._client.get("/health")
         response.raise_for_status()
@@ -80,6 +92,10 @@ class InfluxDBStore:
 
 def _escape_tag_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+
+
+def _escape_predicate_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _format_field(value: Any) -> str:

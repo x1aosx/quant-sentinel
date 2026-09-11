@@ -112,3 +112,15 @@ def get_dataset(
     dataset_id: str, db: Annotated[Database, Depends(get_database)]
 ) -> dict[str, Any]:
     return get_dataset_or_404(db, dataset_id)["summary"]
+
+
+@router.delete("/datasets/{dataset_id}")
+def delete_dataset(
+    dataset_id: str, db: Annotated[Database, Depends(get_database)]
+) -> dict[str, Any]:
+    try:
+        return db.delete_dataset(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="数据集不存在") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="删除行情数据失败") from exc

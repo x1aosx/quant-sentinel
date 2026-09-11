@@ -362,3 +362,13 @@ class Database:
             "last_synced_at": record.get("last_synced_at"),
         }
         return {"summary": summary, "bars": bars}
+
+    def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        cursor = conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+        if cursor.rowcount == 0:
+            conn.close()
+            raise KeyError(f"dataset not found: {dataset_id}")
+        conn.commit()
+        conn.close()
+        return {"deleted": True, "id": dataset_id}
