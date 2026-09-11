@@ -9,6 +9,7 @@ from xquant.ai.service import (
     build_decision_tree_layout,
     build_snapshot,
     build_stage1_prompt,
+    call_chat_completion,
     mask_provider,
     normalize_ai_settings,
     run_two_stage,
@@ -182,6 +183,90 @@ def test_stream_retries_without_unsupported_optional_fields(monkeypatch) -> None
     )
 
 
+def test_nonstream_response_accepts_sse_chunks(monkeypatch) -> None:
+    settings = normalize_ai_settings(
+        {
+            "provider": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://model.test/v1",
+            },
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        body = (
+            "data: "
+            + json.dumps(
+                {
+                    "id": "sse-request",
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "delta": {"content": '{"answer":"ok"}'},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            + "\n\n"
+            + "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setattr(
+        "xquant.ai.service._client",
+        lambda _provider: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    content = call_chat_completion(settings.provider, [{"role": "user", "content": "test"}])
+
+    assert content == '{"answer":"ok"}'
+
+
+def test_nonstream_falls_back_to_versioned_endpoint(monkeypatch) -> None:
+    settings = normalize_ai_settings(
+        {
+            "provider": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://model.test",
+            },
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/chat/completions":
+            return httpx.Response(200, text="")
+        return httpx.Response(
+            200,
+            json={
+                "id": "versioned-request",
+                "model": "test-model",
+                "choices": [
+                    {
+                        "message": {"content": '{"answer":"ok"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "xquant.ai.service._client",
+        lambda _provider: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    content = call_chat_completion(settings.provider, [{"role": "user", "content": "test"}])
+
+    assert content == '{"answer":"ok"}'
+
+
 def test_stream_falls_back_when_provider_ignores_stream_flag(monkeypatch) -> None:
     settings = normalize_ai_settings(
         {
@@ -254,6 +339,86 @@ def test_stream_falls_back_when_provider_ignores_stream_flag(monkeypatch) -> Non
     assert events[-1]["record"]["status"] == "ok"
     assert events[-1]["record"]["stage1_diagnosis"]["diagnosis_summary"] == "fallback diagnosis"
     assert any("切换普通请求重试" in event.get("text", "") for event in events)
+
+
+def test_stream_falls_back_to_versioned_endpoint(monkeypatch) -> None:
+    settings = normalize_ai_settings(
+        {
+            "provider": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://model.test",
+            },
+            "analysis_bar_count": 120,
+        }
+    )
+    snapshot = build_snapshot(
+        dataset_id="d1",
+        symbol="DEMO.RESEARCH",
+        timeframe="1d",
+        bars=_bars(),
+        settings=settings,
+    )
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/chat/completions":
+            return httpx.Response(
+                200,
+                json={"choices": [{"delta": {"content": ""}}]},
+            )
+        content = (
+            {
+                "current_trend": {"direction": "bullish"},
+                "current_cycle": "markup",
+                "next_cycle": "distribution",
+                "diagnosis_summary": "versioned diagnosis",
+                "confidence": 70,
+            }
+            if "/stage1/" not in requests[-1]
+            else {
+                "decision": {"action": "WAIT", "confidence": 60, "reasoning": "versioned"},
+                "future_trend": {"label": "range"},
+                "next_cycle_prediction": {"cycle": "range"},
+                "next_bar_prediction": {"direction": "neutral"},
+            }
+        )
+        body = (
+            "data: "
+            + json.dumps(
+                {
+                    "id": "versioned-request",
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "delta": {"content": json.dumps(content, ensure_ascii=False)},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            + "\n\n"
+            + "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setattr(
+        "xquant.ai.service._client",
+        lambda _provider: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    events = list(stream_two_stage(snapshot, settings))
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["record"]["status"] == "ok"
+    assert events[-1]["record"]["stage1_diagnosis"]["diagnosis_summary"] == "versioned diagnosis"
+    assert requests.count("/chat/completions") == 2
+    assert requests.count("/v1/chat/completions") == 2
 
 
 def test_stream_always_finishes_after_unexpected_exception(monkeypatch) -> None:
