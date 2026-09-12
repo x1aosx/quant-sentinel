@@ -97,6 +97,12 @@ def test_batch_and_monitor_endpoints_use_local_research_mode(tmp_path) -> None:
         payload = batch.json()
         assert payload["summary"]["succeeded"] == 1
         assert payload["items"][0]["record"]["decision_tree_layout"]["nodes"]
+        batch_history = client.get(
+            "/api/v1/ai/records",
+            params={"dataset_id": dataset_id},
+        )
+        assert batch_history.status_code == 200, batch_history.text
+        assert batch_history.json()["items"][0]["dataset_id"] == dataset_id
 
         started = client.post(
             "/api/v1/ai/monitor/start",
@@ -107,11 +113,16 @@ def test_batch_and_monitor_endpoints_use_local_research_mode(tmp_path) -> None:
             },
         )
         assert started.status_code == 200, started.text
-        assert started.json()["running"] is True
+        started_payload = started.json()
+        assert started_payload["running"] is True
+        assert started_payload["schedule_active_now"] is True
+        assert started_payload["schedule"]["mode"] == "always"
+        assert started_payload["next_check_at"]
 
         status = client.get("/api/v1/ai/monitor/status")
         assert status.status_code == 200
         assert status.json()["items"][0]["target"]["dataset_id"] == dataset_id
+        assert status.json()["schedule_label"] == "24小时盯盘"
 
         stopped = client.post("/api/v1/ai/monitor/stop")
         assert stopped.status_code == 200
@@ -136,6 +147,22 @@ def test_streaming_endpoint_returns_final_record(tmp_path) -> None:
         assert events[-1]["record"]["decision_tree_layout"]
         assert response.headers["cache-control"] == "no-cache, no-transform"
         assert response.headers["x-accel-buffering"] == "no"
+
+        history = client.get("/api/v1/ai/records", params={"dataset_id": dataset_id})
+        assert history.status_code == 200, history.text
+        saved = history.json()["items"]
+        assert len(saved) == 1
+        assert saved[0]["dataset_id"] == dataset_id
+        assert saved[0]["symbol"] == "DEMO.RESEARCH"
+
+        detail = client.get(f"/api/v1/ai/records/{saved[0]['id']}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["record"]["decision_tree_layout"]["nodes"]
+        assert detail.json()["dataset_id"] == dataset_id
+
+        missing = client.get("/api/v1/ai/records/missing")
+        assert missing.status_code == 404
+        assert missing.json()["detail"] == "分析记录不存在"
 
 
 def test_sse_payload_replaces_non_finite_numbers() -> None:

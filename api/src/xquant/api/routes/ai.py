@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from xquant.ai.coordinator import MonitorManager
@@ -54,6 +54,18 @@ def _merged_payload(
     return store.merge_provider_payload(payload or {})
 
 
+def _persist_record(
+    db: Database,
+    record: Mapping[str, Any],
+    *,
+    dataset_id: str | None = None,
+) -> dict[str, Any] | None:
+    save = getattr(db, "save_analysis_record", None)
+    if not callable(save):
+        return None
+    return save(dict(record), dataset_id=dataset_id)
+
+
 @router.post("/ai/config")
 def ai_config(
     store: Annotated[SystemConfigStore, Depends(get_system_config)],
@@ -91,7 +103,9 @@ def analyze_ai(
             bars=dataset["bars"],
             settings=ai_settings,
         )
-        return run_two_stage(snapshot, ai_settings)
+        record = run_two_stage(snapshot, ai_settings)
+        _persist_record(db, record, dataset_id=str(dataset["summary"]["id"]))
+        return record
     except (TypeError, ValueError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -119,6 +133,12 @@ def analyze_ai_stream(
     def event_stream():
         try:
             for event in stream_two_stage(snapshot, ai_settings):
+                if event.get("type") == "done" and isinstance(event.get("record"), Mapping):
+                    _persist_record(
+                        db,
+                        event["record"],
+                        dataset_id=str(dataset["summary"]["id"]),
+                    )
                 yield _sse_payload(event)
         except Exception as exc:
             # The SSE response has already started, so failures must be delivered as events.
@@ -180,11 +200,25 @@ def batch_analyze(
         from xquant.ai.coordinator import BatchAnalyzer
 
         merged = _merged_payload(store, payload)
-        return BatchAnalyzer(db).analyze(
+        result = BatchAnalyzer(db).analyze(
             targets,
             merged,
             concurrency=payload.get("concurrency"),
         )
+        for item in result.get("items", []):
+            record = item.get("record")
+            dataset_summary = item.get("dataset")
+            if isinstance(record, Mapping):
+                _persist_record(
+                    db,
+                    record,
+                    dataset_id=(
+                        str(dataset_summary.get("id"))
+                        if isinstance(dataset_summary, Mapping) and dataset_summary.get("id")
+                        else None
+                    ),
+                )
+        return result
     except (TypeError, ValueError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -206,6 +240,7 @@ def start_monitor(
             merged,
             interval_seconds=payload.get("interval_seconds"),
             auto_notify=bool(payload.get("auto_notify", False)),
+            schedule=payload.get("monitor_schedule") or merged.get("monitor_schedule"),
         )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -230,3 +265,23 @@ def run_monitor_once(
     monitor: Annotated[MonitorManager, Depends(get_monitor)],
 ) -> dict[str, Any]:
     return monitor.run_once()
+
+
+@router.get("/ai/records")
+def list_analysis_records(
+    db: Annotated[Database, Depends(get_database)],
+    dataset_id: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict[str, Any]:
+    return {"items": db.list_analysis_records(dataset_id=dataset_id, limit=limit)}
+
+
+@router.get("/ai/records/{record_id}")
+def get_analysis_record(
+    record_id: str,
+    db: Annotated[Database, Depends(get_database)],
+) -> dict[str, Any]:
+    try:
+        return db.get_analysis_record(record_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="分析记录不存在") from exc

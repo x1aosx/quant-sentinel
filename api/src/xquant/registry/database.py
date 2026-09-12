@@ -19,6 +19,13 @@ from ..storage import (
     StorageSettings,
 )
 from .sqlite import Database as LegacySqliteDatabase
+from .sqlite import (
+    _normalize_record_limit,
+    _record_created_at,
+    _record_dataset_id,
+    _record_summary,
+    _sanitize_json,
+)
 
 
 class Database:
@@ -133,6 +140,23 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_dataset_active
                 ON research.dataset (deleted_at)
                 WHERE deleted_at IS NULL;
+            CREATE TABLE IF NOT EXISTS research.ai_analysis_record (
+                id UUID PRIMARY KEY,
+                record_id TEXT NOT NULL,
+                dataset_id TEXT,
+                symbol TEXT,
+                timeframe TEXT,
+                status TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                duration_ms DOUBLE PRECISION,
+                decision_action TEXT,
+                confidence DOUBLE PRECISION,
+                record JSONB NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_record_created_at
+                ON research.ai_analysis_record (created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_record_dataset_created_at
+                ON research.ai_analysis_record (dataset_id, created_at DESC, id DESC);
             """
         )
 
@@ -434,6 +458,113 @@ class Database:
         )
         self._invalidate("dataset:list", f"dataset:{dataset_id}:bars")
         return {"deleted": True, "id": dataset_id}
+
+    def save_analysis_record(
+        self,
+        record: dict[str, Any],
+        dataset_id: str | None = None,
+    ) -> dict[str, Any]:
+        persisted_id = str(uuid4())
+        stored_dataset_id = _record_dataset_id(record, dataset_id)
+        created_at = _record_created_at(record)
+        summary = _record_summary(
+            record,
+            persisted_id=persisted_id,
+            dataset_id=stored_dataset_id,
+            created_at=created_at,
+        )
+        stored_record = _sanitize_json(record)
+        self.postgres.execute(
+            """
+            INSERT INTO research.ai_analysis_record
+                (id, record_id, dataset_id, symbol, timeframe, status, created_at,
+                 duration_ms, decision_action, confidence, record)
+            VALUES
+                (CAST(:id AS uuid), :record_id, :dataset_id, :symbol, :timeframe,
+                 :status, CAST(:created_at AS timestamptz), :duration_ms,
+                 :decision_action, :confidence, CAST(:record AS jsonb))
+            """,
+            {
+                **summary,
+                "record": json.dumps(
+                    stored_record,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            },
+        )
+        return summary
+
+    def list_analysis_records(
+        self,
+        dataset_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        normalized_limit = _normalize_record_limit(limit)
+        columns = """
+            SELECT id::text, record_id, dataset_id, symbol, timeframe, status, created_at,
+                   duration_ms, decision_action, confidence
+            FROM research.ai_analysis_record
+        """
+        if dataset_id is not None:
+            rows = self.postgres.query(
+                columns
+                + """
+                WHERE dataset_id = :dataset_id
+                ORDER BY created_at DESC, id DESC
+                LIMIT :limit
+                """,
+                {"dataset_id": dataset_id, "limit": normalized_limit},
+            )
+        else:
+            rows = self.postgres.query(
+                columns
+                + """
+                ORDER BY created_at DESC, id DESC
+                LIMIT :limit
+                """,
+                {"limit": normalized_limit},
+            )
+        summary_fields = (
+            "id",
+            "record_id",
+            "dataset_id",
+            "symbol",
+            "timeframe",
+            "status",
+            "created_at",
+            "duration_ms",
+            "decision_action",
+            "confidence",
+        )
+        return [{field: row.get(field) for field in summary_fields} for row in rows]
+
+    def get_analysis_record(self, record_id: str) -> dict[str, Any]:
+        try:
+            UUID(record_id)
+        except ValueError as exc:
+            raise KeyError(f"analysis record not found: {record_id}") from exc
+        row = self.postgres.query_one(
+            """
+            SELECT id::text, record_id, dataset_id, created_at, record
+            FROM research.ai_analysis_record
+            WHERE id = CAST(:record_id AS uuid)
+            """,
+            {"record_id": record_id},
+        )
+        if row is None:
+            raise KeyError(f"analysis record not found: {record_id}")
+        payload = row.get("record")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return {
+            "id": row["id"],
+            "record_id": row.get("record_id"),
+            "dataset_id": row.get("dataset_id"),
+            "created_at": row.get("created_at"),
+            "record": payload,
+        }
 
     def storage_health(self) -> dict[str, Any]:
         result: dict[str, Any] = {}

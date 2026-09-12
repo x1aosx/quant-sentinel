@@ -1259,3 +1259,221 @@ textarea {
     padding: 7px 9px;
   }
 }
+
+.history-row {
+  cursor: pointer;
+}
+
+.history-table td {
+  white-space: nowrap;
+}
+
+.monitor-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.monitor-config-block {
+  min-width: 0;
+}
+
+.section-title.compact-title {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.monitor-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.monitor-add-row select {
+  width: 100%;
+}
+
+.config-watchlist-add {
+  margin-bottom: 14px;
+}
+
+.monitor-runtime-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monitor-schedule-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: end;
+  gap: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.monitor-weekdays {
+  grid-column: 1 / -1;
+}
+
+.weekday-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.weekday-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fafbfc;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.weekday-option input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.monitor-schedule-note {
+  grid-column: 1 / -1;
+  border-left: 2px solid var(--info-soft);
+  padding: 4px 0 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.monitor-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.monitor-status-item {
+  min-width: 1040px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.monitor-status-item.expanded {
+  border-color: rgba(23, 116, 108, 0.42);
+}
+
+.monitor-status-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.5fr) repeat(6, minmax(106px, auto)) 24px;
+  align-items: center;
+  gap: 12px;
+  min-height: 66px;
+  padding: 11px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.monitor-status-row:hover,
+.monitor-status-row:focus-visible {
+  outline: none;
+  background: #fafbfc;
+}
+
+.monitor-status-target {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.monitor-status-target > div {
+  min-width: 0;
+}
+
+.monitor-status-target strong,
+.monitor-status-target span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.monitor-status-target span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monitor-status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.monitor-status-cell .label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.monitor-status-cell strong {
+  max-width: 100%;
+  color: var(--heading);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.monitor-status-detail {
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  background: #fafbfc;
+}
+
+.monitor-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.monitor-detail-error {
+  grid-column: span 2;
+}
+
+.error-text {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .monitor-config-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .monitor-add-row,
+  .monitor-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .monitor-detail-error {
+    grid-column: auto;
+  }
+}
