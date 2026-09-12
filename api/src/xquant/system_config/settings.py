@@ -10,11 +10,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DecisionStance = Literal["conservative", "balanced", "aggressive", "extreme_aggressive"]
 ReasoningEffort = Literal["low", "medium", "high", "max"]
+MonitorScheduleMode = Literal["always", "a_share", "custom"]
 
 DEFAULT_SYSTEM_CONFIG_PATH = Path("data/system-settings.json")
 SYSTEM_CONFIG_ENV = "XQUANT_SYSTEM_CONFIG_FILE"
@@ -56,6 +58,66 @@ class AnalysisSettings(BaseModel):
     incremental_max_new_bars: int = Field(default=10, ge=0, le=500)
     monitor_interval_seconds: int = Field(default=60, ge=1, le=86400)
     concurrency: int = Field(default=3, ge=1, le=64)
+
+
+def _normalize_hhmm(value: str) -> str:
+    parts = value.split(":")
+    if (
+        len(parts) != 2
+        or any(len(part) != 2 or not part.isdigit() for part in parts)
+        or not 0 <= int(parts[0]) <= 23
+        or not 0 <= int(parts[1]) <= 59
+    ):
+        raise ValueError("时间必须使用 HH:MM 格式")
+    return value
+
+
+class MonitorScheduleSettings(BaseModel):
+    """Realtime monitor schedule in an IANA timezone."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    mode: MonitorScheduleMode = "always"
+    timezone: str = "Asia/Shanghai"
+    enabled: bool = True
+    weekdays: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5], min_length=1)
+    custom_start: str = "09:30"
+    custom_end: str = "15:00"
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str) -> str:
+        normalized = value.strip()
+        try:
+            ZoneInfo(normalized)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError("时区必须是有效的 IANA 时区") from exc
+        return normalized
+
+    @field_validator("weekdays")
+    @classmethod
+    def _validate_weekdays(cls, value: list[int]) -> list[int]:
+        normalized: set[int] = set()
+        for weekday in value:
+            if (
+                isinstance(weekday, bool)
+                or not isinstance(weekday, int)
+                or not 1 <= weekday <= 7
+            ):
+                raise ValueError("weekdays 必须包含 1 到 7 的整数")
+            normalized.add(weekday)
+        return sorted(normalized)
+
+    @field_validator("custom_start", "custom_end")
+    @classmethod
+    def _validate_custom_time(cls, value: str) -> str:
+        return _normalize_hhmm(value)
+
+    @model_validator(mode="after")
+    def _validate_custom_range(self) -> MonitorScheduleSettings:
+        if self.custom_start >= self.custom_end:
+            raise ValueError("custom_start 必须早于 custom_end")
+        return self
 
 
 class FeishuSettings(BaseModel):
@@ -108,6 +170,9 @@ class SystemSettings(BaseModel):
 
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
     analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
+    monitor_schedule: MonitorScheduleSettings = Field(
+        default_factory=MonitorScheduleSettings
+    )
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
     monitor_watchlist: list[MonitorWatchlistItem] = Field(default_factory=list)
 
@@ -197,6 +262,7 @@ def masked_payload(settings: SystemSettings) -> dict[str, Any]:
     return {
         "provider": provider,
         "analysis": settings.analysis.model_dump(),
+        "monitor_schedule": settings.monitor_schedule.model_dump(),
         "feishu": feishu,
         "monitor_watchlist": [
             item.model_dump() for item in settings.monitor_watchlist
@@ -357,9 +423,19 @@ def merge_provider_payload(
         if key in incoming and incoming[key] is not None:
             analysis[key] = incoming[key]
 
+    schedule = settings.monitor_schedule.model_dump()
+    schedule_update = incoming.get("monitor_schedule")
+    if isinstance(schedule_update, Mapping):
+        schedule = MonitorScheduleSettings.model_validate(
+            _deep_merge(schedule, schedule_update)
+        ).model_dump()
+    elif schedule_update is not None:
+        schedule = MonitorScheduleSettings.model_validate(schedule_update).model_dump()
+
     merged: dict[str, Any] = {
         "provider": provider,
         "analysis": analysis,
+        "monitor_schedule": schedule,
         **analysis,
     }
     if "monitor_watchlist" in incoming:
@@ -438,6 +514,8 @@ __all__ = [
     "AnalysisSettings",
     "DecisionStance",
     "FeishuSettings",
+    "MonitorScheduleMode",
+    "MonitorScheduleSettings",
     "MonitorWatchlistItem",
     "ProviderSettings",
     "ReasoningEffort",
