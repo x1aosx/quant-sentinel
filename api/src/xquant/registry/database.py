@@ -404,6 +404,7 @@ class Database:
             lambda: self._fetch_dataset_bars(metadata["id"]),
             ttl_seconds=120,
         )
+        bars.sort(key=lambda bar: _session_sort_key(str(bar.get("session_id") or "")))
         return {"summary": metadata, "bars": bars}
 
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
@@ -650,8 +651,17 @@ class Database:
                     "low": float(row["low"]),
                     "close": float(row["close"]),
                     "volume": float(row["volume"]),
+                    "_source_seq": int(row.get("source_seq") or 0),
                 }
             )
+        bars.sort(
+            key=lambda bar: (
+                _session_sort_key(str(bar["session_id"])),
+                int(bar["_source_seq"]),
+            )
+        )
+        for bar in bars:
+            bar.pop("_source_seq", None)
         return bars
 
 
@@ -660,11 +670,37 @@ def _parse_time(value: Any) -> datetime | None:
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     if not isinstance(value, str):
         return None
+    text = value.strip()
+    if not text:
+        return None
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
+        parsed = None
+    if parsed is None:
+        formats = (
+            ("%Y%m%d%H%M%S", 14),
+            ("%Y%m%d%H%M", 12),
+            ("%Y%m%d", 8),
+            ("%Y-%m-%d %H:%M:%S", 19),
+            ("%Y-%m-%d %H:%M", 16),
+        )
+        for time_format, expected_length in formats:
+            if len(text) != expected_length:
+                continue
+            try:
+                parsed = datetime.strptime(f"{text}+0000", f"{time_format}%z")
+                break
+            except ValueError:
+                continue
+    if parsed is None:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _session_sort_key(session_id: str) -> tuple[float, str]:
+    parsed = _parse_time(session_id)
+    return (parsed.timestamp(), session_id) if parsed is not None else (float("inf"), session_id)
 
 
 def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

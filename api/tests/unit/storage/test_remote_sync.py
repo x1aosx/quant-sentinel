@@ -135,9 +135,10 @@ class FakeInflux:
 class FakeRedis:
     def __init__(self) -> None:
         self.deleted_keys: list[tuple[str, ...]] = []
+        self.cached: Any | None = None
 
     def get_json(self, key: str) -> Any | None:
-        return None
+        return self.cached
 
     def set_json(self, key: str, value: Any, ttl_seconds: int) -> None:
         return None
@@ -280,6 +281,108 @@ def test_dataset_writer_uses_stable_session_timestamp() -> None:
     second_time = influx.write_batches[1][0]["time"]
     assert second_time == first_time
     assert len(influx.points) == 3
+
+
+def test_compact_intraday_sessions_keep_chronological_order() -> None:
+    database, _postgres, influx = _database()
+    created_at = datetime(2026, 2, 1, tzinfo=UTC)
+    bars = [
+        {
+            "session_id": session_id,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1_000.0,
+        }
+        for session_id in ("202608251000", "202608251030", "202608251100")
+    ]
+
+    database._write_dataset_bars("dataset-1", "600519", "30m", bars, created_at)
+
+    written = influx.write_batches[0]
+    assert [point["fields"]["session_id"] for point in written] == [
+        "202608251000",
+        "202608251030",
+        "202608251100",
+    ]
+    assert [point["time"] for point in written] == sorted(point["time"] for point in written)
+
+    influx.points.clear()
+    for session_id, stored_at in (
+        ("202608251000", datetime(2026, 2, 1, 0, 0, 3, tzinfo=UTC)),
+        ("202608251030", datetime(2026, 2, 1, 0, 0, 2, tzinfo=UTC)),
+        ("202608251100", datetime(2026, 2, 1, 0, 0, 1, tzinfo=UTC)),
+    ):
+        influx.points[
+            (
+                "market_bar",
+                (("dataset_id", "dataset-1"),),
+                stored_at,
+            )
+        ] = {
+            "measurement": "market_bar",
+            "tags": {"dataset_id": "dataset-1"},
+            "fields": {
+                "session_id": session_id,
+                "source_seq": 0,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 1_000.0,
+            },
+            "time": stored_at,
+        }
+
+    fetched = database._fetch_dataset_bars("dataset-1")
+
+    assert [bar["session_id"] for bar in fetched] == [
+        "202608251000",
+        "202608251030",
+        "202608251100",
+    ]
+
+
+def test_dataset_read_sorts_legacy_cached_sessions() -> None:
+    postgres = FakePostgres()
+    influx = FakeInflux()
+    redis = FakeRedis()
+    database = Database(
+        settings=StorageSettings(storage_backend="postgres", auto_migrate=False),
+        postgres=postgres,
+        redis_store=redis,  # type: ignore[arg-type]
+        influx=influx,
+    )
+    bars = [
+        {
+            "session_id": session_id,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1_000.0,
+        }
+        for session_id in ("202608251000", "202608251030", "202608251100")
+    ]
+    created = database.insert_dataset(
+        {
+            "symbol": "600519",
+            "title": "贵州茅台",
+            "timeframe": "30m",
+            "bars": bars,
+            "created_at": datetime(2026, 2, 1, tzinfo=UTC),
+        }
+    )
+    redis.cached = list(reversed(bars))
+
+    record = database.get_dataset(created["id"])
+
+    assert [bar["session_id"] for bar in record["bars"]] == [
+        "202608251000",
+        "202608251030",
+        "202608251100",
+    ]
 
 
 def test_database_delete_dataset_soft_deletes_metadata_and_cache() -> None:
