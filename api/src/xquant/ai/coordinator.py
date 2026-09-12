@@ -317,6 +317,9 @@ class MonitorManager:
                     "last_error": None,
                     "last_record": None,
                     "run_count": 0,
+                    "success_count": 0,
+                    "failure_count": 0,
+                    "skip_count": 0,
                     "new_bar_count": 0,
                 }
                 for target in self._targets
@@ -375,6 +378,9 @@ class MonitorManager:
                             "last_error": None,
                             "last_record": None,
                             "run_count": 0,
+                            "success_count": 0,
+                            "failure_count": 0,
+                            "skip_count": 0,
                             "new_bar_count": 0,
                         },
                     )
@@ -417,6 +423,16 @@ class MonitorManager:
         key = _target_key(target)
         lock = self._target_locks.setdefault(key, threading.Lock())
         if not lock.acquire(blocking=False):
+            with self._lock:
+                state = self._status.get(key)
+                if state is not None:
+                    state.update(
+                        {
+                            "status": "running",
+                            "last_status": "running",
+                            "skip_count": int(state.get("skip_count") or 0) + 1,
+                        }
+                    )
             return {"key": key, "status": "running", "skipped": True}
         with self._lock:
             state = self._status.setdefault(
@@ -430,6 +446,9 @@ class MonitorManager:
                     "last_error": None,
                     "last_record": None,
                     "run_count": 0,
+                    "success_count": 0,
+                    "failure_count": 0,
+                    "skip_count": 0,
                     "new_bar_count": 0,
                 },
             )
@@ -457,7 +476,13 @@ class MonitorManager:
                     )
                 if not has_new_bar:
                     with self._lock:
-                        state.update({"status": "idle", "last_status": "idle"})
+                        state.update(
+                            {
+                                "status": "idle",
+                                "last_status": "idle",
+                                "skip_count": int(state.get("skip_count") or 0) + 1,
+                            }
+                        )
                     return {"key": key, "status": "idle", "last_session": latest_session}
                 merged: dict[str, Any] = dict(payload)
                 target_analysis = target.get("analysis")
@@ -467,6 +492,7 @@ class MonitorManager:
                 item = result["items"][0]
                 record = item.get("record") or {}
                 with self._lock:
+                    succeeded = item["status"] == "ok"
                     state.update(
                         {
                             "status": item["status"],
@@ -474,6 +500,10 @@ class MonitorManager:
                             "last_error": item.get("error"),
                             "last_record": record,
                             "run_count": int(state.get("run_count") or 0) + 1,
+                            "success_count": int(state.get("success_count") or 0)
+                            + (1 if succeeded else 0),
+                            "failure_count": int(state.get("failure_count") or 0)
+                            + (0 if succeeded else 1),
                             "new_bar_count": int(state.get("new_bar_count") or 0)
                             + (1 if has_new_bar else 0),
                             "last_run_at": datetime.now(UTC).isoformat(),
@@ -508,6 +538,7 @@ class MonitorManager:
                             "last_status": "error",
                             "last_error": {"type": type(exc).__name__, "message": str(exc)},
                             "last_run_at": datetime.now(UTC).isoformat(),
+                            "failure_count": int(state.get("failure_count") or 0) + 1,
                         }
                     )
                 return {

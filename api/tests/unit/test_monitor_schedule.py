@@ -259,6 +259,7 @@ def test_monitor_start_accepts_and_normalizes_schedule() -> None:
 def test_poll_target_persists_analysis_record_with_dataset_id() -> None:
     db = _MonitorDb()
     manager = MonitorManager(db)
+    manager._targets = [{"dataset_id": "dataset-1"}]
     manager.batch.analyze = lambda *_args, **_kwargs: {
         "items": [
             {
@@ -274,6 +275,10 @@ def test_poll_target_persists_analysis_record_with_dataset_id() -> None:
     assert db.saved == [
         ({"status": "ok", "symbol": "600000"}, "dataset-1")
     ]
+    item = manager.status()["items"][0]
+    assert item["success_count"] == 1
+    assert item["failure_count"] == 0
+    assert item["skip_count"] == 0
 
 
 def test_poll_target_keeps_running_when_record_persistence_fails(caplog) -> None:
@@ -301,3 +306,21 @@ def test_poll_target_keeps_running_when_record_persistence_fails(caplog) -> None
     assert result["status"] == "ok"
     assert notifications == [{"status": "ok", "symbol": "600000"}]
     assert "保存盯盘分析记录失败" in caplog.text
+    assert manager._status["dataset:dataset-1"]["success_count"] == 1
+    assert manager._status["dataset:dataset-1"]["failure_count"] == 0
+
+
+def test_poll_target_counts_idle_checks_as_skips() -> None:
+    manager = MonitorManager(_MonitorDb())
+    manager.batch.analyze = lambda *_args, **_kwargs: {
+        "items": [{"status": "ok", "record": {"status": "ok"}}]
+    }
+
+    first = manager._poll_target({"dataset_id": "dataset-1"}, {})
+    second = manager._poll_target({"dataset_id": "dataset-1"}, {})
+
+    assert first["status"] == "ok"
+    assert second["status"] == "idle"
+    state = manager._status["dataset:dataset-1"]
+    assert state["success_count"] == 1
+    assert state["skip_count"] == 1

@@ -1,5 +1,7 @@
 import type {
   AIAnalysisRecord,
+  AIRecordDetailResponse,
+  AIRecordListResponse,
   BatchAnalyzeResponse,
   DatasetSummary,
   HealthSummary,
@@ -98,6 +100,32 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  listAIRecords: (params: { dataset_id?: string; limit?: number } = {}) => {
+    const search = new URLSearchParams({
+      limit: String(params.limit ?? 50),
+    });
+    if (params.dataset_id) search.set('dataset_id', params.dataset_id);
+    return apiRequest<AIRecordListResponse>(`/ai/records?${search.toString()}`).then(
+      (payload) => ({
+        items: payload.items.map((item) => ({
+          ...item,
+          action: item.action ?? item.decision_action ?? null,
+        })),
+      }),
+    );
+  },
+  getAIRecord: async (recordId: string) => {
+    const payload = await apiRequest<AIAnalysisRecord | AIRecordDetailResponse>(
+      `/ai/records/${encodeURIComponent(recordId)}`,
+    );
+    if (!('record' in payload)) return payload;
+    return {
+      ...payload.record,
+      id: payload.record.id ?? payload.record_id ?? payload.id ?? recordId,
+      dataset_id: payload.record.dataset_id ?? payload.dataset_id ?? undefined,
+      persisted_at: payload.record.persisted_at ?? payload.created_at ?? undefined,
+    };
+  },
   followupAI: (payload: Record<string, unknown>) =>
     apiRequest<{ status: string; answer: string }>('/ai/followup', {
       method: 'POST',

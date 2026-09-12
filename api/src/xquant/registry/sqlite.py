@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,23 @@ class Database:
                 last_synced_at TEXT,
                 bars_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS ai_analysis_records (
+                id TEXT PRIMARY KEY,
+                record_id TEXT NOT NULL,
+                dataset_id TEXT,
+                symbol TEXT,
+                timeframe TEXT,
+                status TEXT,
+                created_at TEXT NOT NULL,
+                duration_ms REAL,
+                decision_action TEXT,
+                confidence REAL,
+                record_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_records_created_at
+                ON ai_analysis_records (created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ai_analysis_records_dataset_created_at
+                ON ai_analysis_records (dataset_id, created_at DESC);
             """
         )
         columns = {
@@ -372,3 +391,178 @@ class Database:
         conn.commit()
         conn.close()
         return {"deleted": True, "id": dataset_id}
+
+    def save_analysis_record(
+        self,
+        record: dict[str, Any],
+        dataset_id: str | None = None,
+    ) -> dict[str, Any]:
+        persisted_id = str(uuid4())
+        stored_dataset_id = _record_dataset_id(record, dataset_id)
+        created_at = _record_created_at(record)
+        summary = _record_summary(
+            record,
+            persisted_id=persisted_id,
+            dataset_id=stored_dataset_id,
+            created_at=created_at,
+        )
+        stored_record = _sanitize_json(record)
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO ai_analysis_records
+            (id, record_id, dataset_id, symbol, timeframe, status, created_at,
+             duration_ms, decision_action, confidence, record_json)
+            VALUES
+            (:id, :record_id, :dataset_id, :symbol, :timeframe, :status, :created_at,
+             :duration_ms, :decision_action, :confidence, :record_json)
+            """,
+            {
+                **summary,
+                "record_json": json.dumps(
+                    stored_record,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            },
+        )
+        conn.commit()
+        conn.close()
+        return summary
+
+    def list_analysis_records(
+        self,
+        dataset_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        normalized_limit = _normalize_record_limit(limit)
+        conn = self._connect()
+        if dataset_id is not None:
+            rows = conn.execute(
+                """
+                SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
+                       duration_ms, decision_action, confidence
+                FROM ai_analysis_records
+                WHERE dataset_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (dataset_id, normalized_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
+                       duration_ms, decision_action, confidence
+                FROM ai_analysis_records
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_analysis_record(self, record_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT id, record_id, dataset_id, created_at, record_json
+            FROM ai_analysis_records
+            WHERE id = ?
+            """,
+            (record_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            raise KeyError(f"analysis record not found: {record_id}")
+        return {
+            "id": row["id"],
+            "record_id": row["record_id"],
+            "dataset_id": row["dataset_id"],
+            "created_at": row["created_at"],
+            "record": json.loads(row["record_json"]),
+        }
+
+
+def _normalize_record_limit(limit: int) -> int:
+    try:
+        parsed = int(limit)
+    except (TypeError, ValueError):
+        parsed = 50
+    return max(1, min(200, parsed))
+
+
+def _record_dataset_id(record: Mapping[str, Any], dataset_id: str | None) -> str | None:
+    if dataset_id is not None and str(dataset_id).strip():
+        return str(dataset_id)
+    snapshot = record.get("snapshot")
+    if isinstance(snapshot, Mapping) and snapshot.get("dataset_id"):
+        return str(snapshot["dataset_id"])
+    value = record.get("dataset_id")
+    return str(value) if value not in (None, "") else None
+
+
+def _record_created_at(record: Mapping[str, Any]) -> str:
+    value = record.get("created_at")
+    if isinstance(value, datetime):
+        parsed = value if value.tzinfo else value.replace(tzinfo=UTC)
+        return parsed.isoformat()
+    text = str(value or "").strip()
+    return text or datetime.now(UTC).isoformat()
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _sanitize_json(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Mapping):
+        return {str(key): _sanitize_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_json(item) for item in value]
+    return value
+
+
+def _record_summary(
+    record: Mapping[str, Any],
+    *,
+    persisted_id: str,
+    dataset_id: str | None,
+    created_at: str,
+) -> dict[str, Any]:
+    stage2 = record.get("stage2_decision")
+    stage2_data = stage2 if isinstance(stage2, Mapping) else {}
+    decision = stage2_data.get("decision")
+    decision_data = decision if isinstance(decision, Mapping) else stage2_data
+    if not decision_data:
+        fallback = record.get("decision")
+        decision_data = fallback if isinstance(fallback, Mapping) else {}
+    action = decision_data.get("action") or decision_data.get("order_type")
+    confidence = decision_data.get("confidence")
+    if confidence is None:
+        stage1 = record.get("stage1_diagnosis")
+        stage1_data = stage1 if isinstance(stage1, Mapping) else {}
+        confidence = stage1_data.get("confidence")
+    record_id = record.get("id")
+    return {
+        "id": persisted_id,
+        "record_id": str(record_id) if record_id not in (None, "") else "",
+        "dataset_id": dataset_id,
+        "symbol": record.get("symbol"),
+        "timeframe": record.get("timeframe"),
+        "status": record.get("status"),
+        "created_at": created_at,
+        "duration_ms": _coerce_float(record.get("duration_ms")),
+        "decision_action": str(action).upper() if action not in (None, "") else None,
+        "confidence": _coerce_float(confidence),
+    }

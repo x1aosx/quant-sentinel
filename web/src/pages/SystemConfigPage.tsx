@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
+  CalendarClock,
   Check,
   Plus,
   RefreshCcw,
@@ -12,8 +13,21 @@ import {
   Wifi,
 } from 'lucide-react';
 import { api } from '../api/client';
-import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
-import type { MonitorTarget, SystemConfig } from '../types';
+import type {
+  DatasetSummary,
+  MonitorSchedule,
+  MonitorTarget,
+  SystemConfig,
+} from '../types';
+
+const DEFAULT_MONITOR_SCHEDULE: MonitorSchedule = {
+  mode: 'always',
+  timezone: 'Asia/Shanghai',
+  enabled: true,
+  weekdays: [1, 2, 3, 4, 5],
+  custom_start: '09:30',
+  custom_end: '15:00',
+};
 
 const EMPTY_TARGET: MonitorTarget = {
   symbol: '',
@@ -27,16 +41,56 @@ const EMPTY_TARGET: MonitorTarget = {
   },
 };
 
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 7, label: '周日' },
+];
+
+function targetFromDataset(dataset: DatasetSummary): MonitorTarget {
+  return {
+    dataset_id: dataset.id,
+    symbol: dataset.symbol,
+    timeframe: dataset.timeframe,
+    source: dataset.source ?? dataset.source_provider ?? '',
+    enabled: true,
+    analysis: {
+      analysis_bar_count: 120,
+      decision_stance: 'balanced',
+      enable_next_bar_prediction: true,
+    },
+  };
+}
+
 export function SystemConfigPage() {
   const queryClient = useQueryClient();
   const configQuery = useQuery({ queryKey: ['system-config'], queryFn: api.getSystemConfig });
+  const datasetQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
   const [form, setForm] = useState<SystemConfig | null>(null);
+  const [watchlistDatasetId, setWatchlistDatasetId] = useState('');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
 
   useEffect(() => {
-    if (configQuery.data) setForm(configQuery.data);
+    if (configQuery.data) {
+      setForm({
+        ...configQuery.data,
+        monitor_schedule: configQuery.data.monitor_schedule ?? DEFAULT_MONITOR_SCHEDULE,
+      });
+    }
   }, [configQuery.data]);
+
+  useEffect(() => {
+    if (!datasets.length) return;
+    if (!watchlistDatasetId || !datasets.some((dataset) => dataset.id === watchlistDatasetId)) {
+      setWatchlistDatasetId(datasets[0].id);
+    }
+  }, [datasets, watchlistDatasetId]);
 
   const save = useMutation({
     mutationFn: (value: SystemConfig) => api.saveSystemConfig(value),
@@ -80,6 +134,11 @@ export function SystemConfigPage() {
     setForm({ ...form, provider: { ...form.provider, ...patch } });
   const updateAnalysis = (patch: Partial<SystemConfig['analysis']>) =>
     setForm({ ...form, analysis: { ...form.analysis, ...patch } });
+  const updateSchedule = (patch: Partial<MonitorSchedule>) =>
+    setForm({
+      ...form,
+      monitor_schedule: { ...form.monitor_schedule, ...patch },
+    });
   const updateFeishu = (patch: Partial<SystemConfig['feishu']>) =>
     setForm({ ...form, feishu: { ...form.feishu, ...patch } });
   const updateTarget = (index: number, patch: Partial<MonitorTarget>) => {
@@ -87,6 +146,36 @@ export function SystemConfigPage() {
       targetIndex === index ? { ...target, ...patch } : target,
     );
     setForm({ ...form, monitor_watchlist });
+  };
+  const toggleScheduleWeekday = (weekday: number) => {
+    const selected = form.monitor_schedule.weekdays.includes(weekday);
+    const weekdays = selected
+      ? form.monitor_schedule.weekdays.filter((item) => item !== weekday)
+      : [...form.monitor_schedule.weekdays, weekday].sort((left, right) => left - right);
+    if (weekdays.length) updateSchedule({ weekdays });
+  };
+  const addDatasetToWatchlist = () => {
+    const dataset = datasets.find((item) => item.id === watchlistDatasetId);
+    if (!dataset) return;
+    if (form.monitor_watchlist.some((target) => target.dataset_id === dataset.id)) {
+      setNotice(`数据集已在默认监控列表中：${dataset.symbol} ${dataset.timeframe}`);
+      return;
+    }
+    setForm({
+      ...form,
+      monitor_watchlist: [...form.monitor_watchlist, targetFromDataset(dataset)],
+    });
+    setNotice(`已加入默认监控列表：${dataset.title || dataset.symbol} ${dataset.timeframe}`);
+  };
+  const addCustomTarget = () => {
+    setForm({
+      ...form,
+      monitor_watchlist: [
+        ...form.monitor_watchlist,
+        { ...EMPTY_TARGET, analysis: { ...EMPTY_TARGET.analysis } },
+      ],
+    });
+    setNotice('已添加自定义监控标的');
   };
 
   return (
@@ -199,6 +288,96 @@ export function SystemConfigPage() {
               代理同时用于模型请求和飞书通知；远程行情请求沿用系统网络环境。
             </p>
           </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="section-title">
+          <CalendarClock size={15} />
+          实时盯盘调度
+          <span className={form.monitor_schedule.enabled ? 'badge badge-ok' : 'badge badge-neutral'}>
+            {form.monitor_schedule.enabled ? '时段约束已启用' : '全天运行'}
+          </span>
+        </div>
+        <div className="monitor-schedule-fields">
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={form.monitor_schedule.enabled}
+              onChange={(event) => updateSchedule({ enabled: event.target.checked })}
+            />
+            启用时段约束
+          </label>
+          <div className="field">
+            <label htmlFor="config-monitor-mode">调度模式</label>
+            <select
+              id="config-monitor-mode"
+              value={form.monitor_schedule.mode}
+              disabled={!form.monitor_schedule.enabled}
+              onChange={(event) =>
+                updateSchedule({ mode: event.target.value as MonitorSchedule['mode'] })
+              }
+            >
+              <option value="always">24小时</option>
+              <option value="a_share">A股交易时段</option>
+              <option value="custom">自定义</option>
+            </select>
+          </div>
+          {form.monitor_schedule.mode === 'custom' ? (
+            <>
+              <div className="field">
+                <label htmlFor="config-monitor-start">开始时间</label>
+                <input
+                  id="config-monitor-start"
+                  type="time"
+                  value={form.monitor_schedule.custom_start}
+                  disabled={!form.monitor_schedule.enabled}
+                  onChange={(event) => updateSchedule({ custom_start: event.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="config-monitor-end">结束时间</label>
+                <input
+                  id="config-monitor-end"
+                  type="time"
+                  value={form.monitor_schedule.custom_end}
+                  disabled={!form.monitor_schedule.enabled}
+                  onChange={(event) => updateSchedule({ custom_end: event.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="config-monitor-timezone">时区</label>
+                <input
+                  id="config-monitor-timezone"
+                  value={form.monitor_schedule.timezone}
+                  disabled={!form.monitor_schedule.enabled}
+                  onChange={(event) => updateSchedule({ timezone: event.target.value })}
+                  placeholder="Asia/Shanghai"
+                />
+              </div>
+              <div className="field monitor-weekdays">
+                <span>执行日</span>
+                <div className="weekday-picker">
+                  {WEEKDAY_OPTIONS.map((weekday) => (
+                    <label key={weekday.value} className="weekday-option">
+                      <input
+                        type="checkbox"
+                        checked={form.monitor_schedule.weekdays.includes(weekday.value)}
+                        disabled={!form.monitor_schedule.enabled}
+                        onChange={() => toggleScheduleWeekday(weekday.value)}
+                      />
+                      {weekday.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : null}
+          {form.monitor_schedule.mode === 'a_share' && form.monitor_schedule.enabled ? (
+            <div className="monitor-schedule-note">
+              Asia/Shanghai · 09:30-11:30、13:00-15:00 · 周一至周五
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -356,29 +535,49 @@ export function SystemConfigPage() {
 
       <div className="panel">
         <div className="section-title">
-          <ServerCog size={15} />
-          默认监控列表
-          <button
-            className="button"
-            onClick={() =>
-              setForm({
-                ...form,
-                monitor_watchlist: [...form.monitor_watchlist, { ...EMPTY_TARGET }],
-              })
-            }
+          <div className="section-title-main">
+            <ServerCog size={15} />
+            默认监控列表
+            <span className="tag">{form.monitor_watchlist.length} 个数据集</span>
+          </div>
+        </div>
+        <div className="monitor-add-row config-watchlist-add">
+          <select
+            aria-label="选择要加入默认监控列表的数据集"
+            value={watchlistDatasetId}
+            onChange={(event) => setWatchlistDatasetId(event.target.value)}
           >
-            <Plus size={14} />
-            添加标的
-          </button>
+            {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.title || dataset.symbol} · {dataset.symbol} · {dataset.timeframe}
+              </option>
+            ))}
+          </select>
+          <div className="row">
+            <button
+              className="button"
+              onClick={addDatasetToWatchlist}
+              disabled={!watchlistDatasetId}
+            >
+              <Plus size={14} />
+              加入数据集
+            </button>
+            <button className="button" onClick={addCustomTarget}>
+              <Plus size={14} />
+              自定义标的
+            </button>
+          </div>
         </div>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th>启用</th>
-                <th>数据源</th>
+                <th>数据集</th>
                 <th>标的</th>
                 <th>周期</th>
+                <th>来源</th>
                 <th>K线数</th>
                 <th />
               </tr>
@@ -386,90 +585,118 @@ export function SystemConfigPage() {
             <tbody>
               {form.monitor_watchlist.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
-                    <div className="empty">尚未配置默认监控标的。</div>
+                  <td colSpan={7}>
+                    <div className="empty">请从数据集选择器加入默认监控项。</div>
                   </td>
                 </tr>
               ) : (
-                form.monitor_watchlist.map((target, index) => (
-                  <tr key={`watchlist-${index}`}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={target.enabled}
-                        onChange={(event) => updateTarget(index, { enabled: event.target.checked })}
-                      />
-                    </td>
-                    <td>
-                      <select
-                        value={target.source}
-                        onChange={(event) => updateTarget(index, { source: event.target.value })}
-                      >
-                        <option value="yfinance">YFinance</option>
-                        <option value="akshare">AkShare</option>
-                        <option value="tradingview">TradingView</option>
-                        <option value="mt5">MT5</option>
-                      </select>
-                      {target.source === 'tradingview' ? (
-                        <TradingViewExchangeSelect
-                          value={target.exchange ?? ''}
-                          onChange={(value) => updateTarget(index, { exchange: value })}
-                          ariaLabel="交易所"
+                form.monitor_watchlist.map((target, index) => {
+                  const dataset = datasets.find((item) => item.id === target.dataset_id);
+                  return (
+                    <tr key={target.dataset_id || `legacy-${index}`}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={target.enabled}
+                          onChange={(event) =>
+                            updateTarget(index, { enabled: event.target.checked })
+                          }
                         />
-                      ) : null}
-                    </td>
-                    <td>
-                      <input
-                        value={target.symbol}
-                        onChange={(event) => updateTarget(index, { symbol: event.target.value })}
-                        placeholder="GC=F / 600519"
-                      />
-                    </td>
-                    <td>
-                      <select
-                        value={target.timeframe}
-                        onChange={(event) => updateTarget(index, { timeframe: event.target.value })}
-                      >
-                        {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map((timeframe) => (
-                          <option key={timeframe} value={timeframe}>
-                            {timeframe}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        min="60"
-                        max="1000"
-                        value={target.analysis?.analysis_bar_count ?? 120}
-                        onChange={(event) =>
-                          updateTarget(index, {
-                            analysis: {
-                              ...target.analysis,
-                              analysis_bar_count: Number(event.target.value) || 120,
-                            },
-                          })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <button
-                        className="button button-danger"
-                        onClick={() =>
-                          setForm({
-                            ...form,
-                            monitor_watchlist: form.monitor_watchlist.filter(
-                              (_, targetIndex) => targetIndex !== index,
-                            ),
-                          })
-                        }
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td>
+                        {dataset ? (
+                          <div className="stack compact">
+                            <strong>{dataset.title || dataset.symbol}</strong>
+                            <span className="code dataset-id">{dataset.id}</span>
+                          </div>
+                        ) : (
+                          <span className="badge badge-warn">未绑定数据集</span>
+                        )}
+                      </td>
+                      <td>
+                        {dataset ? (
+                          target.symbol || '--'
+                        ) : (
+                          <input
+                            value={target.symbol}
+                            onChange={(event) =>
+                              updateTarget(index, { symbol: event.target.value })
+                            }
+                            placeholder="XAUUSD / 600519"
+                          />
+                        )}
+                      </td>
+                      <td>
+                        {dataset ? (
+                          target.timeframe || '--'
+                        ) : (
+                          <select
+                            value={target.timeframe}
+                            onChange={(event) =>
+                              updateTarget(index, { timeframe: event.target.value })
+                            }
+                          >
+                            {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map(
+                              (timeframe) => (
+                                <option key={timeframe} value={timeframe}>
+                                  {timeframe}
+                                </option>
+                              ),
+                            )}
+                          </select>
+                        )}
+                      </td>
+                      <td>
+                        {dataset ? (
+                          dataset.source ?? target.source ?? '--'
+                        ) : (
+                          <select
+                            value={target.source}
+                            onChange={(event) =>
+                              updateTarget(index, { source: event.target.value })
+                            }
+                          >
+                            <option value="yfinance">YFinance</option>
+                            <option value="akshare">AkShare</option>
+                            <option value="tradingview">TradingView</option>
+                            <option value="mt5">MT5</option>
+                          </select>
+                        )}
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="60"
+                          max="1000"
+                          value={target.analysis?.analysis_bar_count ?? 120}
+                          onChange={(event) =>
+                            updateTarget(index, {
+                              analysis: {
+                                ...target.analysis,
+                                analysis_bar_count: Number(event.target.value) || 120,
+                              },
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <button
+                          className="button button-danger"
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              monitor_watchlist: form.monitor_watchlist.filter(
+                                (_, targetIndex) => targetIndex !== index,
+                              ),
+                            })
+                          }
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

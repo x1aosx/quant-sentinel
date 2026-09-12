@@ -320,11 +320,15 @@ export interface AIProviderConfig {
 
 export interface AIAnalysisRecord {
   id: string;
+  dataset_id?: string;
+  persisted_at?: string;
   status: string;
   symbol: string;
   timeframe: string;
   created_at?: string;
   duration_ms?: number;
+  action?: string;
+  confidence?: number;
   snapshot: Record<string, any>;
   stage1_messages: Array<{ role: string; content: string }>;
   stage2_messages: Array<{ role: string; content: string }>;
@@ -356,6 +360,31 @@ export interface AIAnalysisRecord {
     edges: Array<{ from: string; to: string }>;
   };
   exception?: Record<string, any> | null;
+}
+
+export interface AIRecordSummary {
+  id: string;
+  dataset_id?: string | null;
+  symbol: string;
+  timeframe: string;
+  status: string;
+  created_at?: string | null;
+  duration_ms?: number | null;
+  action?: string | null;
+  confidence?: number | null;
+  decision_action?: string | null;
+}
+
+export interface AIRecordListResponse {
+  items: AIRecordSummary[];
+}
+
+export interface AIRecordDetailResponse {
+  id?: string;
+  record_id?: string;
+  dataset_id?: string | null;
+  created_at?: string | null;
+  record: AIAnalysisRecord;
 }
 
 export interface AnalysisSettingsPayload {
@@ -406,9 +435,21 @@ export interface MonitorTarget {
   analysis?: Partial<AnalysisSettingsPayload>;
 }
 
+export type MonitorScheduleMode = 'always' | 'a_share' | 'custom';
+
+export interface MonitorSchedule {
+  mode: MonitorScheduleMode;
+  timezone: string;
+  enabled: boolean;
+  weekdays: number[];
+  custom_start: string;
+  custom_end: string;
+}
+
 export interface SystemConfig {
   provider: ProviderConfig;
   analysis: AnalysisSettingsPayload;
+  monitor_schedule: MonitorSchedule;
   feishu: FeishuConfig;
   monitor_watchlist: MonitorTarget[];
 }
@@ -418,10 +459,19 @@ export interface MonitorTargetStatus {
   status: string;
   last_session?: string | null;
   last_run_at?: string | null;
+  last_check_at?: string | null;
+  next_check_at?: string | null;
   last_status?: string | null;
   last_error?: Record<string, any> | null;
   last_record?: AIAnalysisRecord | null;
   run_count: number;
+  success_count?: number;
+  failure_count?: number;
+  skip_count?: number;
+  last_decision?: string | null;
+  last_action?: string | null;
+  last_confidence?: number | null;
+  schedule_active_now?: boolean;
   new_bar_count: number;
 }
 
@@ -430,6 +480,11 @@ export interface MonitorStatus {
   interval_seconds: number;
   auto_notify: boolean;
   last_cycle_at?: string | null;
+  schedule?: MonitorSchedule;
+  schedule_active_now?: boolean;
+  schedule_label?: string;
+  next_check_at?: string | null;
+  current_time?: string | null;
   items: MonitorTargetStatus[];
 }
 
