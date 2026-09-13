@@ -48,6 +48,16 @@ import {
   probabilityRows,
   responseText,
 } from '../utils/aiRecord';
+import {
+  beginAIAnalysisRequest,
+  finishAIAnalysisRequest,
+  hasActiveAIAnalysisRequest,
+  isAIAnalysisPageUnloading,
+  updateAIAnalysisSession,
+  useAIAnalysisSession,
+  type AIAnalysisMode,
+  type AIAnalysisViewKey,
+} from '../state/aiAnalysisSession';
 
 const VIEWS = [
   { key: 'live', label: '实时分析', icon: Activity },
@@ -59,7 +69,7 @@ const VIEWS = [
   { key: 'debug', label: '调试', icon: ShieldAlert },
 ] as const;
 
-type ViewKey = (typeof VIEWS)[number]['key'];
+type ViewKey = AIAnalysisViewKey;
 
 const DEFAULT_MONITOR_SCHEDULE: MonitorSchedule = {
   mode: 'always',
@@ -165,21 +175,25 @@ function decisionBadge(action: string) {
 
 export function AIAnalysisPage() {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'single' | 'monitor'>('single');
-  const [view, setView] = useState<ViewKey>('live');
-  const [datasetId, setDatasetId] = useState('');
+  const session = useAIAnalysisSession();
+  const {
+    mode,
+    view,
+    datasetId,
+    record,
+    streamLog,
+    running,
+    notice,
+    error,
+    question,
+    lastBatch,
+  } = session;
   const [importSymbol, setImportSymbol] = useState('GC=F');
   const [importTimeframe, setImportTimeframe] = useState('1d');
   const [importSource, setImportSource] = useState<
     'yfinance' | 'akshare' | 'tradingview' | 'mt5'
   >('yfinance');
   const [importExchange, setImportExchange] = useState('');
-  const [record, setRecord] = useState<AIAnalysisRecord | null>(null);
-  const [streamLog, setStreamLog] = useState('');
-  const [running, setRunning] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
-  const [question, setQuestion] = useState('');
   const [watchlist, setWatchlist] = useState<MonitorTarget[]>([]);
   const [watchlistDatasetId, setWatchlistDatasetId] = useState('');
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null);
@@ -188,9 +202,29 @@ export function AIAnalysisPage() {
   );
   const [scheduleReady, setScheduleReady] = useState(false);
   const [loadingRecordId, setLoadingRecordId] = useState('');
-  const [lastBatch, setLastBatch] = useState<BatchAnalyzeResponse | null>(null);
   const watchlistSnapshot = useRef('');
   const watchlistHydrated = useRef(false);
+
+  const setMode = (value: AIAnalysisMode) =>
+    updateAIAnalysisSession({ mode: value });
+  const setView = (value: ViewKey) => updateAIAnalysisSession({ view: value });
+  const setDatasetId = (value: string) =>
+    updateAIAnalysisSession({ datasetId: value });
+  const setRecord = (value: AIAnalysisRecord | null) =>
+    updateAIAnalysisSession({ record: value });
+  const setStreamLog = (value: string | ((current: string) => string)) =>
+    updateAIAnalysisSession((current) => ({
+      streamLog: typeof value === 'function' ? value(current.streamLog) : value,
+    }));
+  const setRunning = (value: boolean) =>
+    updateAIAnalysisSession({ running: value });
+  const setNotice = (value: string) =>
+    updateAIAnalysisSession({ notice: value });
+  const setError = (value: string) => updateAIAnalysisSession({ error: value });
+  const setQuestion = (value: string) =>
+    updateAIAnalysisSession({ question: value });
+  const setLastBatch = (value: BatchAnalyzeResponse | null) =>
+    updateAIAnalysisSession({ lastBatch: value });
 
   const configQuery = useQuery({ queryKey: ['system-config'], queryFn: api.getSystemConfig });
   const datasetQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
@@ -218,7 +252,10 @@ export function AIAnalysisPage() {
   });
 
   useEffect(() => {
-    if (!datasetId && datasets.length) setDatasetId(datasets[0].id);
+    if (!datasets.length) return;
+    if (!datasetId || !datasets.some((dataset) => dataset.id === datasetId)) {
+      setDatasetId(datasets[0].id);
+    }
   }, [datasetId, datasets]);
 
   useEffect(() => {
@@ -277,48 +314,82 @@ export function AIAnalysisPage() {
     onError: (reason: Error) => setError(reason.message),
   });
 
-  const runAnalysis = async () => {
+  const runAnalysis = async ({ resume = false }: { resume?: boolean } = {}) => {
     if (!datasetId) return;
+    const controller = beginAIAnalysisRequest();
+    if (!controller) return;
     setRunning(true);
-    setRecord(null);
-    setStreamLog('正在连接分析服务...\n');
+    if (resume) {
+      setStreamLog((current) => `${current}[系统] 页面刷新后正在恢复实时分析...\n`);
+      setNotice('正在恢复实时分析');
+    } else {
+      setRecord(null);
+      setStreamLog('正在连接分析服务...\n');
+      setNotice('');
+    }
     setError('');
-    setNotice('');
-    setMode('single');
-    setView('live');
+    if (!resume) {
+      setMode('single');
+      setView('live');
+    }
     try {
-      const result = await streamAIAnalysis({ dataset_id: datasetId }, (event) => {
-        if (event.type === 'snapshot') {
-          setStreamLog((current) => `${current}快照 ${event.symbol} ${event.timeframe} ${event.bar_count} 根\n`);
-        } else if (
-          ['log', 'stage1', 'stage1_reasoning', 'stage2', 'stage2_reasoning'].includes(event.type)
-        ) {
-          const labels: Record<string, string> = {
-            log: '系统',
-            stage1: '阶段一正文',
-            stage1_reasoning: '阶段一推理',
-            stage2: '阶段二正文',
-            stage2_reasoning: '阶段二推理',
-          };
-          setStreamLog((current) => `${current}[${labels[event.type] ?? event.type}] ${event.text ?? ''}`);
-        } else if (event.type === 'error') {
-          const message = event.message ?? '分析失败';
-          setError(message);
-          setStreamLog((current) => `${current}[错误] ${message}\n`);
-        } else if (event.type === 'done') {
-          setStreamLog((current) => `${current}[系统] 分析流程已结束。\n`);
-        }
-      });
+      const result = await streamAIAnalysis(
+        { dataset_id: datasetId },
+        (event) => {
+          if (event.type === 'snapshot') {
+            setStreamLog(
+              (current) =>
+                `${current}快照 ${event.symbol} ${event.timeframe} ${event.bar_count} 根\n`,
+            );
+          } else if (
+            ['log', 'stage1', 'stage1_reasoning', 'stage2', 'stage2_reasoning'].includes(
+              event.type,
+            )
+          ) {
+            const labels: Record<string, string> = {
+              log: '系统',
+              stage1: '阶段一正文',
+              stage1_reasoning: '阶段一推理',
+              stage2: '阶段二正文',
+              stage2_reasoning: '阶段二推理',
+            };
+            setStreamLog(
+              (current) =>
+                `${current}[${labels[event.type] ?? event.type}] ${event.text ?? ''}`,
+            );
+          } else if (event.type === 'error') {
+            const message = event.message ?? '分析失败';
+            setError(message);
+            setStreamLog((current) => `${current}[错误] ${message}\n`);
+          } else if (event.type === 'done') {
+            setStreamLog((current) => `${current}[系统] 分析流程已结束。\n`);
+          }
+        },
+        controller.signal,
+      );
       setRecord(result);
       setNotice(result.status === 'ok' ? '分析完成' : '分析返回异常记录');
       void queryClient.invalidateQueries({ queryKey: ['ai-records'] });
       if (result.status !== 'ok') setView('debug');
     } catch (reason) {
+      if (
+        isAIAnalysisPageUnloading() ||
+        (reason instanceof DOMException && reason.name === 'AbortError')
+      ) {
+        return;
+      }
+      setNotice('');
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setRunning(false);
+      finishAIAnalysisRequest(controller);
+      if (!isAIAnalysisPageUnloading()) setRunning(false);
     }
   };
+
+  useEffect(() => {
+    if (!running || !datasetId || hasActiveAIAnalysisRequest()) return;
+    void runAnalysis({ resume: true });
+  }, [datasetId, running]);
 
   const followup = useMutation({
     mutationFn: () => api.followupAI({ record, question }),
