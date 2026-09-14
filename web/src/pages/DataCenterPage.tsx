@@ -63,6 +63,12 @@ function formatTimestamp(value?: string): string {
   });
 }
 
+function formatSessionDate(value?: string): string {
+  const formatted = formatSessionTime(value);
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(formatted);
+  return match?.[1] ?? formatted;
+}
+
 function formatRefreshTime(timestamp: number): string {
   if (!timestamp) return '尚未更新';
   const value = new Date(timestamp).toISOString();
@@ -364,14 +370,14 @@ export function DataCenterPage() {
         </span>
       </div>
 
-      <div className="panel">
+      <div className="panel dataset-sync-panel">
         <div className="section-title">
           <Globe size={15} />
           在线行情同步
           {lastSync ? <span className="tag">{syncStatusLabel(lastSync.sync_status)}</span> : null}
         </div>
-        <form className="upload-panel" onSubmit={handleSubmit}>
-          <div className="form-grid">
+        <form className="upload-panel dataset-sync-form" onSubmit={handleSubmit}>
+          <div className="form-grid dataset-sync-grid">
             <div className="field">
               <label htmlFor="sync-source">数据源</label>
               <select
@@ -453,7 +459,7 @@ export function DataCenterPage() {
               </div>
             ) : null}
           </div>
-          <div className="row" style={{ marginTop: 14 }}>
+          <div className="row dataset-sync-actions">
             <button
               className="button button-primary"
               type="submit"
@@ -462,7 +468,9 @@ export function DataCenterPage() {
               <RefreshCw size={14} />
               {syncingKey === 'form' ? '同步中...' : '同步行情'}
             </button>
-            <span className="muted">同步接口会拉取最新行情，并仅增量写入新增K线。</span>
+            <span className="muted dataset-sync-hint">
+              同步接口会拉取最新行情，并仅增量写入新增K线。
+            </span>
           </div>
         </form>
       </div>
@@ -479,7 +487,7 @@ export function DataCenterPage() {
       ) : null}
 
       {lastSync ? (
-        <div className="panel">
+        <div className="panel dataset-sync-summary">
           <div className="inline-meta">
             <div className="meta-item">
               <div className="label">新增</div>
@@ -505,7 +513,7 @@ export function DataCenterPage() {
         </div>
       ) : null}
 
-      <div className="panel">
+      <div className="panel dataset-list-panel">
         <div className="section-title">
           <div className="section-title-main">
             <Database size={15} />
@@ -549,7 +557,6 @@ export function DataCenterPage() {
                   <th scope="col">起始时间</th>
                   <th scope="col">结束时间</th>
                   <th scope="col">最后同步</th>
-                  <th scope="col">dataset_id</th>
                   <th scope="col">启用同步</th>
                   <th scope="col">操作</th>
                 </tr>
@@ -599,13 +606,10 @@ export function DataCenterPage() {
                             ) : null}
                           </td>
                           <td>{dataset.bar_count}</td>
-                          <td>{formatSessionTime(dataset.first_session)}</td>
-                          <td>{formatSessionTime(dataset.last_session)}</td>
+                          <td>{formatSessionDate(dataset.first_session)}</td>
+                          <td>{formatSessionDate(dataset.last_session)}</td>
                           <td className="muted">
                             {formatTimestamp(dataset.synced_at ?? dataset.last_synced_at)}
-                          </td>
-                          <td className="code dataset-id" title={dataset.id}>
-                            {dataset.id}
                           </td>
                           {isFirstInGroup ? (
                             <td

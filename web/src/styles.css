@@ -575,6 +575,198 @@ a {
   width: 100%;
 }
 
+.dataset-sync-panel {
+  min-width: 0;
+}
+
+.dataset-sync-panel > .section-title {
+  margin-bottom: 12px;
+}
+
+form.dataset-sync-form {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.form-grid.dataset-sync-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px 14px;
+}
+
+.dataset-sync-grid > .field {
+  min-width: 0;
+  gap: 5px;
+}
+
+.dataset-sync-grid > .field:first-child {
+  grid-column: span 2;
+}
+
+.dataset-sync-grid > .field:nth-child(2) {
+  grid-column: span 4;
+}
+
+.dataset-sync-grid > .field:nth-child(n + 3) {
+  grid-column: span 2;
+}
+
+.dataset-sync-grid .field input,
+.dataset-sync-grid .field select {
+  min-height: 36px;
+  padding: 7px 9px;
+}
+
+.row.dataset-sync-actions {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.dataset-sync-hint {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dataset-sync-summary {
+  padding: 14px 18px;
+}
+
+.dataset-sync-summary .inline-meta {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+
+.dataset-sync-summary .meta-item {
+  min-width: 0;
+  padding-left: 9px;
+}
+
+.dataset-sync-summary .value {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.dataset-list-panel {
+  min-width: 0;
+}
+
+.dataset-list-panel > .section-title {
+  margin-bottom: 12px;
+}
+
+.dataset-list-panel .section-title-actions {
+  min-height: 34px;
+  align-items: center;
+}
+
+.dataset-list-panel .section-title-actions > .muted {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dataset-list-panel .dataset-table {
+  min-width: 1120px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dataset-list-panel .dataset-table td {
+  padding: 10px 11px;
+  vertical-align: middle;
+}
+
+.dataset-list-panel .dataset-sync-cell {
+  width: 168px;
+  min-width: 168px;
+  padding: 10px;
+}
+
+.dataset-list-panel .dataset-sync-control {
+  min-width: 146px;
+  gap: 6px;
+}
+
+.dataset-list-panel .dataset-sync-control .checkbox-row {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.dataset-list-panel .dataset-sync-control select {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.dataset-list-panel .dataset-table th:last-child,
+.dataset-list-panel .dataset-table td:last-child {
+  width: 190px;
+  min-width: 190px;
+}
+
+.dataset-list-panel .dataset-actions {
+  min-width: 176px;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.dataset-list-panel .dataset-actions .button {
+  min-width: 90px;
+  white-space: nowrap;
+}
+
+.dataset-list-panel .dataset-actions .button-danger {
+  min-width: 70px;
+}
+
+@media (max-width: 1180px) {
+  .form-grid.dataset-sync-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dataset-sync-grid > .field,
+  .dataset-sync-grid > .field:first-child,
+  .dataset-sync-grid > .field:nth-child(2),
+  .dataset-sync-grid > .field:nth-child(n + 3) {
+    grid-column: auto;
+  }
+
+  .dataset-sync-summary .inline-meta {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .form-grid.dataset-sync-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .row.dataset-sync-actions {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .dataset-sync-actions .button {
+    justify-self: start;
+  }
+
+  .dataset-sync-summary .inline-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dataset-list-panel .section-title-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .progress {
   width: 120px;
   height: 6px;
