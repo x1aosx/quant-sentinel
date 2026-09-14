@@ -48,6 +48,7 @@ import {
   probabilityRows,
   responseText,
 } from '../utils/aiRecord';
+import { formatTimeframeLabel } from '../utils/datasetDisplay';
 import {
   beginAIAnalysisRequest,
   finishAIAnalysisRequest,
@@ -120,6 +121,107 @@ function targetFromDataset(dataset: DatasetSummary): MonitorTarget {
 function monitorTargetKey(target: MonitorTarget) {
   if (target.dataset_id) return `dataset:${target.dataset_id}`;
   return `${target.source}:${target.symbol}:${target.timeframe}:${target.exchange ?? ''}`;
+}
+
+interface DatasetProductGroup {
+  key: string;
+  symbol: string;
+  title: string;
+  datasets: DatasetSummary[];
+}
+
+interface MonitorProductEntry {
+  index: number;
+  target: MonitorTarget;
+  dataset?: DatasetSummary;
+}
+
+interface MonitorProductGroup {
+  key: string;
+  symbol: string;
+  title: string;
+  entries: MonitorProductEntry[];
+}
+
+function normalizeProductSymbol(value: string) {
+  return value.trim().toUpperCase();
+}
+
+function groupDatasetsByProduct(datasets: DatasetSummary[]): DatasetProductGroup[] {
+  const groups: DatasetProductGroup[] = [];
+  const groupBySymbol = new Map<string, DatasetProductGroup>();
+
+  datasets.forEach((dataset) => {
+    const symbol = normalizeProductSymbol(dataset.symbol);
+    const key = symbol || `dataset:${dataset.id}`;
+    let group = groupBySymbol.get(key);
+    if (!group) {
+      group = {
+        key,
+        symbol: dataset.symbol,
+        title: dataset.title || '',
+        datasets: [],
+      };
+      groupBySymbol.set(key, group);
+      groups.push(group);
+    }
+    if (!group.title && dataset.title) group.title = dataset.title;
+    group.datasets.push(dataset);
+  });
+
+  return groups;
+}
+
+function groupWatchlistByProduct(
+  watchlist: MonitorTarget[],
+  datasets: DatasetSummary[],
+): MonitorProductGroup[] {
+  const datasetById = new Map(datasets.map((dataset) => [dataset.id, dataset]));
+  const groups: MonitorProductGroup[] = [];
+  const groupBySymbol = new Map<string, MonitorProductGroup>();
+
+  watchlist.forEach((target, index) => {
+    const dataset = target.dataset_id ? datasetById.get(target.dataset_id) : undefined;
+    const symbol = normalizeProductSymbol(target.symbol || dataset?.symbol || '');
+    const key = symbol
+      ? `symbol:${symbol}`
+      : `target:${monitorTargetKey(target)}:${index}`;
+    let group = groupBySymbol.get(key);
+    if (!group) {
+      group = {
+        key,
+        symbol: symbol || '未命名产品',
+        title: dataset?.title || symbol || '未命名产品',
+        entries: [],
+      };
+      groupBySymbol.set(key, group);
+      groups.push(group);
+    }
+    if (group.title === '未命名产品' && dataset?.title) group.title = dataset.title;
+    group.entries.push({ index, target, dataset });
+  });
+
+  return groups;
+}
+
+function productStatus(statuses: Array<MonitorTargetStatus | undefined>) {
+  const available = statuses.filter(
+    (status): status is MonitorTargetStatus => Boolean(status),
+  );
+  if (!available.length) return { label: '未运行', className: 'badge badge-neutral' };
+  if (available.some((status) => status.status === 'error' || status.last_status === 'error')) {
+    return { label: '异常', className: 'badge badge-danger' };
+  }
+  if (available.some((status) => status.status === 'running')) {
+    return { label: '运行中', className: 'badge badge-info' };
+  }
+  if (available.every((status) => status.status === 'idle')) {
+    return { label: '空闲', className: 'badge badge-neutral' };
+  }
+  if (available.some((status) => status.status === 'ok' || status.last_status === 'ok')) {
+    return { label: '已分析', className: 'badge badge-ok' };
+  }
+  return { label: '待运行', className: 'badge badge-warn' };
 }
 
 function formatDateTime(value?: string | null) {
@@ -514,6 +616,11 @@ export function AIAnalysisPage() {
   const supports = (snapshot?.support_resistance?.supports_only ?? []) as SrLevel[];
   const resistances = (snapshot?.support_resistance?.resistances ?? []) as SrLevel[];
   const monitorItems = monitorQuery.data?.items ?? [];
+  const datasetProducts = useMemo(() => groupDatasetsByProduct(datasets), [datasets]);
+  const monitorProducts = useMemo(
+    () => groupWatchlistByProduct(watchlist, datasets),
+    [datasets, watchlist],
+  );
   const nextBar = (record?.next_bar_prediction ??
     record?.stage2_decision?.next_bar_prediction ??
     {}) as Record<string, any>;
@@ -536,6 +643,15 @@ export function AIAnalysisPage() {
     setWatchlist((current) =>
       current.map((target, targetIndex) =>
         targetIndex === index ? { ...target, ...patch } : target,
+      ),
+    );
+  };
+
+  const updateProductEnabled = (entries: MonitorProductEntry[], enabled: boolean) => {
+    const indexes = new Set(entries.map((entry) => entry.index));
+    setWatchlist((current) =>
+      current.map((target, index) =>
+        indexes.has(index) ? { ...target, enabled } : target,
       ),
     );
   };
@@ -937,7 +1053,9 @@ export function AIAnalysisPage() {
             <section className="monitor-config-block">
               <div className="section-title compact-title">
                 <span>监控数据集</span>
-                <span className="muted">{watchlist.length} 个</span>
+                <span className="muted">
+                  {monitorProducts.length} 个产品 / {watchlist.length} 个周期
+                </span>
               </div>
               <div className="monitor-add-row">
                 <select
@@ -946,10 +1064,18 @@ export function AIAnalysisPage() {
                   onChange={(event) => setWatchlistDatasetId(event.target.value)}
                 >
                   {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-                  {datasets.map((dataset) => (
-                    <option key={dataset.id} value={dataset.id}>
-                      {dataset.title || dataset.symbol} · {dataset.symbol} · {dataset.timeframe}
-                    </option>
+                  {datasetProducts.map((product) => (
+                    <optgroup
+                      key={product.key}
+                      label={`${product.title || product.symbol} · ${product.symbol}`}
+                    >
+                      {product.datasets.map((dataset) => (
+                        <option key={dataset.id} value={dataset.id}>
+                          {formatTimeframeLabel(dataset.timeframe)} · {dataset.timeframe} ·{' '}
+                          {dataset.bar_count} 根
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
                 <div className="row">
@@ -1100,245 +1226,307 @@ export function AIAnalysisPage() {
             {watchlist.length === 0 ? (
               <div className="empty">从上方数据集选择器加入监控项后开始盯盘。</div>
             ) : (
-              watchlist.map((target, index) => {
-                const targetKey = monitorTargetKey(target);
-                const status = monitorItems.find(
-                  (item) => monitorTargetKey(item.target) === targetKey,
+              monitorProducts.map((product) => {
+                const statuses = product.entries.map((entry) =>
+                  monitorItems.find(
+                    (item) => monitorTargetKey(item.target) === monitorTargetKey(entry.target),
+                  ),
                 );
-                const dataset = datasets.find((item) => item.id === target.dataset_id);
-                const itemRecord = status?.last_record;
-                const itemAction =
-                  status?.last_action ?? (itemRecord ? actionOf(itemRecord) : '--');
-                const itemConfidence =
-                  status?.last_confidence ??
-                  (itemRecord ? confidenceOf(itemRecord) : null);
-                const allowed =
-                  status?.schedule_active_now ??
-                  monitorQuery.data?.schedule_active_now ??
-                  false;
-                const expanded = expandedMonitor === targetKey;
-                const errorText = monitorErrorText(status?.last_error);
+                const enabledCount = product.entries.filter(
+                  (entry) => entry.target.enabled,
+                ).length;
+                const allEnabled = enabledCount === product.entries.length;
+                const someEnabled = enabledCount > 0 && !allEnabled;
+                const aggregateStatus = productStatus(statuses);
+
                 return (
-                  <div
-                    className={expanded ? 'monitor-status-item expanded' : 'monitor-status-item'}
-                    key={targetKey}
-                  >
-                    <div
-                      className="monitor-status-row"
-                      tabIndex={0}
-                      onClick={() => chooseMonitorRecord(target, status)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          chooseMonitorRecord(target, status);
-                        }
-                      }}
-                    >
-                      <div className="monitor-status-target">
+                  <div className="monitor-status-item monitor-product-group" key={product.key}>
+                    <div className="monitor-product-header">
+                      <div className="monitor-product-summary">
                         <input
                           type="checkbox"
-                          checked={target.enabled}
-                          onClick={(event) => event.stopPropagation()}
+                          checked={allEnabled}
+                          ref={(node) => {
+                            if (node) node.indeterminate = someEnabled;
+                          }}
                           onChange={(event) =>
-                            updateTarget(index, { enabled: event.target.checked })
+                            updateProductEnabled(product.entries, event.target.checked)
                           }
-                          aria-label={`${dataset?.symbol ?? target.symbol} 启用状态`}
+                          aria-label={`${product.title} 全部周期启用状态`}
                         />
                         <div>
-                          <strong>{dataset?.title || target.symbol}</strong>
+                          <strong>{product.title}</strong>
                           <span>
-                            {target.symbol} · {target.timeframe}
-                            {dataset?.source ? ` · ${dataset.source}` : ''}
+                            {product.symbol} · {product.entries.length} 个周期
                           </span>
                         </div>
                       </div>
-                      <div className="monitor-status-cell">
-                        <span className="label">状态</span>
-                        <span
-                          className={
-                            status?.status === 'error'
-                              ? 'badge badge-danger'
-                              : status?.status === 'ok'
-                                ? 'badge badge-ok'
-                                : 'badge badge-neutral'
-                          }
-                        >
-                          {status?.status ?? '未运行'}
+                      <div className="monitor-product-meta">
+                        <span className="tag">
+                          已启用 {enabledCount}/{product.entries.length}
                         </span>
+                        <span className={aggregateStatus.className}>{aggregateStatus.label}</span>
                       </div>
-                      <div className="monitor-status-cell">
-                        <span className="label">允许时段</span>
-                        <span className={allowed ? 'badge badge-ok' : 'badge badge-warn'}>
-                          {allowed ? '是' : '否'}
-                        </span>
-                      </div>
-                      <div className="monitor-status-cell">
-                        <span className="label">下次检查</span>
-                        <strong>
-                          {formatDateTime(
-                            status?.next_check_at ?? monitorQuery.data?.next_check_at,
-                          )}
-                        </strong>
-                      </div>
-                      <div className="monitor-status-cell">
-                        <span className="label">最近检查</span>
-                        <strong>
-                          {formatDateTime(status?.last_check_at ?? status?.last_run_at)}
-                        </strong>
-                      </div>
-                      <div className="monitor-status-cell">
-                        <span className="label">成功/失败/跳过</span>
-                        <strong>
-                          {statusCount(status, 'success_count')}/
-                          {statusCount(status, 'failure_count')}/
-                          {statusCount(status, 'skip_count')}
-                        </strong>
-                      </div>
-                      <div className="monitor-status-cell">
-                        <span className="label">决策</span>
-                        <strong>
-                          {itemAction}
-                          {itemConfidence !== null ? ` · ${Math.round(itemConfidence)}%` : ''}
-                        </strong>
-                      </div>
-                      {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                     </div>
-                    {expanded ? (
-                      <div className="monitor-status-detail">
-                        <div className="monitor-detail-grid">
-                          <div className="meta-item">
-                            <div className="label">数据集</div>
-                            <div className="value">
-                              {dataset
-                                ? `${dataset.title || dataset.symbol} · ${dataset.id}`
-                                : '旧配置项（未绑定数据集）'}
-                            </div>
-                          </div>
-                          <div className="meta-item">
-                            <div className="label">最近行情</div>
-                            <div className="value">{status?.last_session ?? '--'}</div>
-                          </div>
-                          <div className="meta-item">
-                            <div className="label">运行次数 / 新增 K 线</div>
-                            <div className="value">
-                              {status?.run_count ?? 0} / {status?.new_bar_count ?? 0}
-                            </div>
-                          </div>
-                          <div className="meta-item">
-                            <div className="label">最近决策</div>
-                            <div className="value">
-                              {itemAction}
-                              {itemConfidence !== null
-                                ? ` · ${Math.round(itemConfidence)}%`
-                                : ''}
-                            </div>
-                          </div>
-                          <div className="meta-item monitor-detail-error">
-                            <div className="label">最近错误</div>
-                            <div className={errorText ? 'value error-text' : 'value'}>
-                              {errorText || '无'}
-                            </div>
-                          </div>
-                          <div className="meta-item">
-                            <div className="label">分析 K 线</div>
-                            <div className="value">
-                              <input
-                                type="number"
-                                min="60"
-                                max="1000"
-                                value={target.analysis?.analysis_bar_count ?? 120}
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) =>
-                                  updateTarget(index, {
-                                    analysis: {
-                                      ...target.analysis,
-                                      analysis_bar_count: Number(event.target.value) || 120,
-                                    },
-                                  })
+                    <div className="monitor-product-periods">
+                      {product.entries.map(({ target, index, dataset }) => {
+                        const targetKey = monitorTargetKey(target);
+                        const status = monitorItems.find(
+                          (item) => monitorTargetKey(item.target) === targetKey,
+                        );
+                        const itemRecord = status?.last_record;
+                        const itemAction =
+                          status?.last_action ?? (itemRecord ? actionOf(itemRecord) : '--');
+                        const itemConfidence =
+                          status?.last_confidence ??
+                          (itemRecord ? confidenceOf(itemRecord) : null);
+                        const allowed =
+                          status?.schedule_active_now ??
+                          monitorQuery.data?.schedule_active_now ??
+                          false;
+                        const expanded = expandedMonitor === targetKey;
+                        const errorText = monitorErrorText(status?.last_error);
+
+                        return (
+                          <div key={targetKey}>
+                            <div
+                              className="monitor-status-row monitor-period-row"
+                              tabIndex={0}
+                              onClick={() => chooseMonitorRecord(target, status)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  chooseMonitorRecord(target, status);
                                 }
-                              />
-                            </div>
-                          </div>
-                          {!target.dataset_id ? (
-                            <>
-                              <div className="meta-item">
-                                <div className="label">标的代码</div>
-                                <input
-                                  value={target.symbol}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onChange={(event) =>
-                                    updateTarget(index, { symbol: event.target.value })
-                                  }
-                                  placeholder="XAUUSD / 600519"
-                                />
-                              </div>
-                              <div className="meta-item">
-                                <div className="label">数据源</div>
-                                <select
-                                  value={target.source}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onChange={(event) =>
-                                    updateTarget(index, { source: event.target.value })
-                                  }
-                                >
-                                  <option value="yfinance">YFinance</option>
-                                  <option value="akshare">AkShare</option>
-                                  <option value="tradingview">TradingView</option>
-                                  <option value="mt5">MT5</option>
-                                </select>
-                              </div>
-                              <div className="meta-item">
-                                <div className="label">周期</div>
-                                <select
-                                  value={target.timeframe}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onChange={(event) =>
-                                    updateTarget(index, { timeframe: event.target.value })
-                                  }
-                                >
-                                  {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map(
-                                    (timeframe) => (
-                                      <option key={timeframe} value={timeframe}>
-                                        {timeframe}
-                                      </option>
-                                    ),
-                                  )}
-                                </select>
-                              </div>
-                            </>
-                          ) : null}
-                        </div>
-                        <div className="row">
-                          {itemRecord ? (
-                            <button
-                              className="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setRecord(itemRecord);
-                                setView('decision');
                               }}
                             >
-                              <Eye size={14} />
-                              打开最近结果
-                            </button>
-                          ) : (
-                            <span className="muted">该监控项还没有可打开的分析结果。</span>
-                          )}
-                          <button
-                            className="button button-danger"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setWatchlist((current) =>
-                                current.filter((_, targetIndex) => targetIndex !== index),
-                              );
-                            }}
-                          >
-                            <Trash2 size={14} />
-                            移除
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
+                              <div className="monitor-status-target monitor-period-target">
+                                <input
+                                  type="checkbox"
+                                  checked={target.enabled}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onChange={(event) =>
+                                    updateTarget(index, { enabled: event.target.checked })
+                                  }
+                                  aria-label={`${dataset?.symbol ?? target.symbol} ${target.timeframe} 启用状态`}
+                                />
+                                <div>
+                                  <strong>{formatTimeframeLabel(target.timeframe)}</strong>
+                                  <span>
+                                    {target.timeframe}
+                                    {dataset?.source || target.source
+                                      ? ` · ${dataset?.source ?? target.source}`
+                                      : ''}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="monitor-status-cell">
+                                <span className="label">状态</span>
+                                <span
+                                  className={
+                                    status?.status === 'error'
+                                      ? 'badge badge-danger'
+                                      : status?.status === 'ok'
+                                        ? 'badge badge-ok'
+                                        : 'badge badge-neutral'
+                                  }
+                                >
+                                  {status?.status ?? '未运行'}
+                                </span>
+                              </div>
+                              <div className="monitor-status-cell">
+                                <span className="label">允许时段</span>
+                                <span className={allowed ? 'badge badge-ok' : 'badge badge-warn'}>
+                                  {allowed ? '是' : '否'}
+                                </span>
+                              </div>
+                              <div className="monitor-status-cell">
+                                <span className="label">下次检查</span>
+                                <strong>
+                                  {formatDateTime(
+                                    status?.next_check_at ??
+                                      monitorQuery.data?.next_check_at,
+                                  )}
+                                </strong>
+                              </div>
+                              <div className="monitor-status-cell">
+                                <span className="label">最近检查</span>
+                                <strong>
+                                  {formatDateTime(
+                                    status?.last_check_at ?? status?.last_run_at,
+                                  )}
+                                </strong>
+                              </div>
+                              <div className="monitor-status-cell">
+                                <span className="label">成功/失败/跳过</span>
+                                <strong>
+                                  {statusCount(status, 'success_count')}/
+                                  {statusCount(status, 'failure_count')}/
+                                  {statusCount(status, 'skip_count')}
+                                </strong>
+                              </div>
+                              <div className="monitor-status-cell">
+                                <span className="label">决策</span>
+                                <strong>
+                                  {itemAction}
+                                  {itemConfidence !== null
+                                    ? ` · ${Math.round(itemConfidence)}%`
+                                    : ''}
+                                </strong>
+                              </div>
+                              {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </div>
+                            {expanded ? (
+                              <div className="monitor-status-detail">
+                                <div className="monitor-detail-grid">
+                                  <div className="meta-item">
+                                    <div className="label">数据集</div>
+                                    <div className="value">
+                                      {dataset
+                                        ? `${dataset.title || dataset.symbol} · ${dataset.id}`
+                                        : '旧配置项（未绑定数据集）'}
+                                    </div>
+                                  </div>
+                                  <div className="meta-item">
+                                    <div className="label">最近行情</div>
+                                    <div className="value">{status?.last_session ?? '--'}</div>
+                                  </div>
+                                  <div className="meta-item">
+                                    <div className="label">运行次数 / 新增 K 线</div>
+                                    <div className="value">
+                                      {status?.run_count ?? 0} / {status?.new_bar_count ?? 0}
+                                    </div>
+                                  </div>
+                                  <div className="meta-item">
+                                    <div className="label">最近决策</div>
+                                    <div className="value">
+                                      {itemAction}
+                                      {itemConfidence !== null
+                                        ? ` · ${Math.round(itemConfidence)}%`
+                                        : ''}
+                                    </div>
+                                  </div>
+                                  <div className="meta-item monitor-detail-error">
+                                    <div className="label">最近错误</div>
+                                    <div className={errorText ? 'value error-text' : 'value'}>
+                                      {errorText || '无'}
+                                    </div>
+                                  </div>
+                                  <div className="meta-item">
+                                    <div className="label">分析 K 线</div>
+                                    <div className="value">
+                                      <input
+                                        type="number"
+                                        min="60"
+                                        max="1000"
+                                        value={target.analysis?.analysis_bar_count ?? 120}
+                                        onClick={(event) => event.stopPropagation()}
+                                        onChange={(event) =>
+                                          updateTarget(index, {
+                                            analysis: {
+                                              ...target.analysis,
+                                              analysis_bar_count:
+                                                Number(event.target.value) || 120,
+                                            },
+                                          })
+                                        }
+                                      />
+                                    </div>
+                                  </div>
+                                  {!target.dataset_id ? (
+                                    <>
+                                      <div className="meta-item">
+                                        <div className="label">标的代码</div>
+                                        <input
+                                          value={target.symbol}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onChange={(event) =>
+                                            updateTarget(index, {
+                                              symbol: event.target.value,
+                                            })
+                                          }
+                                          placeholder="XAUUSD / 600519"
+                                        />
+                                      </div>
+                                      <div className="meta-item">
+                                        <div className="label">数据源</div>
+                                        <select
+                                          value={target.source}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onChange={(event) =>
+                                            updateTarget(index, {
+                                              source: event.target.value,
+                                            })
+                                          }
+                                        >
+                                          <option value="yfinance">YFinance</option>
+                                          <option value="akshare">AkShare</option>
+                                          <option value="tradingview">TradingView</option>
+                                          <option value="mt5">MT5</option>
+                                        </select>
+                                      </div>
+                                      <div className="meta-item">
+                                        <div className="label">周期</div>
+                                        <select
+                                          value={target.timeframe}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onChange={(event) =>
+                                            updateTarget(index, {
+                                              timeframe: event.target.value,
+                                            })
+                                          }
+                                        >
+                                          {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map(
+                                            (timeframe) => (
+                                              <option key={timeframe} value={timeframe}>
+                                                {timeframe}
+                                              </option>
+                                            ),
+                                          )}
+                                        </select>
+                                      </div>
+                                    </>
+                                  ) : null}
+                                </div>
+                                <div className="row">
+                                  {itemRecord ? (
+                                    <button
+                                      className="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setRecord(itemRecord);
+                                        setView('decision');
+                                      }}
+                                    >
+                                      <Eye size={14} />
+                                      打开最近结果
+                                    </button>
+                                  ) : (
+                                    <span className="muted">
+                                      该周期还没有可打开的分析结果。
+                                    </span>
+                                  )}
+                                  <button
+                                    className="button button-danger"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setWatchlist((current) =>
+                                        current.filter(
+                                          (_, targetIndex) => targetIndex !== index,
+                                        ),
+                                      );
+                                    }}
+                                  >
+                                    <Trash2 size={14} />
+                                    移除周期
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })

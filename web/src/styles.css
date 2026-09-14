@@ -1583,6 +1583,54 @@ textarea {
   border-color: rgba(23, 116, 108, 0.42);
 }
 
+.monitor-product-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px;
+  background: #f7f9f9;
+}
+
+.monitor-product-summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.monitor-product-summary > div {
+  min-width: 0;
+}
+
+.monitor-product-summary strong,
+.monitor-product-summary span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.monitor-product-summary span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monitor-product-meta {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.monitor-product-periods .monitor-status-row {
+  border-top: 1px solid var(--border);
+}
+
+.monitor-period-target {
+  padding-left: 3px;
+}
+
 .monitor-status-row {
   display: grid;
   grid-template-columns: minmax(190px, 1.5fr) repeat(6, minmax(106px, auto)) 24px;
@@ -1677,6 +1725,11 @@ textarea {
   .monitor-add-row,
   .monitor-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .monitor-product-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .monitor-detail-error {
