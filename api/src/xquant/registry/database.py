@@ -159,6 +159,26 @@ class Database:
                 ON research.ai_analysis_record (dataset_id, created_at DESC, id DESC);
             """
         )
+        self.postgres.execute(
+            """
+            DELETE FROM research.ai_analysis_record older
+            USING research.ai_analysis_record newer
+            WHERE older.symbol IS NOT NULL
+              AND older.timeframe IS NOT NULL
+              AND older.symbol = newer.symbol
+              AND older.timeframe = newer.timeframe
+              AND (
+                  older.created_at < newer.created_at
+                  OR (older.created_at = newer.created_at AND older.id < newer.id)
+              )
+            """
+        )
+        self.postgres.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_analysis_record_symbol_timeframe
+                ON research.ai_analysis_record (symbol, timeframe)
+            """
+        )
 
     def upsert_strategy(self, strategy: dict[str, Any]) -> None:
         self.postgres.execute(
@@ -483,6 +503,18 @@ class Database:
                 (CAST(:id AS uuid), :record_id, :dataset_id, :symbol, :timeframe,
                  :status, CAST(:created_at AS timestamptz), :duration_ms,
                  :decision_action, :confidence, CAST(:record AS jsonb))
+            ON CONFLICT (symbol, timeframe) DO UPDATE SET
+                id = EXCLUDED.id,
+                record_id = EXCLUDED.record_id,
+                dataset_id = EXCLUDED.dataset_id,
+                symbol = EXCLUDED.symbol,
+                timeframe = EXCLUDED.timeframe,
+                status = EXCLUDED.status,
+                created_at = EXCLUDED.created_at,
+                duration_ms = EXCLUDED.duration_ms,
+                decision_action = EXCLUDED.decision_action,
+                confidence = EXCLUDED.confidence,
+                record = EXCLUDED.record
             """,
             {
                 **summary,
