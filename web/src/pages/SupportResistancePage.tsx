@@ -274,16 +274,16 @@ export function SupportResistancePage() {
                 <thead>
                   <tr>
                     <th>类型</th>
-                    <th>Center</th>
-                    <th>Low</th>
-                    <th>High</th>
-                    <th>Distance %</th>
-                    <th>Distance ATR</th>
-                    <th>Width ATR</th>
-                    <th>Events</th>
-                    <th>Volume %</th>
-                    <th>Edge Score</th>
-                    <th>TF Count / TFS</th>
+                    <th>中心价</th>
+                    <th>下沿</th>
+                    <th>上沿</th>
+                    <th>距离 (%)</th>
+                    <th>距离 (ATR)</th>
+                    <th>宽度 (ATR)</th>
+                    <th>事件数</th>
+                    <th>成交量 (%)</th>
+                    <th>边界评分</th>
+                    <th>周期数 / 周期组合</th>
                   </tr>
                 </thead>
                 <tbody>
