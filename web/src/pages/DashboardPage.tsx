@@ -76,7 +76,7 @@ export function DashboardPage() {
             </span>
           </div>
           {ready ? (
-            <p className="muted">数据准备完成，可以直接进入支撑阻力或价格行为分析。</p>
+            <p className="muted">数据准备完成，可以直接进入量价分析查看全部品种汇总与完整信息。</p>
           ) : datasetsQuery.isLoading ? (
             <p className="muted">正在连接本地 API...</p>
           ) : (
@@ -86,14 +86,9 @@ export function DashboardPage() {
         <div className="panel highlight-card">
           <div className="section-title">分析入口</div>
           <div className="row">
-            <Link className="button button-primary" to="/support-resistance">
+            <Link className="button button-primary" to="/market-analysis">
               <Crosshair size={15} />
-              支撑阻力
-              <ArrowRight size={15} />
-            </Link>
-            <Link className="button" to="/price-action">
-              <BrainCircuit size={15} />
-              价格行为
+              量价分析
               <ArrowRight size={15} />
             </Link>
           </div>

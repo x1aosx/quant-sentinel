@@ -47,16 +47,24 @@ export interface SyncDatasetResponse {
 
 export interface SrLevel {
   zone_type: 'support' | 'resistance';
+  zone_label?: string;
   center: number;
   low: number;
   high: number;
   distance_pct?: number;
   distance_atr?: number;
   width_atr?: number;
+  width_pct?: number;
   edge_score?: number;
   n_events?: number;
+  n_decided?: number;
+  n_hold?: number;
+  event_hold_rate?: number | null;
   touch_count?: number;
   volume_pct?: number;
+  p_touch?: number | null;
+  p_hold?: number | null;
+  p_effective?: number | null;
   tf_count?: number;
   tfs?: string;
 }
@@ -137,6 +145,40 @@ export interface PaAnalysisResult {
   meta?: Record<string, unknown>;
   candles: DatasetBar[];
   levels: SrLevel[];
+}
+
+export interface AnalysisInstrumentSummary {
+  dataset_id: string;
+  symbol: string;
+  title: string;
+  timeframe: string;
+  current_price: number | null;
+  change_pct: number | null;
+  touch_probability: number | null;
+  hold_probability: number | null;
+  historical_tests: number;
+  trend: {
+    label: string;
+    detail?: string | null;
+  };
+  distance_pct: number | null;
+  distance_atr: number | null;
+  nearest_support: number | null;
+  nearest_resistance: number | null;
+  key_level: number | null;
+  key_level_type: 'support' | 'resistance' | null;
+  key_level_score: number | null;
+  bars_used: number | null;
+}
+
+export interface AnalysisInstrumentSummariesResponse {
+  items: AnalysisInstrumentSummary[];
+  errors: Array<{
+    dataset_id: string;
+    symbol: string;
+    detail: string;
+  }>;
+  count: number;
 }
 
 export interface DashboardSummary {

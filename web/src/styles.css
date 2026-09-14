@@ -1477,3 +1477,79 @@ textarea {
     grid-column: auto;
   }
 }
+
+.analysis-detail-anchor {
+  scroll-margin-top: 78px;
+}
+
+.analysis-form-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.summary-table {
+  min-width: 1240px;
+}
+
+.summary-table td {
+  white-space: nowrap;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-row {
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.summary-row:hover,
+.summary-row:focus-visible {
+  outline: none;
+  background: #f7fafc;
+}
+
+.summary-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.summary-symbol {
+  color: var(--heading);
+  font-weight: 700;
+}
+
+.summary-subtext {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.summary-value {
+  color: var(--heading);
+  font-variant-numeric: tabular-nums;
+}
+
+.market-up {
+  color: #c62828;
+}
+
+.market-down {
+  color: #16855f;
+}
+
+.market-flat {
+  color: var(--muted);
+}
+
+.support-value {
+  color: var(--accent);
+}
+
+.resistance-value {
+  color: var(--danger);
+}
+
+@media (max-width: 1180px) {
+  .analysis-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
