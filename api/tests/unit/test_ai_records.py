@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,17 @@ class FakePostgresStore:
         self.statements.append((statement, values))
         if "INSERT INTO research.ai_analysis_record" not in statement:
             return
+        symbol = values.get("symbol")
+        timeframe = values.get("timeframe")
+        if symbol is not None and timeframe is not None:
+            self.rows = {
+                key: row
+                for key, row in self.rows.items()
+                if not (
+                    row.get("symbol") == symbol
+                    and row.get("timeframe") == timeframe
+                )
+            }
         record_id = str(values["id"])
         self.rows[record_id] = {
             **values,
@@ -87,7 +99,7 @@ class FakePostgresStore:
         return dict(row) if row else None
 
 
-def test_sqlite_analysis_records_save_filter_detail_and_duplicate_ids(tmp_path: Path) -> None:
+def test_sqlite_analysis_records_keep_latest_per_symbol_timeframe(tmp_path: Path) -> None:
     database = SqliteDatabase(tmp_path / "quant.db")
     first_record = _record("ai-same-millisecond", "2026-01-01T00:00:00+00:00")
     second_record = _record(
@@ -113,23 +125,92 @@ def test_sqlite_analysis_records_save_filter_detail_and_duplicate_ids(tmp_path: 
     assert second["confidence"] == 80.0
 
     dataset_a_items = database.list_analysis_records(dataset_id="dataset-a")
-    assert [item["id"] for item in dataset_a_items] == [second["id"], first["id"]]
+    assert [item["id"] for item in dataset_a_items] == [second["id"]]
     assert database.list_analysis_records(dataset_id="dataset-b")[0]["id"] == other["id"]
     assert len(database.list_analysis_records(limit=1)) == 1
-    assert len(database.list_analysis_records(limit=0)) == 1
+    assert len(database.list_analysis_records(limit=50)) == 2
 
-    detail = database.get_analysis_record(first["id"])
-    assert detail["id"] == first["id"]
+    with pytest.raises(KeyError):
+        database.get_analysis_record(first["id"])
+
+    detail = database.get_analysis_record(second["id"])
+    assert detail["id"] == second["id"]
     assert detail["record_id"] == "ai-same-millisecond"
     assert detail["dataset_id"] == "dataset-a"
-    assert detail["record"] == first_record
+    assert detail["record"] == second_record
     assert detail["record"]["id"] == "ai-same-millisecond"
 
     with pytest.raises(KeyError):
         database.get_analysis_record("missing")
 
     database._migrate()
-    assert len(database.list_analysis_records(dataset_id="dataset-a")) == 2
+    assert len(database.list_analysis_records(dataset_id="dataset-a")) == 1
+
+
+def test_sqlite_migration_collapses_existing_duplicate_analysis_records(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE ai_analysis_records (
+            id TEXT PRIMARY KEY,
+            record_id TEXT NOT NULL,
+            dataset_id TEXT,
+            symbol TEXT,
+            timeframe TEXT,
+            status TEXT,
+            created_at TEXT NOT NULL,
+            duration_ms REAL,
+            decision_action TEXT,
+            confidence REAL,
+            record_json TEXT NOT NULL
+        );
+        """
+    )
+    older = _record("legacy-old", "2026-01-01T00:00:00+00:00")
+    newer = _record(
+        "legacy-new",
+        "2026-01-01T00:00:01+00:00",
+        action="WAIT",
+        confidence=81.0,
+    )
+    for persisted_id, dataset_id, record in (
+        ("legacy-old-row", "dataset-old", older),
+        ("legacy-new-row", "dataset-new", newer),
+    ):
+        conn.execute(
+            """
+            INSERT INTO ai_analysis_records
+            (id, record_id, dataset_id, symbol, timeframe, status, created_at,
+             duration_ms, decision_action, confidence, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                persisted_id,
+                record["id"],
+                dataset_id,
+                record["symbol"],
+                record["timeframe"],
+                record["status"],
+                record["created_at"],
+                record["duration_ms"],
+                "WAIT" if record is newer else "LONG",
+                81.0 if record is newer else 72.0,
+                json.dumps(record),
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    database = SqliteDatabase(path)
+    items = database.list_analysis_records()
+
+    assert [item["id"] for item in items] == ["legacy-new-row"]
+    assert items[0]["dataset_id"] == "dataset-new"
+    with pytest.raises(KeyError):
+        database.get_analysis_record("legacy-old-row")
 
 
 def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
@@ -143,13 +224,24 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
     record = _record("ai-postgres", "2026-01-02T00:00:00+00:00")
 
     saved = database.save_analysis_record(record, dataset_id="dataset-pg")
-    items = database.list_analysis_records(dataset_id="dataset-pg", limit=50)
-    detail = database.get_analysis_record(saved["id"])
+    replacement = _record(
+        "ai-postgres-latest",
+        "2026-01-02T00:00:01+00:00",
+        action="WAIT",
+        confidence=88.0,
+    )
+    replaced = database.save_analysis_record(replacement, dataset_id="dataset-pg-latest")
+    items = database.list_analysis_records(dataset_id="dataset-pg-latest", limit=50)
+    detail = database.get_analysis_record(replaced["id"])
 
     assert saved["dataset_id"] == "dataset-pg"
-    assert items == [saved]
-    assert detail["record"] == record
-    assert detail["dataset_id"] == "dataset-pg"
+    assert replaced["dataset_id"] == "dataset-pg-latest"
+    assert items == [replaced]
+    assert detail["record"] == replacement
+    assert detail["dataset_id"] == "dataset-pg-latest"
+    assert database.list_analysis_records(dataset_id="dataset-pg") == []
+    with pytest.raises(KeyError):
+        database.get_analysis_record(saved["id"])
     insert_statements = [
         statement
         for statement, _params in postgres.statements
@@ -162,6 +254,7 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
     ]
     assert insert_statements
     assert "CAST(:record AS jsonb)" in insert_statements[0]
+    assert "ON CONFLICT (symbol, timeframe) DO UPDATE" in insert_statements[0]
     assert query_statements
 
     with pytest.raises(KeyError):

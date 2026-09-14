@@ -103,6 +103,26 @@ class Database:
                 ON ai_analysis_records (dataset_id, created_at DESC);
             """
         )
+        conn.execute(
+            """
+            DELETE FROM ai_analysis_records
+            WHERE symbol IS NOT NULL
+              AND timeframe IS NOT NULL
+              AND rowid NOT IN (
+                  SELECT MAX(rowid)
+                  FROM ai_analysis_records
+                  WHERE symbol IS NOT NULL
+                    AND timeframe IS NOT NULL
+                  GROUP BY symbol, timeframe
+              )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_analysis_records_symbol_timeframe
+                ON ai_analysis_records (symbol, timeframe)
+            """
+        )
         columns = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(datasets)").fetchall()
@@ -416,6 +436,18 @@ class Database:
             VALUES
             (:id, :record_id, :dataset_id, :symbol, :timeframe, :status, :created_at,
              :duration_ms, :decision_action, :confidence, :record_json)
+            ON CONFLICT(symbol, timeframe) DO UPDATE SET
+                id = excluded.id,
+                record_id = excluded.record_id,
+                dataset_id = excluded.dataset_id,
+                symbol = excluded.symbol,
+                timeframe = excluded.timeframe,
+                status = excluded.status,
+                created_at = excluded.created_at,
+                duration_ms = excluded.duration_ms,
+                decision_action = excluded.decision_action,
+                confidence = excluded.confidence,
+                record_json = excluded.record_json
             """,
             {
                 **summary,
