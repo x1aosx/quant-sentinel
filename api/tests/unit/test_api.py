@@ -55,7 +55,15 @@ def test_dataset_and_analysis_endpoints(tmp_path) -> None:
 
         sr = client.post(
             "/api/v1/analysis/support-resistance",
-            json={"dataset_id": dataset["id"], "lookback": 120, "n_zones": 6, "direction": "both"},
+            json={
+                "dataset_id": dataset["id"],
+                "lookback": 120,
+                "n_zones": 6,
+                "direction": "both",
+                "risk_fraction": 0.02,
+                "min_rr": 2.0,
+                "stance": "balanced",
+            },
         )
         assert sr.status_code == 200, sr.text
         sr_result = sr.json()
@@ -63,16 +71,21 @@ def test_dataset_and_analysis_endpoints(tmp_path) -> None:
         assert len(sr_result["candles"]) == 150
         assert "levels" in sr_result
 
-        pa = client.post(
+        price_action_result = sr_result["price_action"]
+        assert price_action_result["bars_used"] == 120
+        assert price_action_result["simulation_only"] is True
+        assert price_action_result["decision"]["action"] in {"LONG", "SHORT", "WAIT"}
+        assert price_action_result["decision"]["risk_fraction"] == 0.02
+        assert price_action_result["meta"]["min_rr"] == 2.0
+        assert price_action_result["meta"]["stance"] == "balanced"
+        assert "candles" not in price_action_result
+        assert "levels" not in price_action_result
+
+        removed_route = client.post(
             "/api/v1/analysis/price-action",
             json={"dataset_id": dataset["id"], "lookback": 120, "stance": "conservative"},
         )
-        assert pa.status_code == 200, pa.text
-        pa_result = pa.json()
-        assert pa_result["bars_used"] == 120
-        assert pa_result["simulation_only"] is True
-        assert pa_result["decision"]["action"] in {"LONG", "SHORT", "WAIT"}
-        assert len(pa_result["candles"]) == 150
+        assert removed_route.status_code == 404
 
         missing = client.post(
             "/api/v1/analysis/support-resistance",
