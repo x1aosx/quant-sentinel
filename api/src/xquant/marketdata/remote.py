@@ -196,7 +196,7 @@ def _eastmoney_title_query(symbol: str) -> str | None:
         return text[:-3].zfill(5)
     if re.fullmatch(r"HK\d{4,5}", text):
         return text[2:].zfill(5)
-    if re.fullmatch(r"\d{5}", text):
+    if re.fullmatch(r"\d{5,6}", text):
         return text
     if "=" in text or text.startswith("^"):
         return None

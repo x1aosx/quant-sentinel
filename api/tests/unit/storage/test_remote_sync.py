@@ -621,6 +621,34 @@ def test_instrument_title_uses_eastmoney_exact_code_match(monkeypatch) -> None:
     assert resolve_instrument_title("AAPL") == "苹果"
 
 
+def test_instrument_title_resolves_six_digit_a_share_code(monkeypatch) -> None:
+    requested_inputs: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, Any]:
+            return {
+                "QuotationCodeTable": {
+                    "Data": [{"Code": "600105", "Name": "永鼎股份"}]
+                }
+            }
+
+    def fake_get(*_args: Any, **kwargs: Any) -> FakeResponse:
+        requested_inputs.append(str(kwargs["params"]["input"]))
+        return FakeResponse()
+
+    monkeypatch.setattr(remote_module, "_http_get", fake_get)
+
+    assert resolve_instrument_title("600105") == "永鼎股份"
+    assert requested_inputs == ["600105"]
+
+
 def test_instrument_title_normalizes_hong_kong_symbols(monkeypatch) -> None:
     requested_inputs: list[str] = []
 
