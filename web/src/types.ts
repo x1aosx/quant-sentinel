@@ -143,8 +143,10 @@ export interface PaAnalysisResult {
     invalidation?: string | null;
   };
   meta?: Record<string, unknown>;
-  candles: DatasetBar[];
-  levels: SrLevel[];
+}
+
+export interface UnifiedAnalysisResult extends SrAnalysisResult {
+  price_action: PaAnalysisResult;
 }
 
 export interface AnalysisInstrumentSummary {

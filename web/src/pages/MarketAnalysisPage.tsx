@@ -17,8 +17,6 @@ import { api } from '../api/client';
 import { KlineChart } from '../components/KlineChart';
 import type {
   AnalysisInstrumentSummary,
-  PaAnalysisResult,
-  SrAnalysisResult,
   SrLevel,
 } from '../types';
 
@@ -47,11 +45,6 @@ interface AnalysisPayload {
   risk_fraction?: number;
   min_rr?: number;
   stance: 'conservative' | 'balanced' | 'aggressive';
-}
-
-interface CombinedAnalysisResult {
-  sr: SrAnalysisResult;
-  pa: PaAnalysisResult;
 }
 
 function fmtNum(value: number | null | undefined, digits = 2): string {
@@ -139,34 +132,17 @@ export function MarketAnalysisPage() {
   }, [datasetId, datasets]);
 
   const analysis = useMutation({
-    mutationFn: async (payload: AnalysisPayload): Promise<CombinedAnalysisResult> => {
-      const [sr, pa] = await Promise.all([
-        api.analyzeSupportResistance({
-          dataset_id: payload.dataset_id,
-          lookback: payload.lookback,
-          n_zones: payload.n_zones,
-          direction: payload.direction,
-        }),
-        api.analyzePriceAction({
-          dataset_id: payload.dataset_id,
-          lookback: payload.lookback,
-          risk_fraction: payload.risk_fraction,
-          min_rr: payload.min_rr,
-          stance: payload.stance,
-        }),
-      ]);
-      return { sr, pa };
-    },
+    mutationFn: (payload: AnalysisPayload) => api.analyzeSupportResistance(payload),
   });
 
   const selectedDataset = datasets.find((item) => item.id === datasetId);
   const activeDatasetId = analysis.variables?.dataset_id ?? datasetId;
   const result = analysis.data;
-  const riskReward = result?.sr.summary.risk_reward;
-  const context = result?.pa.market_context;
-  const features = result?.pa.features;
-  const decision = result?.pa.decision;
-  const resultChange = result ? changePct(result.sr.candles) : null;
+  const riskReward = result?.summary.risk_reward;
+  const context = result?.price_action.market_context;
+  const features = result?.price_action.features;
+  const decision = result?.price_action.decision;
+  const resultChange = result ? changePct(result.candles) : null;
   const resultChangeClass =
     resultChange === null ? 'market-flat' : resultChange >= 0 ? 'market-up' : 'market-down';
 
@@ -446,7 +422,7 @@ export function MarketAnalysisPage() {
               {analysis.isPending ? <Loader2 size={14} /> : <Play size={14} />}
               {analysis.isPending ? '分析中...' : '开始综合分析'}
             </button>
-            <span className="muted">两类分析会并行执行，页面只保留一套参数和一张 K 线图。</span>
+            <span className="muted">一次综合分析请求会同时返回支撑阻力与价格行为结果。</span>
           </div>
           {datasetsQuery.isError ? (
             <div className="empty" style={{ marginTop: 14 }}>
@@ -483,7 +459,7 @@ export function MarketAnalysisPage() {
             <div className="panel stat">
               <div>
                 <div className="stat-label">现价</div>
-                <div className="stat-value">{fmtNum(result.sr.current_price, 4)}</div>
+                <div className="stat-value">{fmtNum(result.current_price, 4)}</div>
               </div>
               <span className="stat-icon"><CircleDollarSign size={18} /></span>
             </div>
@@ -499,8 +475,8 @@ export function MarketAnalysisPage() {
             <div className="panel stat">
               <div>
                 <div className="stat-label">ATR</div>
-                <div className="stat-value">{fmtNum(result.sr.atr, 4)}</div>
-                <div className="muted">{fmtNum(result.sr.atr_pct)}%</div>
+                <div className="stat-value">{fmtNum(result.atr, 4)}</div>
+                <div className="muted">{fmtNum(result.atr_pct)}%</div>
               </div>
               <span className="stat-icon warn"><Gauge size={18} /></span>
             </div>
@@ -518,21 +494,21 @@ export function MarketAnalysisPage() {
             <div className="section-title">
               <span>综合概览</span>
               <span className="row">
-                <span className="badge badge-info">{result.sr.symbol}</span>
-                <span className="tag">{result.sr.timeframe}</span>
-                <span className="tag">{result.sr.bars_used} 根K线</span>
+                <span className="badge badge-info">{result.symbol}</span>
+                <span className="tag">{result.timeframe}</span>
+                <span className="tag">{result.bars_used} 根K线</span>
               </span>
             </div>
-            {result.sr.summary.headline ? (
+            {result.summary.headline ? (
               <div className="feature-item">
                 <div className="label">关键价位结论</div>
-                <div className="value">{result.sr.summary.headline}</div>
+                <div className="value">{result.summary.headline}</div>
               </div>
             ) : null}
             <div className="metric-list" style={{ marginTop: 14 }}>
               <div>
                 <div className="label">支撑阻力趋势</div>
-                <div className="value">{result.sr.trend.label}</div>
+                <div className="value">{result.trend.label}</div>
               </div>
               <div>
                 <div className="label">价格行为方向</div>
@@ -554,16 +530,16 @@ export function MarketAnalysisPage() {
               </div>
               <div>
                 <div className="label">最近关键位</div>
-                <div className="value">{levelLabel(result.sr.summary.nearest)}</div>
+                <div className="value">{levelLabel(result.summary.nearest)}</div>
               </div>
               <div>
                 <div className="label">最佳评分位</div>
-                <div className="value">{levelLabel(result.sr.summary.best)}</div>
+                <div className="value">{levelLabel(result.summary.best)}</div>
               </div>
             </div>
-            {result.sr.summary.caveat ? (
+            {result.summary.caveat ? (
               <p className="muted" style={{ marginBottom: 0 }}>
-                提示：{result.sr.summary.caveat}
+                提示：{result.summary.caveat}
               </p>
             ) : null}
           </div>
@@ -572,7 +548,7 @@ export function MarketAnalysisPage() {
             <div className="panel">
               <div className="section-title">
                 <span>市场结构</span>
-                <span className="tag">{result.pa.timeframe}</span>
+                <span className="tag">{result.price_action.timeframe}</span>
               </div>
               <div className="row">
                 {features.swing_structure ? <span className="tag">{features.swing_structure}</span> : null}
@@ -616,7 +592,7 @@ export function MarketAnalysisPage() {
             <div className="panel">
               <div className="section-title">
                 <span>行为决策</span>
-                <span className="tag">{result.pa.bars_used} 根K线</span>
+                <span className="tag">{result.price_action.bars_used} 根K线</span>
               </div>
               <div className="row">
                 <span
@@ -675,9 +651,9 @@ export function MarketAnalysisPage() {
           <div className="panel">
             <div className="section-title">
               <span>完整价位区间</span>
-              <span className="tag">{result.sr.levels.length} 个</span>
+              <span className="tag">{result.levels.length} 个</span>
             </div>
-            {result.sr.levels.length === 0 ? (
+            {result.levels.length === 0 ? (
               <div className="empty">当前参数下未识别出价位区间。</div>
             ) : (
               <div className="table-wrap">
@@ -697,7 +673,7 @@ export function MarketAnalysisPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.sr.levels.map((level, index) => (
+                    {result.levels.map((level, index) => (
                       <tr key={`${level.zone_type}-${level.center}-${index}`}>
                         <td>
                           <span className={`zone-chip ${level.zone_type}`}>
@@ -734,11 +710,11 @@ export function MarketAnalysisPage() {
             <div className="section-title">
               <span>K线与价位区间</span>
               <span className="row">
-                <span className="tag">{result.sr.symbol}</span>
+                <span className="tag">{result.symbol}</span>
                 <span className="tag">最近 150 根</span>
               </span>
             </div>
-            <KlineChart candles={result.sr.candles.slice(-150)} levels={result.sr.levels} />
+            <KlineChart candles={result.candles.slice(-150)} levels={result.levels} />
             <p className="muted" style={{ marginBottom: 0 }}>
               支撑阻力区间已合并显示在这一张图上；以上结果仅用于研究与演示，不构成投资建议。
             </p>

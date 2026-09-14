@@ -7,10 +7,9 @@ import type {
   DatasetSummary,
   HealthSummary,
   MonitorStatus,
-  PaAnalysisResult,
-  SrAnalysisResult,
   SyncDatasetResponse,
   SystemConfig,
+  UnifiedAnalysisResult,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -52,22 +51,14 @@ export const api = {
     lookback?: number;
     n_zones?: number;
     direction?: 'both' | 'long' | 'short';
-  }) =>
-    apiRequest<SrAnalysisResult>('/analysis/support-resistance', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  analyzePriceAction: (payload: {
-    dataset_id: string;
-    lookback?: number;
     risk_fraction?: number;
     min_rr?: number;
     stance?: 'conservative' | 'balanced' | 'aggressive';
   }) =>
-    apiRequest<PaAnalysisResult>('/analysis/price-action', {
+    apiRequest<UnifiedAnalysisResult>('/analysis/support-resistance', {
       method: 'POST',
-    body: JSON.stringify(payload),
-  }),
+      body: JSON.stringify(payload),
+    }),
   syncRemoteDataset: (payload: {
     source: 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
     symbol: string;
