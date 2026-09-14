@@ -148,14 +148,6 @@ export function DataCenterPage() {
     [instrumentGroups],
   );
 
-  const autoUpdateGroup = useMemo(
-    () =>
-      syncableGroups.find(
-        (group) => normalizeSymbol(group.symbol) === normalizeSymbol(autoUpdateSymbol),
-      ),
-    [autoUpdateSymbol, syncableGroups],
-  );
-
   useEffect(() => {
     datasetsRef.current = datasets;
   }, [datasets]);
@@ -526,52 +518,6 @@ export function DataCenterPage() {
             ) : null}
           </div>
           <div className="section-title-actions">
-            <span className="muted">自动更新标的</span>
-            <select
-              className="auto-update-target"
-              aria-label="自动更新标的"
-              value={autoUpdateSymbol}
-              disabled={syncableGroups.length === 0}
-              onChange={(event) => setAutoUpdateSymbol(event.target.value)}
-            >
-              {syncableGroups.map((group) => (
-                <option key={group.key} value={group.symbol}>
-                  {group.symbol}
-                  {group.title ? ` / ${group.title}` : ''}
-                </option>
-              ))}
-            </select>
-            <label className="checkbox-row" htmlFor="dataset-auto-update">
-              <input
-                id="dataset-auto-update"
-                type="checkbox"
-                checked={autoUpdate}
-                disabled={syncableGroups.length === 0}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  if (checked && !autoUpdateSymbol && syncableGroups[0]) {
-                    setAutoUpdateSymbol(syncableGroups[0].symbol);
-                  }
-                  setAutoUpdate(checked);
-                }}
-              />
-              启用
-            </label>
-            <select
-              aria-label="自动更新频率"
-              value={updateInterval}
-              disabled={!autoUpdate}
-              onChange={(event) => setUpdateInterval(Number(event.target.value))}
-            >
-              {AUTO_UPDATE_INTERVALS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            {autoUpdate && autoUpdateGroup ? (
-              <span className="muted">{autoUpdateGroup.datasets.length} 个周期</span>
-            ) : null}
             <button
               className="button"
               type="button"
@@ -604,6 +550,7 @@ export function DataCenterPage() {
                   <th scope="col">结束时间</th>
                   <th scope="col">最后同步</th>
                   <th scope="col">dataset_id</th>
+                  <th scope="col">启用同步</th>
                   <th scope="col">操作</th>
                 </tr>
               </thead>
@@ -614,6 +561,12 @@ export function DataCenterPage() {
                       const isFirstInGroup = index === 0;
                       const isLastInGroup = index === group.datasets.length - 1;
                       const remoteSource = remoteSourceForDataset(dataset.source);
+                      const hasRemoteDataset = group.datasets.some((item) =>
+                        remoteSourceForDataset(item.source),
+                      );
+                      const isAutoUpdateTarget =
+                        autoUpdate &&
+                        normalizeSymbol(autoUpdateSymbol) === normalizeSymbol(group.symbol);
                       const isDeleting =
                         deleteMutation.isPending && deleteMutation.variables?.id === dataset.id;
 
@@ -654,6 +607,54 @@ export function DataCenterPage() {
                           <td className="code dataset-id" title={dataset.id}>
                             {dataset.id}
                           </td>
+                          {isFirstInGroup ? (
+                            <td
+                              rowSpan={group.datasets.length}
+                              className="dataset-sync-cell"
+                            >
+                              <div className="dataset-sync-control">
+                                <label
+                                  className="checkbox-row"
+                                  htmlFor={`dataset-auto-update-${group.datasets[0]?.id ?? group.key}`}
+                                >
+                                  <input
+                                    id={`dataset-auto-update-${group.datasets[0]?.id ?? group.key}`}
+                                    type="checkbox"
+                                    checked={isAutoUpdateTarget}
+                                    disabled={
+                                      !hasRemoteDataset ||
+                                      syncingKey !== null ||
+                                      deleteMutation.isPending
+                                    }
+                                    onChange={(event) => {
+                                      const checked = event.target.checked;
+                                      if (checked) setAutoUpdateSymbol(group.symbol);
+                                      setAutoUpdate(checked);
+                                    }}
+                                  />
+                                  {hasRemoteDataset
+                                    ? isAutoUpdateTarget
+                                      ? '已启用'
+                                      : '启用'
+                                    : '不可用'}
+                                </label>
+                                <select
+                                  aria-label={`${group.symbol} 同步频率`}
+                                  value={updateInterval}
+                                  disabled={!isAutoUpdateTarget}
+                                  onChange={(event) =>
+                                    setUpdateInterval(Number(event.target.value))
+                                  }
+                                >
+                                  {AUTO_UPDATE_INTERVALS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </td>
+                          ) : null}
                           <td>
                             <div className="dataset-actions">
                               <button
