@@ -34,6 +34,21 @@ def test_dataset_and_analysis_endpoints(tmp_path) -> None:
         assert datasets.status_code == 200
         assert [item["id"] for item in datasets.json()["items"]] == [dataset["id"]]
 
+        instrument_summaries = client.get("/api/v1/analysis/instruments")
+        assert instrument_summaries.status_code == 200
+        summary_payload = instrument_summaries.json()
+        assert summary_payload["count"] == 1
+        assert summary_payload["errors"] == []
+        summary_item = summary_payload["items"][0]
+        assert summary_item["dataset_id"] == dataset["id"]
+        assert summary_item["symbol"] == "DEMO.RESEARCH"
+        assert summary_item["title"] == "研究示例数据"
+        assert summary_item["timeframe"] == "1d"
+        assert summary_item["current_price"] > 0
+        assert isinstance(summary_item["change_pct"], float)
+        assert summary_item["trend"]["label"] in {"上涨", "下跌", "震荡"}
+        assert summary_item["historical_tests"] >= 0
+
         fetched_dataset = client.get(f"/api/v1/datasets/{dataset['id']}")
         assert fetched_dataset.status_code == 200
         assert fetched_dataset.json() == dataset

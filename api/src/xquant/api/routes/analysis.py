@@ -14,6 +14,106 @@ from ..validation import int_in, number_in
 router = APIRouter(tags=["analysis"])
 
 
+def _change_pct(bars: list[dict[str, Any]]) -> float | None:
+    if len(bars) < 2:
+        return None
+    previous = float(bars[-2].get("close") or 0.0)
+    current = float(bars[-1].get("close") or 0.0)
+    if previous == 0.0:
+        return None
+    return round((current - previous) / previous * 100.0, 4)
+
+
+def _summary_item(dataset: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = dataset["summary"]
+    result = detect_support_resistance(
+        bars,
+        symbol=str(summary["symbol"]),
+        timeframe=str(summary["timeframe"]),
+        lookback=250,
+        n_zones=6,
+        direction="both",
+    )
+    levels = list(result.get("levels") or [])
+    supports = [level for level in levels if level.get("zone_type") == "support"]
+    resistances = [level for level in levels if level.get("zone_type") == "resistance"]
+    current_price = float(result.get("current_price") or 0.0)
+    nearest_support = (
+        min(supports, key=lambda level: abs(float(level["center"]) - current_price))
+        if supports
+        else None
+    )
+    nearest_resistance = (
+        min(resistances, key=lambda level: abs(float(level["center"]) - current_price))
+        if resistances
+        else None
+    )
+    summary_data = result.get("summary") or {}
+    nearest = summary_data.get("nearest") or None
+    best = summary_data.get("best") or None
+    touch_probability = nearest.get("p_touch") if nearest else None
+    hold_probability = None
+    if nearest:
+        hold_probability = nearest.get("p_hold")
+        if hold_probability is None:
+            hold_probability = nearest.get("event_hold_rate")
+
+    return {
+        "dataset_id": summary["id"],
+        "symbol": summary["symbol"],
+        "title": summary.get("title") or summary["symbol"],
+        "timeframe": summary["timeframe"],
+        "current_price": result.get("current_price"),
+        "change_pct": _change_pct(bars),
+        "touch_probability": touch_probability,
+        "hold_probability": hold_probability,
+        "historical_tests": int(nearest.get("n_events") or 0) if nearest else 0,
+        "trend": {
+            "label": result.get("trend", {}).get("label") or "未知",
+            "detail": result.get("trend", {}).get("detail"),
+        },
+        "distance_pct": nearest.get("distance_pct") if nearest else None,
+        "distance_atr": nearest.get("distance_atr") if nearest else None,
+        "nearest_support": nearest_support.get("center") if nearest_support else None,
+        "nearest_resistance": (
+            nearest_resistance.get("center") if nearest_resistance else None
+        ),
+        "key_level": best.get("center") if best else None,
+        "key_level_type": best.get("zone_type") if best else None,
+        "key_level_score": best.get("edge_score") if best else None,
+        "bars_used": result.get("bars_used"),
+    }
+
+
+@router.get("/analysis/instruments")
+def instrument_summaries(
+    db: Annotated[Database, Depends(get_database)],
+) -> dict[str, Any]:
+    datasets = db.list_datasets()
+    latest_by_symbol: dict[str, dict[str, Any]] = {}
+    for dataset in datasets:
+        symbol = str(dataset.get("symbol") or "").strip().upper()
+        if symbol and symbol not in latest_by_symbol:
+            latest_by_symbol[symbol] = dataset
+
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for dataset in latest_by_symbol.values():
+        try:
+            record = db.get_dataset(str(dataset["id"]))
+            items.append(_summary_item(record, list(record["bars"])))
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(
+                {
+                    "dataset_id": str(dataset.get("id") or ""),
+                    "symbol": str(dataset.get("symbol") or ""),
+                    "detail": str(exc),
+                }
+            )
+
+    return {"items": items, "errors": errors, "count": len(items)}
+
+
 @router.post("/analysis/support-resistance")
 def support_resistance(
     db: Annotated[Database, Depends(get_database)],

@@ -15,8 +15,7 @@ const nav = [
   { to: '/', label: '驾驶台', icon: Gauge },
   { to: '/data', label: '数据中心', icon: Database },
   { to: '/ai', label: 'AI 分析', icon: BrainCircuit },
-  { to: '/support-resistance', label: '支撑阻力', icon: Crosshair },
-  { to: '/price-action', label: '价格行为', icon: BrainCircuit },
+  { to: '/market-analysis', label: '量价分析', icon: Crosshair },
   { to: '/settings', label: '系统配置', icon: Settings2 },
 ];
 
@@ -24,8 +23,7 @@ const titles: Record<string, string> = {
   '/': '驾驶台',
   '/data': '数据中心',
   '/ai': 'AI 分析',
-  '/support-resistance': '支撑阻力',
-  '/price-action': '价格行为',
+  '/market-analysis': '支撑阻力与价格行为',
   '/settings': '系统配置',
 };
 
