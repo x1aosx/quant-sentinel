@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import sqlite3
+import threading
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +13,9 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from xquant.marketdata.remote import fetch_remote_bars, resolve_instrument_title
+
+_PROCESS_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+_PROCESS_CACHE_LOCK = threading.Lock()
 
 
 def _title_needs_resolution(title: Any, symbol: Any) -> bool:
@@ -516,6 +522,32 @@ class Database:
             "created_at": row["created_at"],
             "record": json.loads(row["record_json"]),
         }
+
+    def get_cached_json(self, key: str) -> Any | None:
+        cache_key = (str(self.path.resolve()), key)
+        now = time.monotonic()
+        with _PROCESS_CACHE_LOCK:
+            cached = _PROCESS_CACHE.get(cache_key)
+            if cached is None:
+                return None
+            expires_at, value = cached
+            if expires_at <= now:
+                _PROCESS_CACHE.pop(cache_key, None)
+                return None
+            return copy.deepcopy(value)
+
+    def set_cached_json(
+        self,
+        key: str,
+        value: Any,
+        ttl_seconds: int = 300,
+    ) -> None:
+        if ttl_seconds <= 0:
+            return
+        cache_key = (str(self.path.resolve()), key)
+        expires_at = time.monotonic() + ttl_seconds
+        with _PROCESS_CACHE_LOCK:
+            _PROCESS_CACHE[cache_key] = (expires_at, copy.deepcopy(value))
 
 
 def _normalize_record_limit(limit: int) -> int:

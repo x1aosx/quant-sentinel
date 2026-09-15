@@ -627,6 +627,27 @@ class Database:
         self.postgres.close()
         self.influx.close()
 
+    def get_cached_json(self, key: str) -> Any | None:
+        if self.redis is None:
+            return None
+        try:
+            return self.redis.get_json(key)
+        except (RedisError, OSError, TypeError, ValueError):
+            return None
+
+    def set_cached_json(
+        self,
+        key: str,
+        value: Any,
+        ttl_seconds: int = 300,
+    ) -> None:
+        if self.redis is None:
+            return
+        try:
+            self.redis.set_json(key, value, ttl_seconds)
+        except (RedisError, OSError, TypeError, ValueError):
+            return
+
     def __enter__(self) -> Self:
         return self
 
@@ -634,17 +655,12 @@ class Database:
         self.close()
 
     def _cache_get_or_set(self, key: str, factory: Any, *, ttl_seconds: int) -> Any:
-        if self.redis is None:
-            return factory()
-        try:
-            cached = self.redis.get_json(key)
-            if cached is not None:
-                return cached
-            value = factory()
-            self.redis.set_json(key, value, ttl_seconds)
-            return value
-        except (RedisError, OSError):
-            return factory()
+        cached = self.get_cached_json(key)
+        if cached is not None:
+            return cached
+        value = factory()
+        self.set_cached_json(key, value, ttl_seconds)
+        return value
 
     def _invalidate(self, *keys: str) -> None:
         if self.redis is not None:
