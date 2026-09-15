@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -8,7 +9,9 @@ from redis.exceptions import RedisError
 from xquant.api.app import create_app
 from xquant.api.routes import analysis as analysis_routes
 from xquant.registry import Database
+from xquant.registry import database as database_module
 from xquant.registry.sqlite import Database as LegacySqliteDatabase
+from xquant.storage import StorageSettings
 
 
 def _bars() -> list[dict[str, Any]]:
@@ -207,3 +210,157 @@ def test_postgres_cache_degrades_when_redis_is_unavailable() -> None:
         lambda: {"items": [1]},
         ttl_seconds=60,
     ) == {"items": [1]}
+
+
+class _SyncPostgres:
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, Any]] = {}
+
+    def execute(
+        self,
+        statement: str,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        if "INSERT INTO research.dataset" not in statement:
+            return
+        values = dict(params or {})
+        dataset_id = str(values["id"])
+        existing = self.rows.get(dataset_id)
+        row = {**existing, **values} if existing else values
+        if existing is not None:
+            row["created_at"] = existing["created_at"]
+        self.rows[dataset_id] = row
+
+    def query_one(
+        self,
+        statement: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        values = params or {}
+        if "WHERE id" in statement:
+            row = self.rows.get(str(values["dataset_id"]))
+            return self._summary(row) if row else None
+        if "UPPER(symbol)" in statement:
+            matches = [
+                row
+                for row in self.rows.values()
+                if str(row["symbol"]).upper() == str(values["symbol"]).upper()
+                and row["timeframe"] == values["timeframe"]
+            ]
+            if not matches:
+                return None
+            return self._summary(max(matches, key=lambda row: row["created_at"]))
+        return None
+
+    @staticmethod
+    def _summary(row: dict[str, Any] | None) -> dict[str, Any]:
+        assert row is not None
+        return {
+            **row,
+            "stored_title": row.get("title"),
+            "title": row.get("title") or row["symbol"],
+            "source": row.get("source") or "local",
+            "source_provider": row.get("source_provider") or "local_file",
+            "last_synced_at": row.get("last_synced_at") or row["created_at"],
+        }
+
+
+class _SyncInflux:
+    def __init__(self) -> None:
+        self.points: dict[tuple[Any, ...], dict[str, Any]] = {}
+        self.write_batches: list[list[dict[str, Any]]] = []
+
+    def write_points(self, points: list[dict[str, Any]]) -> int:
+        self.write_batches.append(deepcopy(points))
+        for point in points:
+            tags = tuple(sorted(point.get("tags", {}).items()))
+            key = (point["measurement"], tags, point["time"])
+            self.points[key] = deepcopy(point)
+        return len(points)
+
+    def query(
+        self,
+        _sql: str,
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        dataset_id = str((params or {})["dataset_id"])
+        rows = [
+            dict(point["fields"])
+            for point in self.points.values()
+            if point["tags"]["dataset_id"] == dataset_id
+        ]
+        return sorted(
+            rows,
+            key=lambda row: (str(row["session_id"]), int(row.get("source_seq", 0))),
+        )
+
+
+def _sync_bar(day: int, close: float) -> dict[str, Any]:
+    return {
+        "session_id": f"2026-01-{day:02d}",
+        "open": close - 1,
+        "high": close + 1,
+        "low": close - 2,
+        "close": close,
+        "volume": 1_000 + day,
+    }
+
+
+def _sync_payload(*bars: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": "GC=F",
+        "title": "黄金期货",
+        "timeframe": "1d",
+        "source": "yfinance",
+        "source_provider": "yfinance_public_chart",
+        "bars": [deepcopy(bar) for bar in bars],
+    }
+
+
+def test_postgres_sync_rewrites_revised_existing_bars(monkeypatch) -> None:
+    postgres = _SyncPostgres()
+    influx = _SyncInflux()
+    database = Database(
+        settings=StorageSettings(storage_backend="postgres", auto_migrate=False),
+        postgres=postgres,
+        redis_store=None,
+        influx=influx,
+    )
+    responses = iter(
+        [
+            _sync_payload(_sync_bar(1, 100.0), _sync_bar(2, 101.0), _sync_bar(3, 102.0)),
+            _sync_payload(_sync_bar(1, 100.0), _sync_bar(2, 101.0), _sync_bar(3, 302.0)),
+            _sync_payload(_sync_bar(1, 100.0), _sync_bar(2, 101.0), _sync_bar(3, 302.0)),
+        ]
+    )
+
+    monkeypatch.setattr(database_module, "fetch_remote_bars", lambda _payload: next(responses))
+
+    first = database.sync_dataset(
+        {"source": "yfinance", "symbol": "gc=f", "timeframe": "1d", "lookback": 250}
+    )
+    second = database.sync_dataset(
+        {"source": "yfinance", "symbol": "gc=f", "timeframe": "1d", "lookback": 250}
+    )
+
+    assert first["inserted_count"] == 3
+    assert first["updated_count"] == 0
+    assert first["sync_status"] == "updated"
+    assert second["id"] == first["id"]
+    assert second["inserted_count"] == 0
+    assert second["updated_count"] == 3
+    assert second["sync_status"] == "updated"
+    assert [len(batch) for batch in influx.write_batches] == [3, 1]
+    refreshed_bars = {
+        bar["session_id"]: bar for bar in database._fetch_dataset_bars(first["id"])
+    }
+    assert refreshed_bars["2026-01-03"]["close"] == 302.0
+
+    third = database.sync_dataset(
+        {"source": "yfinance", "symbol": "gc=f", "timeframe": "1d", "lookback": 250}
+    )
+
+    assert third["inserted_count"] == 0
+    assert third["updated_count"] == 3
+    assert third["sync_status"] == "unchanged"
+    assert [len(batch) for batch in influx.write_batches] == [3, 1]

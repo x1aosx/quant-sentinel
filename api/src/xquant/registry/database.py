@@ -345,8 +345,15 @@ class Database:
         new_bars = [
             bar for session_id, bar in remote_bars.items() if session_id not in existing_by_session
         ]
+        revised_bars = [
+            bar
+            for session_id, bar in remote_bars.items()
+            if session_id in existing_by_session
+            and existing_by_session[session_id] != bar
+        ]
+        bars_to_write = [*new_bars, *revised_bars]
         updated_count = len(remote_bars) - len(new_bars)
-        merged = {**existing_by_session, **{bar["session_id"]: bar for bar in new_bars}}
+        merged = {**existing_by_session, **remote_bars}
         merged_bars = [merged[session_id] for session_id in sorted(merged)]
         source = str(remote.get("source") or request_payload.get("source") or "unknown")
         source_provider = str(remote.get("source_provider") or source)
@@ -358,12 +365,12 @@ class Database:
             or symbol
         )
 
-        if new_bars:
+        if bars_to_write:
             self._write_dataset_bars(
                 dataset_id,
                 symbol,
                 timeframe,
-                new_bars,
+                bars_to_write,
                 created_at,
             )
         self._upsert_dataset_metadata(
@@ -396,7 +403,7 @@ class Database:
             "inserted_count": len(new_bars),
             "updated_count": updated_count,
             "total_count": len(merged_bars),
-            "sync_status": "updated" if new_bars else "unchanged",
+            "sync_status": "updated" if new_bars or revised_bars else "unchanged",
             "synced_at": now.isoformat(),
         }
 
