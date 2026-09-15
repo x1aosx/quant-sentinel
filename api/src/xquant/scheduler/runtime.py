@@ -5,13 +5,24 @@ from typing import Any
 
 from xquant.storage import StorageSettings
 
+from .application.dependency_resolver import ExecutionDependencyResolver
 from .application.recovery_service import RecoveryService
 from .application.scheduler_service import SchedulerService
 from .application.task_executor import TaskExecutor
 from .application.task_registry import TaskRegistry, default_registry
+from .cancellation import (
+    CancellationManager,
+    MemoryCancellationManager,
+    RedisCancellationManager,
+)
 from .dispatcher import LocalDispatcher, TaskDispatcher
 from .engine import APSchedulerEngine, MemorySchedulerEngine, SchedulerEngine
 from .lock import MemoryLockManager, RedisLockManager
+from .rate_limit import (
+    MemoryRateLimiter,
+    RateLimiter,
+    RedisRateLimiter,
+)
 from .repository import (
     ExecutionRepository,
     InMemoryExecutionRepository,
@@ -137,6 +148,17 @@ def build_scheduler_runtime(
             redis_client,
             key_prefix=config.lock_prefix,
         )
+        cancellation_manager = RedisCancellationManager(
+            redis_client,
+            key_prefix=f"{config.queue_prefix}:cancel",
+            ttl_seconds=config.cancellation_ttl_seconds,
+        )
+        rate_limiter: RateLimiter = RedisRateLimiter(
+            redis_client,
+            capacity=config.rate_limit_capacity,
+            refill_rate=config.rate_limit_refill_per_second,
+            key_prefix=f"{config.queue_prefix}:rate_limit",
+        )
         heartbeat = WorkerHeartbeat(
             redis_client,
             worker_id=worker_id,
@@ -146,12 +168,20 @@ def build_scheduler_runtime(
         )
     else:
         lock_manager = MemoryLockManager()
+        cancellation_manager: CancellationManager = MemoryCancellationManager()
+        rate_limiter = MemoryRateLimiter(
+            rate=config.rate_limit_refill_per_second,
+            capacity=config.rate_limit_capacity,
+        )
         heartbeat = None
 
     executor = TaskExecutor(
         task_registry,
         execution_repository,
         lock_manager=lock_manager,
+        dependency_resolver=ExecutionDependencyResolver(execution_repository),
+        cancellation_manager=cancellation_manager,
+        rate_limiter=rate_limiter,
         worker_id=None if config.dispatcher_type == "redis" else "local-scheduler",
     )
     if config.dispatcher_type == "local":
@@ -164,6 +194,7 @@ def build_scheduler_runtime(
         execution_repository,
         dispatcher,
         max_catch_up_runs=config.max_catch_up_runs,
+        cancellation_manager=cancellation_manager,
     )
     engine: SchedulerEngine
     if config.engine_type == "memory":
@@ -183,6 +214,7 @@ def build_scheduler_runtime(
                 graceful_shutdown_timeout=config.graceful_shutdown_timeout_seconds,
             ),
             heartbeat=heartbeat,
+            cancellation_manager=cancellation_manager,
             repository=execution_repository,
             worker_id=worker_id,
         )

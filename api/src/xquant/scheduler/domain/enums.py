@@ -7,6 +7,7 @@ class ExecutionStatus(StrEnum):
     PENDING = "PENDING"
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
+    WAITING = "WAITING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     RETRYING = "RETRYING"

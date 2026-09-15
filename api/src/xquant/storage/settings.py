@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote_plus
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +33,9 @@ class SchedulerSettings(BaseSettings):
     heartbeat_interval_seconds: float = Field(default=10.0, gt=0)
     heartbeat_timeout_seconds: float = Field(default=60.0, gt=0)
     lease_seconds: int = Field(default=3600, gt=0)
+    cancellation_ttl_seconds: int = Field(default=86400, gt=0)
+    rate_limit_capacity: float = Field(default=20.0, gt=0)
+    rate_limit_refill_per_second: float = Field(default=10.0, gt=0)
     graceful_shutdown_timeout_seconds: float = Field(default=60.0, ge=0)
     recovery_enabled: bool = True
     recovery_interval_seconds: float = Field(default=30.0, gt=0)
@@ -40,6 +43,19 @@ class SchedulerSettings(BaseSettings):
     lock_prefix: str = "xqs:lock"
     default_timeout_seconds: int = Field(default=300, gt=0)
     max_catch_up_runs: int = Field(default=30, ge=0, le=10_000)
+
+    @model_validator(mode="after")
+    def _validate_runtime_mode(self) -> SchedulerSettings:
+        if (
+            self.enabled
+            and not self.embedded
+            and self.dispatcher_type == "local"
+        ):
+            raise ValueError(
+                "SCHEDULER_DISPATCHER_TYPE=local requires "
+                "SCHEDULER_EMBEDDED=true"
+            )
+        return self
 
 
 class PostgresSettings(BaseSettings):

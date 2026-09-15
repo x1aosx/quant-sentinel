@@ -7,16 +7,28 @@ import {
   Gauge,
   Hexagon,
   Settings2,
+  Workflow,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 
-const nav = [
-  { to: '/', label: '驾驶台', icon: Gauge },
-  { to: '/data', label: '数据中心', icon: Database },
-  { to: '/ai', label: 'AI 分析', icon: BrainCircuit },
-  { to: '/market-analysis', label: '量价分析', icon: Crosshair },
-  { to: '/settings', label: '系统配置', icon: Settings2 },
+const navGroups = [
+  {
+    label: '分析',
+    items: [
+      { to: '/', label: '驾驶台', icon: Gauge },
+      { to: '/data', label: '数据中心', icon: Database },
+      { to: '/ai', label: 'AI 分析', icon: BrainCircuit },
+      { to: '/market-analysis', label: '量价分析', icon: Crosshair },
+    ],
+  },
+  {
+    label: '运营',
+    items: [
+      { to: '/scheduler', label: '任务中心', icon: Workflow },
+      { to: '/settings', label: '系统配置', icon: Settings2 },
+    ],
+  },
 ];
 
 const titles: Record<string, string> = {
@@ -24,6 +36,7 @@ const titles: Record<string, string> = {
   '/data': '数据中心',
   '/ai': 'AI 分析',
   '/market-analysis': '支撑阻力与价格行为',
+  '/scheduler': '任务中心',
   '/settings': '系统配置',
 };
 
@@ -42,23 +55,27 @@ export function Layout() {
           </span>
           X-Quant
         </div>
-        <div className="nav-label">分析</div>
-        {nav.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
-            >
-              <Icon size={16} />
-              {item.label}
-            </NavLink>
-          );
-          })}
-          <div className="sidebar-footnote">本地研究 · simulation only</div>
-        </aside>
+        {navGroups.map((group) => (
+          <div key={group.label}>
+            <div className="nav-label">{group.label}</div>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+                >
+                  <Icon size={16} />
+                  {item.label}
+                </NavLink>
+              );
+            })}
+          </div>
+        ))}
+        <div className="sidebar-footnote">本地研究 · simulation only</div>
+      </aside>
       <div className="main">
         <header className="topbar">
           <div className="topbar-left">

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
 
 from xquant.scheduler.domain import (
+    ExecutionStatus,
     ScheduleDefinition,
     TaskDefinition,
     TaskExecution,
@@ -121,6 +122,44 @@ class InMemoryExecutionRepository(ExecutionRepository):
         if payload is None:
             return None
         return to_domain(loads(payload), TaskExecution)
+
+    async def claim(
+        self,
+        execution_id: str,
+        *,
+        worker_id: str,
+        attempt: int,
+    ) -> TaskExecution | None:
+        if not worker_id:
+            raise ValueError("worker_id cannot be empty")
+        if attempt < 1:
+            raise ValueError("attempt must be at least 1")
+        with self._lock:
+            payload = self._rows.get(execution_id)
+            if payload is None:
+                return None
+            execution = to_domain(loads(payload), TaskExecution)
+            if (
+                execution.status
+                not in {
+                    ExecutionStatus.PENDING,
+                    ExecutionStatus.QUEUED,
+                    ExecutionStatus.WAITING,
+                    ExecutionStatus.RETRYING,
+                }
+                or execution.attempt != attempt
+            ):
+                return None
+            claimed_at = datetime.now(UTC)
+            claimed = replace(
+                execution,
+                status=ExecutionStatus.RUNNING,
+                worker_id=worker_id,
+                started_at=execution.started_at or claimed_at,
+                updated_at=claimed_at,
+            )
+            self._rows[execution_id] = dumps(claimed)
+        return to_domain(loads(self._rows[execution_id]), TaskExecution)
 
     async def list(
         self,

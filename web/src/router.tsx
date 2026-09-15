@@ -4,6 +4,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { DataCenterPage } from './pages/DataCenterPage';
 import { AIAnalysisPage } from './pages/AIAnalysisPage';
 import { MarketAnalysisPage } from './pages/MarketAnalysisPage';
+import { SchedulerPage } from './pages/SchedulerPage';
 import { SystemConfigPage } from './pages/SystemConfigPage';
 
 export const router = createBrowserRouter(
@@ -16,6 +17,7 @@ export const router = createBrowserRouter(
         { path: 'data', element: <DataCenterPage /> },
         { path: 'ai', element: <AIAnalysisPage /> },
         { path: 'market-analysis', element: <MarketAnalysisPage /> },
+        { path: 'scheduler', element: <SchedulerPage /> },
         { path: 'support-resistance', element: <Navigate to="/market-analysis" replace /> },
         { path: 'price-action', element: <Navigate to="/market-analysis" replace /> },
         { path: 'settings', element: <SystemConfigPage /> },

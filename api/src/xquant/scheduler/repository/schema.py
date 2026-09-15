@@ -16,10 +16,14 @@ CREATE TABLE IF NOT EXISTS scheduler.scheduler_task (
     retry_policy_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     concurrency_policy TEXT NOT NULL DEFAULT 'FORBID',
     rate_limit_key TEXT,
+    planner TEXT,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE scheduler.scheduler_task
+    ADD COLUMN IF NOT EXISTS planner TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_scheduler_task_enabled
     ON scheduler.scheduler_task (enabled);
@@ -55,6 +59,7 @@ CREATE TABLE IF NOT EXISTS scheduler.scheduler_execution (
     task_name TEXT NOT NULL,
     schedule_id TEXT,
     parent_execution_id TEXT,
+    depends_on_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     queue TEXT NOT NULL DEFAULT 'default',
     priority INTEGER NOT NULL DEFAULT 5,
     status TEXT NOT NULL,
@@ -74,6 +79,9 @@ CREATE TABLE IF NOT EXISTS scheduler.scheduler_execution (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE scheduler.scheduler_execution
+    ADD COLUMN IF NOT EXISTS depends_on_json JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_scheduler_execution_task_name
     ON scheduler.scheduler_execution (task_name);

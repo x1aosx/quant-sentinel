@@ -66,6 +66,16 @@ class ExecutionRepository(ABC):
         """Return an execution by id."""
 
     @abstractmethod
+    async def claim(
+        self,
+        execution_id: str,
+        *,
+        worker_id: str,
+        attempt: int,
+    ) -> TaskExecution | None:
+        """Atomically claim a queued execution for one worker attempt."""
+
+    @abstractmethod
     async def list(
         self,
         status: ExecutionStatus | str | None = None,
