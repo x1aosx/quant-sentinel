@@ -2,6 +2,7 @@ import type {
   AIAnalysisRecord,
   AIRecordDetailResponse,
   AIRecordListResponse,
+  AnalysisInstrumentSummariesParams,
   AnalysisInstrumentSummariesResponse,
   BatchAnalyzeResponse,
   DatasetSummary,
@@ -40,8 +41,20 @@ export const api = {
     mode: string;
   }>('/dashboard'),
   listDatasets: () => apiRequest<{ items: DatasetSummary[] }>('/datasets'),
-  getInstrumentSummaries: () =>
-    apiRequest<AnalysisInstrumentSummariesResponse>('/analysis/instruments'),
+  getInstrumentSummaries: (params: AnalysisInstrumentSummariesParams = {}) => {
+    const search = new URLSearchParams({
+      page: String(params.page ?? 1),
+      page_size: String(params.page_size ?? 20),
+    });
+    if (params.keyword) search.set('keyword', params.keyword);
+    if (params.timeframe) search.set('timeframe', params.timeframe);
+    if (params.trend) search.set('trend', params.trend);
+    if (params.change) search.set('change', params.change);
+    if (params.refresh) search.set('refresh', 'true');
+    return apiRequest<AnalysisInstrumentSummariesResponse>(
+      `/analysis/instruments?${search.toString()}`,
+    );
+  },
   deleteDataset: (datasetId: string) =>
     apiRequest<{ deleted: boolean; id: string }>(`/datasets/${encodeURIComponent(datasetId)}`, {
       method: 'DELETE',

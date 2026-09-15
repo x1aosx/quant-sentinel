@@ -197,7 +197,10 @@ export function DataCenterPage() {
       setSyncingKey(key);
       try {
         const response = await api.syncRemoteDataset(payload);
-        await queryClient.invalidateQueries({ queryKey: ['datasets'] });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['datasets'] }),
+          queryClient.invalidateQueries({ queryKey: ['instrument-summaries'] }),
+        ]);
         setLastSync(response);
         setNotice(
           `${options?.automatic ? '自动更新：' : ''}${response.title || response.symbol} ` +
@@ -282,7 +285,10 @@ export function DataCenterPage() {
   const deleteMutation = useMutation({
     mutationFn: (dataset: DatasetSummary) => api.deleteDataset(dataset.id),
     onSuccess: async (_, dataset) => {
-      await queryClient.invalidateQueries({ queryKey: ['datasets'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['datasets'] }),
+        queryClient.invalidateQueries({ queryKey: ['instrument-summaries'] }),
+      ]);
       setLastSync((current) => (current?.id === dataset.id ? null : current));
       setNotice(
         `已删除 ${dataset.title || dataset.symbol} ${formatTimeframeLabel(dataset.timeframe)}`,

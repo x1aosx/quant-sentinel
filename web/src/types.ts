@@ -173,6 +173,18 @@ export interface AnalysisInstrumentSummary {
   bars_used: number | null;
 }
 
+export type AnalysisChangeFilter = 'up' | 'down' | 'flat';
+
+export interface AnalysisInstrumentSummariesParams {
+  keyword?: string;
+  timeframe?: string;
+  trend?: string;
+  change?: AnalysisChangeFilter;
+  page?: number;
+  page_size?: number;
+  refresh?: boolean;
+}
+
 export interface AnalysisInstrumentSummariesResponse {
   items: AnalysisInstrumentSummary[];
   errors: Array<{
@@ -181,6 +193,16 @@ export interface AnalysisInstrumentSummariesResponse {
     detail: string;
   }>;
   count: number;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  facets: {
+    timeframes: string[];
+    trends: string[];
+  };
+  from_cache: boolean;
+  generated_at: string;
 }
 
 export interface DashboardSummary {

@@ -1,8 +1,10 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BrainCircuit,
+  ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   Gauge,
   Layers,
@@ -11,11 +13,14 @@ import {
   Play,
   RefreshCw,
   ScanSearch,
+  Search,
   TrendingUp,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { KlineChart } from '../components/KlineChart';
 import type {
+  AnalysisChangeFilter,
+  AnalysisInstrumentSummariesParams,
   AnalysisInstrumentSummary,
   SrLevel,
 } from '../types';
@@ -35,6 +40,14 @@ const CYCLE_LABELS: Record<string, string> = {
   trending: '趋势运行',
   trading_range: '区间震荡',
   range_boundary: '区间边界',
+};
+
+const SUMMARY_PAGE_SIZES = [20, 50, 100, 200] as const;
+
+const CHANGE_LABELS: Record<AnalysisChangeFilter, string> = {
+  up: '上涨',
+  down: '下跌',
+  flat: '持平',
 };
 
 interface AnalysisPayload {
@@ -66,6 +79,19 @@ function fmtDirectionScore(direction?: string, score?: number): string {
   const label = direction ? DIRECTION_LABELS[direction] ?? direction : '--';
   if (score === undefined || !Number.isFinite(score)) return label;
   return `${label} ${score > 0 ? '+' : ''}${score}`;
+}
+
+function fmtGeneratedAt(value?: string): string {
+  if (!value) return '时间未知';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
 function parseOptionalInt(value: string, label: string): number | undefined {
@@ -108,6 +134,7 @@ function levelLabel(level: SrLevel | null | undefined): string {
 }
 
 export function MarketAnalysisPage() {
+  const queryClient = useQueryClient();
   const [datasetId, setDatasetId] = useState('');
   const [lookback, setLookback] = useState('250');
   const [nZones, setNZones] = useState('6');
@@ -116,20 +143,63 @@ export function MarketAnalysisPage() {
   const [minRr, setMinRr] = useState('1.5');
   const [stance, setStance] = useState<'conservative' | 'balanced' | 'aggressive'>('balanced');
   const [pageError, setPageError] = useState('');
+  const [summaryKeyword, setSummaryKeyword] = useState('');
+  const [summaryTimeframe, setSummaryTimeframe] = useState('');
+  const [summaryTrend, setSummaryTrend] = useState('');
+  const [summaryChange, setSummaryChange] = useState<AnalysisChangeFilter | ''>('');
+  const [summaryPage, setSummaryPage] = useState(1);
+  const [summaryPageSize, setSummaryPageSize] = useState(20);
   const detailRef = useRef<HTMLDivElement | null>(null);
 
   const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
+  const summaryParams: AnalysisInstrumentSummariesParams = {
+    page: summaryPage,
+    page_size: summaryPageSize,
+    ...(summaryKeyword.trim() ? { keyword: summaryKeyword.trim() } : {}),
+    ...(summaryTimeframe ? { timeframe: summaryTimeframe } : {}),
+    ...(summaryTrend ? { trend: summaryTrend } : {}),
+    ...(summaryChange ? { change: summaryChange } : {}),
+  };
   const summariesQuery = useQuery({
-    queryKey: ['instrument-summaries'],
-    queryFn: api.getInstrumentSummaries,
+    queryKey: ['instrument-summaries', summaryParams],
+    queryFn: () => api.getInstrumentSummaries(summaryParams),
+  });
+  const refreshSummaryMutation = useMutation({
+    mutationFn: (params: AnalysisInstrumentSummariesParams) =>
+      api.getInstrumentSummaries({ ...params, refresh: true }),
+    onSuccess: (data, params) => {
+      queryClient.setQueryData(['instrument-summaries', params], data);
+    },
   });
   const datasets = datasetsQuery.data?.items ?? [];
+  const summaryData = summariesQuery.data;
+  const summaryTotalPages = summaryData?.total_pages ?? 0;
+  const summaryPageStart =
+    summaryData && summaryData.count > 0
+      ? (summaryData.page - 1) * summaryData.page_size + 1
+      : 0;
+  const summaryPageEnd =
+    summaryData && summaryData.count > 0
+      ? summaryPageStart + summaryData.items.length - 1
+      : 0;
+  const summaryCacheLabel = summaryData
+    ? `${summaryData.from_cache ? '缓存结果' : '实时计算'} · ${fmtGeneratedAt(summaryData.generated_at)}`
+    : '';
+  const hasSummaryFilters = Boolean(
+    summaryKeyword.trim() || summaryTimeframe || summaryTrend || summaryChange,
+  );
 
   useEffect(() => {
     if (!datasetId && datasets.length) {
       setDatasetId(datasets[0].id);
     }
   }, [datasetId, datasets]);
+
+  useEffect(() => {
+    if (!summaryData) return;
+    const lastPage = Math.max(summaryData.total_pages, 1);
+    if (summaryPage > lastPage) setSummaryPage(lastPage);
+  }, [summaryData, summaryPage]);
 
   const analysis = useMutation({
     mutationFn: (payload: AnalysisPayload) => api.analyzeSupportResistance(payload),
@@ -204,22 +274,112 @@ export function MarketAnalysisPage() {
           <span className="section-title-main">
             <Layers size={16} />
             全部品种汇总
-            <span className="tag">{summariesQuery.data?.count ?? 0} 个品种</span>
+            <span className="tag">{summaryData?.count ?? 0} 个品种</span>
           </span>
           <span className="section-title-actions">
+            {summaryCacheLabel ? (
+              <span className="summary-cache-meta" title={summaryCacheLabel}>
+                {summaryCacheLabel}
+              </span>
+            ) : null}
             <button
               className="button"
-              onClick={() => summariesQuery.refetch()}
-              disabled={summariesQuery.isFetching}
+              onClick={() => refreshSummaryMutation.mutate(summaryParams)}
+              disabled={summariesQuery.isFetching || refreshSummaryMutation.isPending}
             >
               <RefreshCw size={14} />
-              {summariesQuery.isFetching ? '刷新中' : '刷新汇总'}
+              {refreshSummaryMutation.isPending ? '刷新中' : '刷新汇总'}
             </button>
           </span>
         </div>
 
+        <div className="summary-toolbar">
+          <label className="field summary-search">
+            <span>关键词</span>
+            <span className="summary-search-control">
+              <Search size={14} aria-hidden="true" />
+              <input
+                type="search"
+                value={summaryKeyword}
+                onChange={(event) => {
+                  setSummaryKeyword(event.target.value);
+                  setSummaryPage(1);
+                }}
+                placeholder="搜索 symbol 或名称"
+                aria-label="搜索汇总品种"
+              />
+            </span>
+          </label>
+          <label className="field summary-filter-field">
+            <span>周期</span>
+            <select
+              value={summaryTimeframe}
+              onChange={(event) => {
+                setSummaryTimeframe(event.target.value);
+                setSummaryPage(1);
+              }}
+            >
+              <option value="">全部周期</option>
+              {summaryTimeframe &&
+              !(summaryData?.facets.timeframes ?? []).includes(summaryTimeframe) ? (
+                <option value={summaryTimeframe}>{summaryTimeframe}</option>
+              ) : null}
+              {(summaryData?.facets.timeframes ?? []).map((timeframe) => (
+                <option key={timeframe} value={timeframe}>
+                  {timeframe}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field summary-filter-field">
+            <span>趋势</span>
+            <select
+              value={summaryTrend}
+              onChange={(event) => {
+                setSummaryTrend(event.target.value);
+                setSummaryPage(1);
+              }}
+            >
+              <option value="">全部趋势</option>
+              {summaryTrend && !(summaryData?.facets.trends ?? []).includes(summaryTrend) ? (
+                <option value={summaryTrend}>{summaryTrend}</option>
+              ) : null}
+              {(summaryData?.facets.trends ?? []).map((trend) => (
+                <option key={trend} value={trend}>
+                  {trend}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field summary-filter-field">
+            <span>涨跌</span>
+            <select
+              value={summaryChange}
+              onChange={(event) => {
+                setSummaryChange(event.target.value as AnalysisChangeFilter | '');
+                setSummaryPage(1);
+              }}
+            >
+              <option value="">全部涨跌</option>
+              {(Object.entries(CHANGE_LABELS) as Array<[AnalysisChangeFilter, string]>).map(
+                ([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ),
+              )}
+            </select>
+          </label>
+        </div>
+
+        {refreshSummaryMutation.isError ? (
+          <div className="empty" style={{ marginBottom: 14 }}>
+            刷新汇总失败：{(refreshSummaryMutation.error as Error).message}
+          </div>
+        ) : null}
+
         {summariesQuery.isLoading ? (
-          <div className="empty">正在计算全部品种指标...</div>
+          <div className="empty">正在加载全部品种汇总...</div>
         ) : summariesQuery.isError ? (
           <div className="empty">
             <span>
@@ -227,7 +387,7 @@ export function MarketAnalysisPage() {
               汇总加载失败：{(summariesQuery.error as Error).message}
             </span>
           </div>
-        ) : summariesQuery.data?.items.length ? (
+        ) : summaryData?.items.length ? (
           <>
             <div className="table-wrap">
               <table className="table summary-table">
@@ -248,7 +408,7 @@ export function MarketAnalysisPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {summariesQuery.data.items.map((item) => {
+                  {summaryData.items.map((item) => {
                     const selected = item.dataset_id === activeDatasetId;
                     return (
                       <tr
@@ -316,18 +476,80 @@ export function MarketAnalysisPage() {
                 </tbody>
               </table>
             </div>
-            {summariesQuery.data.errors.length ? (
+            <div className="summary-pagination">
+              <span className="muted">
+                第 {summaryPageStart}-{summaryPageEnd} 条，共 {summaryData.count} 条
+              </span>
+              <div className="summary-page-actions">
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => setSummaryPage((current) => Math.max(current - 1, 1))}
+                  disabled={
+                    summariesQuery.isFetching ||
+                    refreshSummaryMutation.isPending ||
+                    summaryPage <= 1
+                  }
+                >
+                  <ChevronLeft size={14} />
+                  上一页
+                </button>
+                <span className="summary-page-indicator">
+                  第 {Math.max(summaryData.page, 1)} / {Math.max(summaryTotalPages, 1)} 页
+                </span>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() =>
+                    setSummaryPage((current) =>
+                      Math.min(current + 1, Math.max(summaryTotalPages, 1)),
+                    )
+                  }
+                  disabled={
+                    summariesQuery.isFetching ||
+                    refreshSummaryMutation.isPending ||
+                    summaryTotalPages === 0 ||
+                    summaryPage >= summaryTotalPages
+                  }
+                >
+                  下一页
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+              <label className="summary-page-size">
+                每页
+                <select
+                  value={summaryPageSize}
+                  onChange={(event) => {
+                    setSummaryPageSize(Number(event.target.value));
+                    setSummaryPage(1);
+                  }}
+                  aria-label="每页条数"
+                >
+                  {SUMMARY_PAGE_SIZES.map((pageSize) => (
+                    <option key={pageSize} value={pageSize}>
+                      {pageSize}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {summaryData.errors.length ? (
               <div className="empty" style={{ marginTop: 14 }}>
-                {summariesQuery.data.errors.length} 个品种未能生成汇总：
-                {summariesQuery.data.errors.map((item) => `${item.symbol} ${item.detail}`).join('；')}
+                {summaryData.errors.length} 个品种未能生成汇总：
+                {summaryData.errors.map((item) => `${item.symbol} ${item.detail}`).join('；')}
               </div>
             ) : null}
             <p className="muted" style={{ marginBottom: 0 }}>
               触及概率在模型未标定时显示“未标定”；守住概率优先使用标定值，缺失时回退为历史事件守住率。
             </p>
           </>
+        ) : summaryData ? (
+          <div className="empty">
+            {hasSummaryFilters ? '没有符合筛选条件的品种。' : '暂无数据集，请先到数据中心导入品种行情。'}
+          </div>
         ) : (
-          <div className="empty">暂无数据集，请先到数据中心导入品种行情。</div>
+          <div className="empty">暂无汇总结果。</div>
         )}
       </div>
 
