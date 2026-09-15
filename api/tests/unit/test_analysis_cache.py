@@ -93,7 +93,7 @@ def test_instrument_summaries_cache_filter_pagination_and_invalidation(
         assert first.status_code == 200, first.text
         first_payload = first.json()
         assert first_payload["from_cache"] is False
-        assert first_payload["count"] == 2
+        assert first_payload["count"] == 3
         assert first_payload["total"] == 3
         assert first_payload["page"] == 1
         assert first_payload["page_size"] == 2
@@ -133,9 +133,20 @@ def test_instrument_summaries_cache_filter_pagination_and_invalidation(
         assert second_page.status_code == 200, second_page.text
         page_payload = second_page.json()
         assert page_payload["from_cache"] is True
-        assert page_payload["count"] == 1
+        assert page_payload["count"] == 3
         assert page_payload["total"] == 3
         assert page_payload["total_pages"] == 2
+
+        empty = client.get(
+            "/api/v1/analysis/instruments",
+            params={"keyword": "missing"},
+        )
+        assert empty.status_code == 200, empty.text
+        empty_payload = empty.json()
+        assert empty_payload["items"] == []
+        assert empty_payload["count"] == 0
+        assert empty_payload["total"] == 0
+        assert empty_payload["total_pages"] == 0
 
         refreshed = client.get(
             "/api/v1/analysis/instruments",

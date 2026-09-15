@@ -274,7 +274,7 @@ def instrument_summaries(
     return {
         "items": page_items,
         "errors": list(snapshot["errors"]),
-        "count": len(page_items),
+        "count": total,
         "total": total,
         "page": page,
         "page_size": page_size,
