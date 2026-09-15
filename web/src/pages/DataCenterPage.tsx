@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Database, Globe, RefreshCw, Trash2 } from 'lucide-react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
+import { Database, Globe, Loader2, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
-import type { DatasetSummary, SyncDatasetResponse } from '../types';
+import type { DatasetSummary, ScheduleDefinition, SyncDatasetResponse } from '../types';
 import { formatSessionTime, formatTimeframeLabel } from '../utils/datasetDisplay';
 
 type DatasetSource = 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
@@ -25,14 +25,18 @@ interface InstrumentGroup {
   datasets: DatasetSummary[];
 }
 
-const AUTO_UPDATE_INTERVALS = [
-  { value: 60_000, label: '1 分钟' },
-  { value: 300_000, label: '5 分钟' },
-  { value: 900_000, label: '15 分钟' },
-  { value: 1_800_000, label: '30 分钟' },
-  { value: 3_600_000, label: '1 小时' },
-  { value: 14_400_000, label: '4 小时' },
-  { value: 86_400_000, label: '1 天' },
+const MARKET_SYNC_TASK = 'market.symbol.sync';
+const DATASET_SYNC_ORIGIN = 'data-center.dataset-sync';
+const SYNC_TIMEZONE = 'Asia/Shanghai';
+const DEFAULT_SYNC_INTERVAL_SECONDS = 300;
+const SYNC_INTERVALS = [
+  { value: 60, label: '1 分钟' },
+  { value: 300, label: '5 分钟' },
+  { value: 900, label: '15 分钟' },
+  { value: 1_800, label: '30 分钟' },
+  { value: 3_600, label: '1 小时' },
+  { value: 14_400, label: '4 小时' },
+  { value: 86_400, label: '1 天' },
 ];
 
 function sourceLabel(source?: DatasetSummary['source']): string {
@@ -93,6 +97,102 @@ function parseLookbackValue(value: string): number | null {
   return parsed;
 }
 
+function scheduleIdForSymbol(symbol: string): string {
+  const normalized = normalizeSymbol(symbol);
+  let hash = 2_166_136_261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const slug = normalized
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return `dataset-sync-${slug || 'symbol'}-${(hash >>> 0).toString(36)}`;
+}
+
+function scheduleSymbol(schedule: ScheduleDefinition): string {
+  const direct = schedule.params.symbol;
+  if (typeof direct === 'string' && normalizeSymbol(direct)) {
+    return normalizeSymbol(direct);
+  }
+
+  const entries = schedule.params.symbols;
+  if (!Array.isArray(entries)) return '';
+  for (const entry of entries) {
+    if (typeof entry === 'string' && normalizeSymbol(entry)) {
+      return normalizeSymbol(entry);
+    }
+    if (entry && typeof entry === 'object' && 'symbol' in entry) {
+      const value = String(entry.symbol ?? '');
+      if (normalizeSymbol(value)) return normalizeSymbol(value);
+    }
+  }
+  return '';
+}
+
+function scheduleDatasetIds(schedule: ScheduleDefinition): string[] {
+  const values = schedule.params.dataset_ids;
+  if (!Array.isArray(values)) return [];
+  return values.map((value) => String(value)).filter(Boolean);
+}
+
+function durationLabel(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 3_600) return `${seconds / 60} 分钟`;
+  if (seconds < 86_400) return `${seconds / 3_600} 小时`;
+  return `${seconds / 86_400} 天`;
+}
+
+function scheduleIntervalSeconds(schedule?: ScheduleDefinition): number | null {
+  if (!schedule || schedule.trigger.type !== 'interval') return null;
+  const seconds = Number(schedule.trigger.interval_seconds);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function findSyncSchedule(
+  group: InstrumentGroup,
+  schedules: ScheduleDefinition[],
+): ScheduleDefinition | undefined {
+  const groupSymbol = normalizeSymbol(group.symbol);
+  const groupDatasetIds = new Set(group.datasets.map((dataset) => dataset.id));
+  return schedules.find((schedule) => {
+    if (schedule.task_name !== MARKET_SYNC_TASK) return false;
+    if (schedule.params.origin !== DATASET_SYNC_ORIGIN) return false;
+    if (scheduleSymbol(schedule) === groupSymbol) return true;
+    return scheduleDatasetIds(schedule).some((datasetId) => groupDatasetIds.has(datasetId));
+  });
+}
+
+function buildSyncScheduleParams(
+  group: InstrumentGroup,
+  lookback: number,
+  adjust: DatasetAdjust,
+): Record<string, unknown> {
+  const symbols = group.datasets.flatMap((dataset) => {
+    const source = remoteSourceForDataset(dataset.source);
+    if (!source) return [];
+    return [
+      {
+        dataset_id: dataset.id,
+        source,
+        symbol: dataset.symbol,
+        timeframe: dataset.timeframe,
+        lookback,
+        adjust,
+        ...(dataset.exchange ? { exchange: dataset.exchange } : {}),
+      },
+    ];
+  });
+  return {
+    origin: DATASET_SYNC_ORIGIN,
+    symbol: group.symbol,
+    dataset_ids: symbols.map((item) => item.dataset_id),
+    symbols,
+  };
+}
+
 export function DataCenterPage() {
   const queryClient = useQueryClient();
   const [source, setSource] = useState<DatasetSource>('yfinance');
@@ -105,22 +205,18 @@ export function DataCenterPage() {
   const [lastSync, setLastSync] = useState<SyncDatasetResponse | null>(null);
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
-  const [autoUpdate, setAutoUpdate] = useState(false);
-  const [autoUpdateSymbol, setAutoUpdateSymbol] = useState('');
-  const [updateInterval, setUpdateInterval] = useState(300_000);
   const syncLockRef = useRef(false);
-  const autoRunRef = useRef(false);
-  const datasetsRef = useRef<DatasetSummary[]>([]);
-  const lookbackRef = useRef(lookback);
-  const adjustRef = useRef(adjust);
-  const autoUpdateRef = useRef(autoUpdate);
-  const autoUpdateSymbolRef = useRef(autoUpdateSymbol);
 
   const datasetsQuery = useQuery({
     queryKey: ['datasets'],
     queryFn: api.listDatasets,
   });
+  const schedulesQuery = useQuery({
+    queryKey: ['scheduler', 'schedules'],
+    queryFn: () => api.listSchedules(),
+  });
   const datasets = datasetsQuery.data?.items ?? [];
+  const schedules = schedulesQuery.data ?? [];
 
   const instrumentGroups = useMemo(() => {
     const groups: InstrumentGroup[] = [];
@@ -145,45 +241,6 @@ export function DataCenterPage() {
 
     return groups;
   }, [datasets]);
-
-  const syncableGroups = useMemo(
-    () =>
-      instrumentGroups.filter((group) =>
-        group.datasets.some((dataset) => remoteSourceForDataset(dataset.source)),
-      ),
-    [instrumentGroups],
-  );
-
-  useEffect(() => {
-    datasetsRef.current = datasets;
-  }, [datasets]);
-
-  useEffect(() => {
-    lookbackRef.current = lookback;
-  }, [lookback]);
-
-  useEffect(() => {
-    adjustRef.current = adjust;
-  }, [adjust]);
-
-  useEffect(() => {
-    autoUpdateRef.current = autoUpdate;
-  }, [autoUpdate]);
-
-  useEffect(() => {
-    autoUpdateSymbolRef.current = autoUpdateSymbol;
-  }, [autoUpdateSymbol]);
-
-  useEffect(() => {
-    const selectedStillExists = syncableGroups.some(
-      (group) => normalizeSymbol(group.symbol) === normalizeSymbol(autoUpdateSymbol),
-    );
-    if (selectedStillExists) return;
-
-    const fallbackSymbol = syncableGroups[0]?.symbol ?? '';
-    setAutoUpdateSymbol(fallbackSymbol);
-    if (!fallbackSymbol) setAutoUpdate(false);
-  }, [autoUpdateSymbol, syncableGroups]);
 
   const executeSync = useCallback(
     async (
@@ -221,66 +278,66 @@ export function DataCenterPage() {
     [queryClient],
   );
 
-  const runAutoUpdate = useCallback(async () => {
-    if (!autoUpdateRef.current || !autoUpdateSymbolRef.current || autoRunRef.current) return;
+  type SyncScheduleAction =
+    | { kind: 'enable'; group: InstrumentGroup; lookback: number; adjust: DatasetAdjust }
+    | { kind: 'disable'; group: InstrumentGroup; scheduleId: string }
+    | { kind: 'interval'; group: InstrumentGroup; scheduleId: string; intervalSeconds: number };
 
-    autoRunRef.current = true;
-    try {
-      const lookbackValue = parseLookbackValue(lookbackRef.current);
-      if (lookbackValue === null) {
-        setNotice('');
-        setPageError('自动更新失败：回看数量必须是 10 到 5000 之间的整数');
+  const syncScheduleMutation = useMutation({
+    mutationFn: async (action: SyncScheduleAction) => {
+      if (action.kind === 'disable') {
+        await api.deleteSchedule(action.scheduleId);
         return;
       }
 
-      const targetSymbol = normalizeSymbol(autoUpdateSymbolRef.current);
-      const targetDatasets = datasetsRef.current
-        .filter((dataset) => normalizeSymbol(dataset.symbol) === targetSymbol)
-        .map((dataset) => ({
-          dataset,
-          source: remoteSourceForDataset(dataset.source),
-        }))
-        .filter(
-          (
-            target,
-          ): target is { dataset: DatasetSummary; source: DatasetSource } =>
-            target.source !== null,
-        );
-      if (targetDatasets.length === 0) {
-        setNotice('');
-        setPageError('自动更新标的没有可用的远程数据源，请重新选择');
-        return;
-      }
-
-      for (const { dataset, source: datasetSource } of targetDatasets) {
-        if (!autoUpdateRef.current) break;
-        await executeSync(
-          dataset.id,
-          {
-            source: datasetSource,
-            symbol: dataset.symbol,
-            timeframe: dataset.timeframe,
-            lookback: lookbackValue,
-            adjust: adjustRef.current,
-            exchange: dataset.exchange,
+      if (action.kind === 'interval') {
+        const schedule = findSyncSchedule(action.group, schedules);
+        return api.updateSchedule(action.scheduleId, {
+          trigger: {
+            type: 'interval',
+            interval_seconds: action.intervalSeconds,
+            start_at: null,
+            timezone: schedule?.timezone ?? SYNC_TIMEZONE,
           },
-          { automatic: true },
-        );
+        });
       }
-    } finally {
-      autoRunRef.current = false;
-    }
-  }, [executeSync]);
 
-  useEffect(() => {
-    if (!autoUpdate || !autoUpdateSymbol) return;
-
-    void runAutoUpdate();
-    const intervalId = window.setInterval(() => {
-      void runAutoUpdate();
-    }, updateInterval);
-    return () => window.clearInterval(intervalId);
-  }, [autoUpdate, autoUpdateSymbol, runAutoUpdate, updateInterval]);
+      const schedule = findSyncSchedule(action.group, schedules);
+      const intervalSeconds =
+        scheduleIntervalSeconds(schedule) ?? DEFAULT_SYNC_INTERVAL_SECONDS;
+      const payload = {
+        id: schedule?.id ?? scheduleIdForSymbol(action.group.symbol),
+        task_name: MARKET_SYNC_TASK,
+        trigger: {
+          type: 'interval' as const,
+          interval_seconds: intervalSeconds,
+          start_at: null,
+          timezone: schedule?.timezone ?? SYNC_TIMEZONE,
+        },
+        params: buildSyncScheduleParams(action.group, action.lookback, action.adjust),
+        timezone: schedule?.timezone ?? SYNC_TIMEZONE,
+        misfire_policy: 'FIRE_ONCE' as const,
+        enabled: true,
+        max_catch_up_runs: schedule?.max_catch_up_runs ?? 30,
+      };
+      return schedule
+        ? api.updateSchedule(schedule.id, payload)
+        : api.createSchedule(payload);
+    },
+    onSuccess: async (_result, action) => {
+      await queryClient.invalidateQueries({ queryKey: ['scheduler', 'schedules'] });
+      setPageError('');
+      setNotice(
+        action.kind === 'disable'
+          ? `已取消 ${action.group.symbol} 的自动同步，并删除对应任务`
+          : `已${action.kind === 'enable' ? '启用' : '更新'} ${action.group.symbol} 的自动同步`,
+      );
+    },
+    onError: (error: Error) => {
+      setNotice('');
+      setPageError(`同步计划操作失败：${error.message}`);
+    },
+  });
 
   const deleteMutation = useMutation({
     mutationFn: (dataset: DatasetSummary) => api.deleteDataset(dataset.id),
@@ -362,6 +419,52 @@ export function DataCenterPage() {
     const target = `${dataset.title || dataset.symbol} ${formatTimeframeLabel(dataset.timeframe)}`;
     if (!window.confirm(`确定删除数据集“${target}”吗？此操作无法撤销。`)) return;
     deleteMutation.mutate(dataset);
+  };
+
+  const handleToggleSync = (group: InstrumentGroup, enabled: boolean) => {
+    setPageError('');
+    setNotice('');
+    const schedule = findSyncSchedule(group, schedules);
+    if (!enabled) {
+      if (!schedule) return;
+      syncScheduleMutation.mutate({
+        kind: 'disable',
+        group,
+        scheduleId: schedule.id,
+      });
+      return;
+    }
+
+    const lookbackValue = parseLookbackValue(lookback);
+    if (lookbackValue === null) {
+      setPageError('请先把上方回看数量调整为 10 到 5000 之间的整数');
+      return;
+    }
+    if (!group.datasets.some((dataset) => remoteSourceForDataset(dataset.source))) {
+      setPageError('该标的没有可用的远程数据源，不能启用同步');
+      return;
+    }
+    syncScheduleMutation.mutate({
+      kind: 'enable',
+      group,
+      lookback: lookbackValue,
+      adjust,
+    });
+  };
+
+  const handleIntervalChange = (
+    group: InstrumentGroup,
+    schedule: ScheduleDefinition,
+    intervalSeconds: number,
+  ) => {
+    setPageError('');
+    setNotice('');
+    syncScheduleMutation.mutate({
+      kind: 'interval',
+      group,
+      scheduleId: schedule.id,
+      intervalSeconds,
+    });
   };
 
   return (
@@ -544,6 +647,11 @@ export function DataCenterPage() {
             <span className="muted">{formatRefreshTime(datasetsQuery.dataUpdatedAt)}</span>
           </div>
         </div>
+        {schedulesQuery.isError ? (
+          <div className="empty" role="alert">
+            同步计划加载失败：{(schedulesQuery.error as Error).message}
+          </div>
+        ) : null}
         {datasetsQuery.isPending ? (
           <div className="empty">加载中...</div>
         ) : datasetsQuery.isError ? (
@@ -564,6 +672,7 @@ export function DataCenterPage() {
                   <th scope="col">结束时间</th>
                   <th scope="col">最后同步</th>
                   <th scope="col">启用同步</th>
+                  <th scope="col">同步频率</th>
                   <th scope="col">操作</th>
                 </tr>
               </thead>
@@ -577,9 +686,15 @@ export function DataCenterPage() {
                       const hasRemoteDataset = group.datasets.some((item) =>
                         remoteSourceForDataset(item.source),
                       );
-                      const isAutoUpdateTarget =
-                        autoUpdate &&
-                        normalizeSymbol(autoUpdateSymbol) === normalizeSymbol(group.symbol);
+                      const syncSchedule = findSyncSchedule(group, schedules);
+                      const syncEnabled = Boolean(syncSchedule?.enabled);
+                      const intervalSeconds = scheduleIntervalSeconds(syncSchedule);
+                      const intervalIsKnown =
+                        intervalSeconds !== null &&
+                        SYNC_INTERVALS.some((option) => option.value === intervalSeconds);
+                      const isSyncSchedulePending =
+                        syncScheduleMutation.isPending &&
+                        syncScheduleMutation.variables?.group.key === group.key;
                       const isDeleting =
                         deleteMutation.isPending && deleteMutation.variables?.id === dataset.id;
 
@@ -618,52 +733,90 @@ export function DataCenterPage() {
                             {formatTimestamp(dataset.synced_at ?? dataset.last_synced_at)}
                           </td>
                           {isFirstInGroup ? (
-                            <td
-                              rowSpan={group.datasets.length}
-                              className="dataset-sync-cell"
-                            >
-                              <div className="dataset-sync-control">
-                                <label
-                                  className="checkbox-row"
-                                  htmlFor={`dataset-auto-update-${group.datasets[0]?.id ?? group.key}`}
-                                >
-                                  <input
-                                    id={`dataset-auto-update-${group.datasets[0]?.id ?? group.key}`}
-                                    type="checkbox"
-                                    checked={isAutoUpdateTarget}
-                                    disabled={
-                                      !hasRemoteDataset ||
-                                      syncingKey !== null ||
-                                      deleteMutation.isPending
-                                    }
-                                    onChange={(event) => {
-                                      const checked = event.target.checked;
-                                      if (checked) setAutoUpdateSymbol(group.symbol);
-                                      setAutoUpdate(checked);
-                                    }}
-                                  />
-                                  {hasRemoteDataset
-                                    ? isAutoUpdateTarget
-                                      ? '已启用'
-                                      : '启用'
-                                    : '不可用'}
-                                </label>
-                                <select
-                                  aria-label={`${group.symbol} 同步频率`}
-                                  value={updateInterval}
-                                  disabled={!isAutoUpdateTarget}
-                                  onChange={(event) =>
-                                    setUpdateInterval(Number(event.target.value))
+                            <>
+                              <td
+                                rowSpan={group.datasets.length}
+                                className="dataset-sync-cell"
+                              >
+                                <button
+                                  className={`button dataset-sync-toggle${
+                                    syncEnabled ? ' button-danger' : ''
+                                  }`}
+                                  type="button"
+                                  aria-pressed={syncEnabled}
+                                  disabled={
+                                    !hasRemoteDataset ||
+                                    syncingKey !== null ||
+                                    deleteMutation.isPending ||
+                                    schedulesQuery.isPending ||
+                                    schedulesQuery.isError ||
+                                    syncScheduleMutation.isPending
+                                  }
+                                  onClick={() => handleToggleSync(group, !syncEnabled)}
+                                  title={
+                                    hasRemoteDataset
+                                      ? undefined
+                                      : '该标的没有可用的远程数据源'
                                   }
                                 >
-                                  {AUTO_UPDATE_INTERVALS.map((option) => (
+                                  {isSyncSchedulePending ? (
+                                    <Loader2 size={14} className="spin" />
+                                  ) : syncEnabled ? (
+                                    <Pause size={14} />
+                                  ) : (
+                                    <Play size={14} />
+                                  )}
+                                  {isSyncSchedulePending
+                                    ? '处理中...'
+                                    : syncEnabled
+                                      ? '取消同步'
+                                      : '启用同步'}
+                                </button>
+                              </td>
+                              <td
+                                rowSpan={group.datasets.length}
+                                className="dataset-frequency-cell"
+                              >
+                                <select
+                                  aria-label={`${group.symbol} 同步频率`}
+                                  value={
+                                    intervalSeconds === null
+                                      ? ''
+                                      : String(intervalSeconds)
+                                  }
+                                  disabled={
+                                    !hasRemoteDataset ||
+                                    !syncEnabled ||
+                                    deleteMutation.isPending ||
+                                    syncScheduleMutation.isPending
+                                  }
+                                  onChange={(event) =>
+                                    syncSchedule &&
+                                    handleIntervalChange(
+                                      group,
+                                      syncSchedule,
+                                      Number(event.target.value),
+                                    )
+                                  }
+                                >
+                                  {intervalSeconds === null ? (
+                                    <option value="">
+                                      {syncEnabled ? '自定义计划' : '启用后可设置'}
+                                    </option>
+                                  ) : null}
+                                  {intervalSeconds !== null && !intervalIsKnown ? (
+                                    <option value={String(intervalSeconds)}>
+                                      自定义（{durationLabel(intervalSeconds)}）
+                                    </option>
+                                  ) : null}
+                                  {SYNC_INTERVALS.map((option) => (
                                     <option key={option.value} value={option.value}>
                                       {option.label}
                                     </option>
                                   ))}
                                 </select>
-                              </div>
-                            </td>
+                              </td>
+                            </>
                           ) : null}
                           <td>
                             <div className="dataset-actions">
