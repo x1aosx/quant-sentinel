@@ -6,6 +6,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from xquant.scheduler.domain import TaskContext, TaskDefinition, TaskResult
 
+from .planner import TaskPlanner, normalize_task_planner
+
 
 @runtime_checkable
 class TaskHandler(Protocol):
@@ -27,6 +29,14 @@ class TaskNotFound(KeyError):
     """Raised when a requested task is not registered."""
 
 
+class PlannerAlreadyRegistered(TaskRegistrationError):
+    """Raised when a planner name is registered more than once."""
+
+
+class PlannerNotFound(KeyError):
+    """Raised when a requested planner is not registered."""
+
+
 class _FunctionTaskHandler:
     def __init__(
         self,
@@ -44,6 +54,7 @@ class TaskRegistry:
     def __init__(self) -> None:
         self._definitions: dict[str, TaskDefinition] = {}
         self._handlers: dict[str, TaskHandler] = {}
+        self._planners: dict[str, TaskPlanner] = {}
 
     def register(
         self,
@@ -72,6 +83,34 @@ class TaskRegistry:
             return self._handlers[name]
         except KeyError as exc:
             raise TaskNotFound(name) from exc
+
+    def register_planner(
+        self,
+        name: str,
+        planner: TaskPlanner | Callable[..., Any],
+        *,
+        replace: bool = False,
+    ) -> TaskPlanner:
+        if not name.strip():
+            raise ValueError("planner name cannot be empty")
+        if name in self._planners and not replace:
+            raise PlannerAlreadyRegistered(
+                f"planner already registered: {name}"
+            )
+
+        normalized = normalize_task_planner(planner)
+        if not inspect.iscoroutinefunction(
+            getattr(normalized, "plan", None)
+        ):
+            raise TypeError("task planner plan(execution) must be async")
+        self._planners[name] = normalized
+        return normalized
+
+    def get_planner(self, name: str) -> TaskPlanner:
+        try:
+            return self._planners[name]
+        except KeyError as exc:
+            raise PlannerNotFound(name) from exc
 
     def list(self) -> list[TaskDefinition]:
         return [self._definitions[name] for name in sorted(self._definitions)]
@@ -169,6 +208,8 @@ def _handler_name(handler: Any) -> str:
 
 
 __all__ = [
+    "PlannerAlreadyRegistered",
+    "PlannerNotFound",
     "TaskAlreadyRegistered",
     "TaskHandler",
     "TaskNotFound",

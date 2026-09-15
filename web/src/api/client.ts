@@ -7,12 +7,39 @@ import type {
   DatasetSummary,
   HealthSummary,
   MonitorStatus,
+  ScheduleDefinition,
+  SchedulerTrigger,
   SyncDatasetResponse,
   SystemConfig,
+  TaskDefinition,
+  TaskExecution,
   UnifiedAnalysisResult,
+  WorkerSummary,
 } from '../types';
 
 const API_BASE = '/api/v1';
+
+function errorMessage(payload: unknown, status: number): string {
+  if (typeof payload === 'string' && payload.trim()) return payload;
+  if (payload && typeof payload === 'object') {
+    const body = payload as { detail?: unknown; message?: unknown };
+    if (typeof body.detail === 'string' && body.detail.trim()) return body.detail;
+    if (Array.isArray(body.detail)) {
+      const details = body.detail
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object' && 'msg' in item) {
+            return String((item as { msg?: unknown }).msg ?? '');
+          }
+          return '';
+        })
+        .filter(Boolean);
+      if (details.length) return details.join('；');
+    }
+    if (typeof body.message === 'string' && body.message.trim()) return body.message;
+  }
+  return `请求失败（${status}）`;
+}
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -25,8 +52,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = payload as { detail?: string; message?: string } | null;
-    throw new Error(error?.detail ?? error?.message ?? `请求失败（${response.status}）`);
+    throw new Error(errorMessage(payload, response.status));
   }
   return payload as T;
 }
@@ -168,6 +194,89 @@ export const api = {
       '/ai/monitor/run-once',
       { method: 'POST' },
     ),
+  listSchedulerTasks: () =>
+    apiRequest<{ items: TaskDefinition[] }>('/scheduler/tasks').then((payload) => payload.items),
+  runSchedulerTask: (
+    taskName: string,
+    payload: { params?: Record<string, unknown>; priority?: number } = {},
+  ) =>
+    apiRequest<TaskExecution>(`/scheduler/tasks/${encodeURIComponent(taskName)}/run`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listSchedules: (params: { enabled?: boolean } = {}) => {
+    const search = new URLSearchParams();
+    if (params.enabled !== undefined) search.set('enabled', String(params.enabled));
+    const query = search.toString();
+    return apiRequest<{ items: ScheduleDefinition[] }>(
+      `/scheduler/schedules${query ? `?${query}` : ''}`,
+    ).then((payload) => payload.items);
+  },
+  createSchedule: (payload: {
+    id: string;
+    task_name: string;
+    trigger: SchedulerTrigger;
+    params: Record<string, unknown>;
+    timezone: string;
+    misfire_policy: ScheduleDefinition['misfire_policy'];
+    enabled: boolean;
+    max_catch_up_runs: number;
+  }) =>
+    apiRequest<ScheduleDefinition>('/scheduler/schedules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSchedule: (
+    scheduleId: string,
+    payload: Partial<ScheduleDefinition> & { trigger?: SchedulerTrigger },
+  ) =>
+    apiRequest<ScheduleDefinition>(
+      `/scheduler/schedules/${encodeURIComponent(scheduleId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      },
+    ),
+  deleteSchedule: (scheduleId: string) =>
+    apiRequest<{ deleted: boolean }>(
+      `/scheduler/schedules/${encodeURIComponent(scheduleId)}`,
+      { method: 'DELETE' },
+    ),
+  pauseSchedule: (scheduleId: string) =>
+    apiRequest<ScheduleDefinition>(
+      `/scheduler/schedules/${encodeURIComponent(scheduleId)}/pause`,
+      { method: 'POST' },
+    ),
+  resumeSchedule: (scheduleId: string) =>
+    apiRequest<ScheduleDefinition>(
+      `/scheduler/schedules/${encodeURIComponent(scheduleId)}/resume`,
+      { method: 'POST' },
+    ),
+  listExecutions: (
+    params: { status?: string; task_name?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const search = new URLSearchParams({ limit: String(params.limit ?? 100) });
+    if (params.status) search.set('status', params.status);
+    if (params.task_name) search.set('task_name', params.task_name);
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest<{ items: TaskExecution[] }>(`/scheduler/executions?${search.toString()}`).then(
+      (payload) => payload.items,
+    );
+  },
+  getExecution: (executionId: string) =>
+    apiRequest<TaskExecution>(`/scheduler/executions/${encodeURIComponent(executionId)}`),
+  retryExecution: (executionId: string) =>
+    apiRequest<TaskExecution>(
+      `/scheduler/executions/${encodeURIComponent(executionId)}/retry`,
+      { method: 'POST' },
+    ),
+  cancelExecution: (executionId: string) =>
+    apiRequest<TaskExecution>(
+      `/scheduler/executions/${encodeURIComponent(executionId)}/cancel`,
+      { method: 'POST' },
+    ),
+  listSchedulerWorkers: () =>
+    apiRequest<{ items: WorkerSummary[] }>('/scheduler/workers').then((payload) => payload.items),
 };
 
 export async function streamAIAnalysis(

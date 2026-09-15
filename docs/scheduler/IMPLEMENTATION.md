@@ -21,13 +21,16 @@ market_data / strategy / backtest / notification
 - Local 与 Redis Dispatcher。Redis 队列支持优先级、延迟、inflight lease 和 ack。
 - Local 与 Redis Lock、RateLimiter。
 - TaskRegistry 的显式注册和装饰器注册。
+- Planner 批量 DAG：支持节点校验、拓扑排序、依赖映射、`WAITING` 状态和失败传播。
 - 统一 TaskExecutor：并发策略、超时、取消、重试、结构化事件和执行历史。
+- Worker 侧强制取消：API 写入共享取消请求，执行中的 Handler Task 被取消并记录 `CANCELLED`。
 - Redis Worker、Heartbeat 和 Stale Execution Recovery。
 - RecoveryService 同时回收 PostgreSQL 中过期的 `RUNNING/RETRYING` 执行和 Redis 中过期的 inflight delivery。
 - PostgreSQL 仓储与四张基础表：
   `scheduler.scheduler_task`、`scheduler.scheduler_schedule`、
   `scheduler.scheduler_execution`、`scheduler.scheduler_execution_log`。
 - `/api/v1/scheduler` 下的任务、计划、执行记录和 Worker 查询 API。
+- `/scheduler` 任务中心前端：计划管理、执行历史、Worker 状态、取消/重试和依赖 DAG 展示。
 - 示例任务：
   - `market.daily.sync`：同步单个数据集。
   - `market.symbol.sync`：按 `symbols` 批量同步数据集。
@@ -45,6 +48,9 @@ SCHEDULER_WORKER_CONCURRENCY=8
 SCHEDULER_HEARTBEAT_INTERVAL_SECONDS=10
 SCHEDULER_HEARTBEAT_TIMEOUT_SECONDS=60
 SCHEDULER_LEASE_SECONDS=3600
+SCHEDULER_CANCELLATION_TTL_SECONDS=86400
+SCHEDULER_RATE_LIMIT_CAPACITY=20
+SCHEDULER_RATE_LIMIT_REFILL_PER_SECOND=10
 SCHEDULER_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS=60
 SCHEDULER_RECOVERY_ENABLED=true
 SCHEDULER_RECOVERY_INTERVAL_SECONDS=30
@@ -60,6 +66,8 @@ SCHEDULER_EMBEDDED=true
 SCHEDULER_ENGINE_TYPE=memory
 SCHEDULER_DISPATCHER_TYPE=local
 ```
+
+Local Dispatcher 只能在单进程内使用，因此 `dispatcher_type=local` 时必须同时设置 `SCHEDULER_EMBEDDED=true`。独立进程部署应使用 Redis Dispatcher。
 
 ## 启动
 
@@ -93,6 +101,27 @@ Content-Type: application/json
     "adjust": "qfq"
   }
 }
+```
+
+取消正在执行的任务：
+
+```http
+POST /api/v1/scheduler/executions/{execution_id}/cancel
+Content-Type: application/json
+
+{
+  "reason": "操作员取消"
+}
+```
+
+批量 DAG 示例任务为 `market.symbol.sync`：
+
+```text
+market.symbol.sync
+    ├── market.daily.sync(dataset-0)
+    ├── market.daily.sync(dataset-1)
+    └── market.watchlist.summary
+            └── 依赖 dataset-0、dataset-1
 ```
 
 调度计划接口使用统一的触发器结构：
@@ -130,6 +159,8 @@ python -m ruff check src/xquant/scheduler tests/unit/scheduler
 
 ## 后续范围
 
-当前未实现完整交易日节假日数据、Planner/批量 DAG、动态 Worker 扩缩容、InfluxDB 指标写入和任务取消到正在执行的 Handler。取消正在执行的 Execution 会返回 `501`，避免只改数据库状态却没有停止 Worker。`TradingCalendar` 已提供工作日和 A 股交易时段基础能力，后续可接入真实交易日历数据并纳入 Schedule 过滤。
+当前未实现完整交易日节假日数据、动态 Worker 扩缩容、InfluxDB 指标写入和跨 Scheduler 实例的原子调度领取。`TradingCalendar` 已提供工作日和 A 股交易时段基础能力，后续可接入真实交易日历数据并纳入 Schedule 过滤。
 
-Redis delivery 使用 `SCHEDULER_LEASE_SECONDS` 作为租约。单次任务执行时间不应超过该值；更长任务应拆分批次或提高租约配置。当前按单个 Scheduler 进程管理触发状态，多个 Scheduler 实例同时运行前需要增加基于 PostgreSQL CAS 的调度领取。
+Redis delivery 使用 `SCHEDULER_LEASE_SECONDS` 作为租约。单次任务执行时间不应超过该值；更长任务应拆分批次或提高租约配置。取消请求在 Redis 中的保留时间由 `SCHEDULER_CANCELLATION_TTL_SECONDS` 控制。
+
+当前 Worker 已通过 PostgreSQL 原子 claim 阻止重复 Execution 同时进入 Handler。Redis inflight 仍以消息本身作为租约成员，尚未实现 lease owner token 和原子 requeue；如果任务时长可能超过租约，应先提高 `SCHEDULER_LEASE_SECONDS` 或拆分批次。

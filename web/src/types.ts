@@ -544,3 +544,141 @@ export interface BatchAnalyzeResponse {
     error?: Record<string, any> | null;
   }>;
 }
+
+export type SchedulerConcurrencyPolicy = 'ALLOW' | 'FORBID' | 'SERIAL' | 'REPLACE';
+export type SchedulerMisfirePolicy = 'SKIP' | 'FIRE_ONCE' | 'CATCH_UP';
+export type SchedulerRetryStrategy = 'fixed' | 'linear' | 'exponential';
+
+export interface SchedulerRetryPolicy {
+  max_attempts: number;
+  strategy: SchedulerRetryStrategy;
+  initial_delay_seconds: number;
+  max_delay_seconds: number;
+  multiplier: number;
+  jitter: boolean;
+  retry_on?: string[] | null;
+  no_retry_on?: string[] | null;
+}
+
+export interface TaskDefinition {
+  name: string;
+  handler: string;
+  description?: string | null;
+  timeout_seconds: number;
+  retry_policy?: SchedulerRetryPolicy | null;
+  concurrency_policy: SchedulerConcurrencyPolicy;
+  queue: string;
+  priority: number;
+  rate_limit_key?: string | null;
+  planner?: string | null;
+  enabled: boolean;
+}
+
+export interface CronTriggerDefinition {
+  type: 'cron';
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  day_of_week: string;
+  timezone?: string;
+}
+
+export interface IntervalTriggerDefinition {
+  type: 'interval';
+  interval_seconds: number;
+  start_at?: string | null;
+  timezone?: string;
+}
+
+export interface DateTriggerDefinition {
+  type: 'date';
+  run_at: string;
+  timezone?: string;
+}
+
+export interface FixedDelayTriggerDefinition {
+  type: 'fixed_delay';
+  delay_seconds: number;
+  start_at?: string | null;
+  timezone?: string;
+}
+
+export type SchedulerTrigger =
+  | CronTriggerDefinition
+  | IntervalTriggerDefinition
+  | DateTriggerDefinition
+  | FixedDelayTriggerDefinition;
+
+export interface ScheduleDefinition {
+  id: string;
+  task_name: string;
+  trigger: SchedulerTrigger;
+  params: Record<string, unknown>;
+  calendar?: string | null;
+  timezone: string;
+  misfire_policy: SchedulerMisfirePolicy;
+  enabled: boolean;
+  max_catch_up_runs: number;
+  last_fire_at?: string | null;
+  next_fire_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export type SchedulerExecutionStatus =
+  | 'PENDING'
+  | 'WAITING'
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'RETRYING'
+  | 'TIMEOUT'
+  | 'CANCELLED'
+  | 'SKIPPED';
+
+export interface SchedulerTaskResult {
+  success: boolean;
+  data?: Record<string, unknown> | null;
+  message?: string | null;
+  metrics?: Record<string, unknown> | null;
+}
+
+export interface TaskExecution {
+  id: string;
+  task_name: string;
+  scheduled_at: string;
+  schedule_id?: string | null;
+  parent_execution_id?: string | null;
+  depends_on?: string[];
+  queue: string;
+  priority: number;
+  status: SchedulerExecutionStatus;
+  params: Record<string, unknown>;
+  queued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  attempt: number;
+  max_attempts: number;
+  worker_id?: string | null;
+  trace_id?: string;
+  result?: SchedulerTaskResult | null;
+  error_type?: string | null;
+  error_message?: string | null;
+  duration_ms?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface WorkerSummary {
+  worker_id: string;
+  hostname?: string | null;
+  pid?: number | null;
+  queues?: string[];
+  started_at?: string | null;
+  last_heartbeat?: string | null;
+  status?: string | null;
+  running_tasks?: number;
+  ttl_seconds?: number | null;
+}

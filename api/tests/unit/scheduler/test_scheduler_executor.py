@@ -297,6 +297,41 @@ def test_local_dispatcher_runs_and_shuts_down_tasks() -> None:
     asyncio.run(scenario())
 
 
+def test_local_dispatcher_redispatches_waiting_execution() -> None:
+    async def scenario() -> None:
+        class WaitingExecutor:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def execute(self, execution: TaskExecution) -> TaskExecution:
+                self.calls += 1
+                execution.status = (
+                    ExecutionStatus.WAITING
+                    if self.calls == 1
+                    else ExecutionStatus.SUCCESS
+                )
+                return execution
+
+        executor = WaitingExecutor()
+        dispatcher = LocalDispatcher(
+            executor,  # type: ignore[arg-type]
+            waiting_retry_delay=0.01,
+        )
+        execution = _execution("waiting")
+
+        await dispatcher.dispatch(execution)
+        for _ in range(50):
+            if executor.calls == 2:
+                break
+            await asyncio.sleep(0.01)
+        await dispatcher.wait_all()
+
+        assert executor.calls == 2
+        assert execution.status is ExecutionStatus.SUCCESS
+
+    asyncio.run(scenario())
+
+
 def test_memory_lock_validates_owner_token() -> None:
     async def scenario() -> None:
         manager = MemoryLockManager()

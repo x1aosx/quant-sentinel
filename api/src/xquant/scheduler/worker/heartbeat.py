@@ -124,6 +124,32 @@ class WorkerHeartbeat:
         keys = await self.client.keys(self._worker_pattern())
         return {_as_text(key).rsplit(":", 1)[-1] for key in keys if _as_text(key)}
 
+    async def list_workers(self) -> list[dict[str, Any]]:
+        """Return current heartbeat payloads for the scheduler admin UI."""
+
+        workers: list[dict[str, Any]] = []
+        for key in await self.client.keys(self._worker_pattern()):
+            raw = await self.client.get(key)
+            if raw is None:
+                continue
+            try:
+                payload = json.loads(_as_text(raw))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload["worker_id"] = str(
+                payload.get("worker_id") or _as_text(key).rsplit(":", 1)[-1]
+            )
+            ttl = getattr(self.client, "ttl", None)
+            if callable(ttl):
+                try:
+                    payload["ttl_seconds"] = int(await ttl(key))
+                except (TypeError, ValueError):
+                    payload["ttl_seconds"] = None
+            workers.append(payload)
+        return sorted(workers, key=lambda item: str(item["worker_id"]))
+
     async def _heartbeat_loop(self, queues: tuple[str, ...]) -> None:
         while not self._stop_event.is_set():
             try:

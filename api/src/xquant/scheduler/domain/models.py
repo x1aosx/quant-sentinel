@@ -25,6 +25,7 @@ class TaskDefinition:
     queue: str = "default"
     priority: int = 5
     rate_limit_key: str | None = None
+    planner: str | None = None
     enabled: bool = True
 
     def __post_init__(self) -> None:
@@ -38,6 +39,8 @@ class TaskDefinition:
             raise ValueError("queue cannot be empty")
         if not 0 <= self.priority <= 9:
             raise ValueError("priority must be between 0 and 9")
+        if self.planner is not None and not self.planner.strip():
+            raise ValueError("planner cannot be empty")
         object.__setattr__(
             self,
             "concurrency_policy",
@@ -204,6 +207,7 @@ class TaskExecution:
     scheduled_at: datetime
     schedule_id: str | None = None
     parent_execution_id: str | None = None
+    depends_on: tuple[str, ...] = ()
     queue: str = "default"
     priority: int = 5
     status: ExecutionStatus | str = ExecutionStatus.PENDING
@@ -238,6 +242,14 @@ class TaskExecution:
         if self.duration_ms is not None and self.duration_ms < 0:
             raise ValueError("duration_ms cannot be negative")
 
+        depends_on = tuple(self.depends_on)
+        if any(not dependency.strip() for dependency in depends_on):
+            raise ValueError("depends_on entries cannot be empty")
+        if len(set(depends_on)) != len(depends_on):
+            raise ValueError("depends_on cannot contain duplicates")
+        if self.id in depends_on:
+            raise ValueError("execution cannot depend on itself")
+        object.__setattr__(self, "depends_on", depends_on)
         object.__setattr__(self, "status", ExecutionStatus(self.status))
         require_aware(self.scheduled_at, "scheduled_at")
         for name in (

@@ -192,11 +192,24 @@ async def retry_execution(execution_id: str, runtime: SchedulerDep) -> Any:
 
 
 @router.post("/executions/{execution_id}/cancel")
-async def cancel_execution(execution_id: str, runtime: SchedulerDep) -> Any:
+async def cancel_execution(
+    execution_id: str,
+    runtime: SchedulerDep,
+    payload: dict[str, Any] | None = None,
+) -> Any:
     try:
-        return await runtime.service.cancel_execution(execution_id)
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
+        reason = None
+        if payload is not None:
+            reason_value = payload.get("reason")
+            reason = str(reason_value) if reason_value is not None else None
+        return await runtime.service.cancel_execution(
+            execution_id,
+            reason=reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="执行记录不存在") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/workers")
@@ -204,5 +217,8 @@ async def list_workers(runtime: SchedulerDep) -> dict[str, Any]:
     heartbeat = runtime.heartbeat
     if heartbeat is None:
         return {"items": []}
+    list_workers = getattr(heartbeat, "list_workers", None)
+    if callable(list_workers):
+        return {"items": await list_workers()}
     worker_ids = sorted(await heartbeat.live_worker_ids())
     return {"items": [{"worker_id": worker_id} for worker_id in worker_ids]}

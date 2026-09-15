@@ -1,7 +1,16 @@
+from .dependency_resolver import ExecutionDependencyResolver
+from .planner import TaskPlan, TaskPlanner, TaskPlanNode
 from .recovery_service import RecoveryReport, RecoveryService
 from .scheduler_service import SchedulerService
-from .task_executor import ExecutionRepository, TaskEventListener, TaskExecutor
+from .task_executor import (
+    DependencyResolver,
+    ExecutionRepository,
+    TaskEventListener,
+    TaskExecutor,
+)
 from .task_registry import (
+    PlannerAlreadyRegistered,
+    PlannerNotFound,
     TaskAlreadyRegistered,
     TaskHandler,
     TaskNotFound,
@@ -12,7 +21,11 @@ from .task_registry import (
 )
 
 __all__ = [
+    "DependencyResolver",
+    "ExecutionDependencyResolver",
     "ExecutionRepository",
+    "PlannerAlreadyRegistered",
+    "PlannerNotFound",
     "RecoveryReport",
     "RecoveryService",
     "SchedulerService",
@@ -21,6 +34,9 @@ __all__ = [
     "TaskExecutor",
     "TaskHandler",
     "TaskNotFound",
+    "TaskPlan",
+    "TaskPlanNode",
+    "TaskPlanner",
     "TaskRegistrationError",
     "TaskRegistry",
     "default_registry",

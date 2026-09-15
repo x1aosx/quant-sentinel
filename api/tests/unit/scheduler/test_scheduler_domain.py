@@ -36,6 +36,7 @@ def test_public_enums_cover_p0_and_p1_states() -> None:
         ExecutionStatus.PENDING,
         ExecutionStatus.QUEUED,
         ExecutionStatus.RUNNING,
+        ExecutionStatus.WAITING,
         ExecutionStatus.SUCCESS,
         ExecutionStatus.FAILED,
         ExecutionStatus.RETRYING,

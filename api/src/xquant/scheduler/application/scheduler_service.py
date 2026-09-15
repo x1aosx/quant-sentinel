@@ -13,6 +13,7 @@ from xquant.scheduler.domain import (
     ScheduleDefinition,
     TaskDefinition,
     TaskExecution,
+    TaskResult,
 )
 from xquant.scheduler.repository import (
     ExecutionRepository,
@@ -20,7 +21,9 @@ from xquant.scheduler.repository import (
     TaskRepository,
 )
 
+from ..cancellation import CancellationManager
 from ..dispatcher import TaskDispatcher
+from .planner import TaskPlan
 from .task_registry import TaskNotFound, TaskRegistry
 
 
@@ -38,6 +41,7 @@ class SchedulerService:
         now: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
         max_catch_up_runs: int = 30,
+        cancellation_manager: CancellationManager | None = None,
     ) -> None:
         self.registry = registry
         self.task_repository = task_repository
@@ -47,6 +51,7 @@ class SchedulerService:
         self._now = now or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
         self.max_catch_up_runs = max_catch_up_runs
+        self.cancellation_manager = cancellation_manager
 
     async def sync_registry(self) -> list[TaskDefinition]:
         """Persist all in-process task definitions for management APIs."""
@@ -141,11 +146,46 @@ class SchedulerService:
     ) -> TaskExecution:
         definition = await self.get_task(task_name)
         now = self._now()
-        execution = TaskExecution(
+        execution = self._build_execution(
+            definition,
+            params=params,
+            schedule_id=schedule_id,
+            scheduled_at=scheduled_at,
+            parent_execution_id=parent_execution_id,
+            trace_id=trace_id,
+            priority=priority,
+            now=now,
+        )
+        await self.execution_repository.save(execution)
+        if definition.planner is not None:
+            return await self._run_planned_execution(
+                execution,
+                definition,
+                dispatch=dispatch,
+            )
+        if dispatch:
+            await self.dispatch(execution)
+        return execution
+
+    def _build_execution(
+        self,
+        definition: TaskDefinition,
+        *,
+        params: Mapping[str, Any] | None,
+        schedule_id: str | None,
+        scheduled_at: datetime | None,
+        parent_execution_id: str | None,
+        trace_id: str | None,
+        priority: int | None,
+        now: datetime,
+        depends_on: tuple[str, ...] = (),
+    ) -> TaskExecution:
+        return TaskExecution(
             id=self._id_factory(),
             task_name=definition.name,
             schedule_id=schedule_id,
             parent_execution_id=parent_execution_id,
+            depends_on=depends_on,
             queue=definition.queue,
             priority=definition.priority if priority is None else priority,
             status=ExecutionStatus.QUEUED,
@@ -161,10 +201,91 @@ class SchedulerService:
             created_at=now,
             updated_at=now,
         )
-        await self.execution_repository.save(execution)
+
+    async def _run_planned_execution(
+        self,
+        root: TaskExecution,
+        definition: TaskDefinition,
+        *,
+        dispatch: bool,
+    ) -> TaskExecution:
+        started_at = self._now()
+        try:
+            planner = self.registry.get_planner(definition.planner or "")
+            plan = await planner.plan(root)
+            if not isinstance(plan, TaskPlan):
+                raise TypeError("task planner must return TaskPlan")
+
+            ordered_nodes = plan.topological_order()
+            definitions: dict[str, TaskDefinition] = {}
+            for node in ordered_nodes:
+                definitions[node.key] = await self.get_task(node.task_name)
+
+            key_to_execution_id: dict[str, str] = {}
+            children: list[TaskExecution] = []
+            for node in ordered_nodes:
+                child_definition = definitions[node.key]
+                child = self._build_execution(
+                    child_definition,
+                    params=node.params,
+                    schedule_id=root.schedule_id,
+                    scheduled_at=root.scheduled_at,
+                    parent_execution_id=root.id,
+                    trace_id=root.trace_id,
+                    priority=node.priority,
+                    now=self._now(),
+                    depends_on=tuple(
+                        key_to_execution_id[dependency]
+                        for dependency in node.depends_on
+                    ),
+                )
+                if node.queue is not None:
+                    child.queue = node.queue
+                key_to_execution_id[node.key] = child.id
+                children.append(child)
+
+            for child in children:
+                await self.execution_repository.save(child)
+
+            finished_at = self._now()
+            root.started_at = started_at
+            root.status = ExecutionStatus.SUCCESS
+            root.finished_at = finished_at
+            root.duration_ms = max(
+                0.0,
+                (finished_at - started_at).total_seconds() * 1000,
+            )
+            root.result = TaskResult(
+                success=True,
+                message=f"created {len(children)} planned executions",
+                data={
+                    "plan": plan.to_dict(),
+                    "child_execution_ids": [
+                        child.id
+                        for child in children
+                    ],
+                },
+            )
+            root.updated_at = finished_at
+            await self.execution_repository.save(root)
+        except Exception as exc:
+            finished_at = self._now()
+            root.status = ExecutionStatus.FAILED
+            root.error_type = type(exc).__name__
+            root.error_message = str(exc) or type(exc).__name__
+            root.finished_at = finished_at
+            root.result = TaskResult(
+                success=False,
+                message=root.error_message,
+            )
+            root.updated_at = finished_at
+            await self.execution_repository.save(root)
+            raise
+
         if dispatch:
-            await self.dispatch(execution)
-        return execution
+            for child in children:
+                await self.dispatch(child)
+        return root
 
     async def fire_schedule(
         self,
@@ -266,10 +387,39 @@ class SchedulerService:
         await self.dispatch(execution)
         return execution
 
-    async def cancel_execution(self, execution_id: str) -> TaskExecution:
-        raise NotImplementedError(
-            "cancelling an in-flight execution requires worker-side cancellation"
-        )
+    async def cancel_execution(
+        self,
+        execution_id: str,
+        *,
+        reason: str | None = None,
+    ) -> TaskExecution:
+        execution = await self.execution_repository.get(execution_id)
+        if execution is None:
+            raise KeyError(execution_id)
+        if execution.status in {
+            ExecutionStatus.SUCCESS,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.TIMEOUT,
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.SKIPPED,
+        }:
+            return execution
+        if self.cancellation_manager is None:
+            raise RuntimeError("cancellation manager is not configured")
+
+        await self.cancellation_manager.request_cancel(execution_id, reason)
+        if execution.status is not ExecutionStatus.RUNNING:
+            execution.status = ExecutionStatus.CANCELLED
+            execution.finished_at = self._now()
+            execution.error_type = "CancelledError"
+            execution.error_message = reason or "task execution was cancelled"
+            execution.updated_at = execution.finished_at
+            execution.result = TaskResult(
+                success=False,
+                message=execution.error_message,
+            )
+            await self.execution_repository.save(execution)
+        return execution
 
     async def dispatch(self, execution: TaskExecution) -> None:
         try:

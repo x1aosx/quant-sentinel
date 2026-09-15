@@ -19,6 +19,7 @@ from xquant.scheduler.domain import (
     TaskResult,
 )
 
+from ..cancellation import CancellationManager
 from .task_registry import TaskHandler, TaskRegistry
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,15 @@ class ExecutionRepository(Protocol):
 
 
 @runtime_checkable
+class DependencyResolver(Protocol):
+    async def resolve(
+        self,
+        execution: TaskExecution,
+    ) -> Sequence[TaskExecution] | Mapping[str, TaskExecution]:
+        ...
+
+
+@runtime_checkable
 class TaskEventListener(Protocol):
     async def handle(self, event: TaskEvent) -> Any:
         ...
@@ -56,6 +66,11 @@ class TaskExecutor:
         *,
         lock_manager: Any | None = None,
         rate_limiter: Any | None = None,
+        dependency_resolver: DependencyResolver
+        | Callable[[TaskExecution], Any]
+        | None = None,
+        cancellation_manager: CancellationManager | None = None,
+        cancellation_poll_interval: float = 0.25,
         event_listener: TaskEventListener
         | Callable[[TaskEvent], Any]
         | None = None,
@@ -66,6 +81,9 @@ class TaskExecutor:
         self.repository = repository
         self.lock_manager = lock_manager
         self.rate_limiter = rate_limiter
+        self.dependency_resolver = dependency_resolver
+        self.cancellation_manager = cancellation_manager
+        self.cancellation_poll_interval = cancellation_poll_interval
         self.event_listener = event_listener
         self.worker_id = worker_id
         self._now = now or (lambda: datetime.now(UTC))
@@ -86,6 +104,37 @@ class TaskExecutor:
 
         if not definition.enabled:
             await self._skip(execution, "task is disabled")
+            return execution
+
+        if (
+            self.cancellation_manager is not None
+            and await self.cancellation_manager.is_cancelled(execution.id)
+        ):
+            await self._handle_cancelled(execution)
+            return execution
+
+        try:
+            dependency_status, dependency_message = await self._dependency_gate(
+                execution
+            )
+        except Exception as exc:  # noqa: BLE001 - resolver failures are terminal
+            await self._finish_exception(
+                execution,
+                exc,
+                status=ExecutionStatus.FAILED,
+            )
+            return execution
+        if dependency_status is ExecutionStatus.WAITING:
+            await self._wait(
+                execution,
+                dependency_message or "dependencies are not ready",
+            )
+            return execution
+        if dependency_status is ExecutionStatus.SKIPPED:
+            await self._skip(
+                execution,
+                dependency_message or "dependencies did not succeed",
+            )
             return execution
 
         policy = ConcurrencyPolicy(definition.concurrency_policy)
@@ -184,6 +233,13 @@ class TaskExecutor:
             execution.error_type = None
             execution.error_message = None
             execution.result = None
+            if (
+                self.cancellation_manager is not None
+                and await self.cancellation_manager.is_cancelled(execution.id)
+            ):
+                raise asyncio.CancelledError(
+                    f"execution {execution.id} was cancelled"
+                )
             if attempt > 1:
                 await self._start(execution)
             started_at = self._now()
@@ -205,9 +261,11 @@ class TaskExecutor:
             timed_out = False
 
             try:
-                returned = await asyncio.wait_for(
-                    handler.execute(context),
-                    timeout=definition.timeout_seconds,
+                returned = await self._execute_handler(
+                    execution,
+                    handler,
+                    context,
+                    timeout_seconds=definition.timeout_seconds,
                 )
                 if not isinstance(returned, TaskResult):
                     raise TypeError(
@@ -259,8 +317,7 @@ class TaskExecutor:
                         "error_type": error_type,
                     },
                 )
-                if delay > 0:
-                    await asyncio.sleep(delay)
+                await self._wait_for_retry_delay(execution.id, delay)
                 attempt += 1
                 continue
 
@@ -273,6 +330,89 @@ class TaskExecutor:
                 message=error_message,
             )
             return
+
+    async def _wait_for_retry_delay(
+        self,
+        execution_id: str,
+        delay_seconds: float,
+    ) -> None:
+        if delay_seconds <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + delay_seconds
+        while True:
+            if (
+                self.cancellation_manager is not None
+                and await self.cancellation_manager.is_cancelled(execution_id)
+            ):
+                raise asyncio.CancelledError(
+                    f"execution {execution_id} was cancelled"
+                )
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(
+                min(self.cancellation_poll_interval, remaining)
+            )
+
+    async def _execute_handler(
+        self,
+        execution: TaskExecution,
+        handler: TaskHandler,
+        context: TaskContext,
+        *,
+        timeout_seconds: float,
+    ) -> TaskResult:
+        handler_task = asyncio.create_task(handler.execute(context))
+        cancellation_task: asyncio.Task[bool] | None = None
+        if self.cancellation_manager is not None:
+            cancellation_task = asyncio.create_task(
+                self._wait_for_cancellation(execution.id),
+                name=f"scheduler-cancellation:{execution.id}",
+            )
+
+        try:
+            if cancellation_task is None:
+                return await asyncio.wait_for(
+                    handler_task,
+                    timeout=timeout_seconds,
+                )
+
+            done, _ = await asyncio.wait(
+                {handler_task, cancellation_task},
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancellation_task in done and cancellation_task.result():
+                handler_task.cancel()
+                await asyncio.gather(handler_task, return_exceptions=True)
+                raise asyncio.CancelledError(
+                    f"execution {execution.id} was cancelled"
+                )
+            if handler_task in done:
+                return handler_task.result()
+            raise TimeoutError
+        finally:
+            if not handler_task.done():
+                handler_task.cancel()
+            if cancellation_task is not None and not cancellation_task.done():
+                cancellation_task.cancel()
+            await asyncio.gather(
+                *[
+                    task
+                    for task in (handler_task, cancellation_task)
+                    if task is not None
+                ],
+                return_exceptions=True,
+            )
+
+    async def _wait_for_cancellation(self, execution_id: str) -> bool:
+        if self.cancellation_manager is None:
+            return False
+        while True:
+            if await self.cancellation_manager.is_cancelled(execution_id):
+                return True
+            await asyncio.sleep(self.cancellation_poll_interval)
 
     async def _start(self, execution: TaskExecution) -> None:
         started_at = self._now()
@@ -341,6 +481,109 @@ class TaskExecutor:
             data={"reason": reason},
         )
 
+    async def _wait(self, execution: TaskExecution, reason: str) -> None:
+        execution.status = ExecutionStatus.WAITING
+        execution.finished_at = None
+        execution.updated_at = self._now()
+        await self._save(execution)
+        await self._emit(
+            execution,
+            "TaskWaiting",
+            message=reason,
+            data={"depends_on": list(execution.depends_on)},
+        )
+
+    async def _dependency_gate(
+        self,
+        execution: TaskExecution,
+    ) -> tuple[ExecutionStatus | None, str | None]:
+        if not execution.depends_on:
+            return None, None
+        if self.dependency_resolver is None:
+            return (
+                ExecutionStatus.WAITING,
+                "dependency resolver is not configured",
+            )
+
+        resolver = getattr(self.dependency_resolver, "resolve", None)
+        if not callable(resolver):
+            resolver = getattr(
+                self.dependency_resolver,
+                "resolve_dependencies",
+                None,
+            )
+        if not callable(resolver):
+            resolver = self.dependency_resolver
+        if not callable(resolver):
+            raise TypeError("dependency resolver must be callable")
+
+        resolved = await self._maybe_await(resolver(execution))
+        dependencies = self._normalize_dependencies(resolved)
+        missing = [
+            dependency_id
+            for dependency_id in execution.depends_on
+            if dependency_id not in dependencies
+        ]
+        if missing:
+            return (
+                ExecutionStatus.SKIPPED,
+                "dependencies were not found: " + ", ".join(missing),
+            )
+
+        failed: list[str] = []
+        waiting: list[str] = []
+        for dependency_id in execution.depends_on:
+            dependency = dependencies[dependency_id]
+            status = ExecutionStatus(dependency.status)
+            if status is ExecutionStatus.SUCCESS:
+                continue
+            if status in {
+                ExecutionStatus.FAILED,
+                ExecutionStatus.TIMEOUT,
+                ExecutionStatus.CANCELLED,
+                ExecutionStatus.SKIPPED,
+            }:
+                failed.append(f"{dependency_id} ({status.value})")
+            else:
+                waiting.append(f"{dependency_id} ({status.value})")
+
+        if failed:
+            return (
+                ExecutionStatus.SKIPPED,
+                "dependencies did not succeed: " + ", ".join(failed),
+            )
+        if waiting:
+            return (
+                ExecutionStatus.WAITING,
+                "waiting for dependencies: " + ", ".join(waiting),
+            )
+        return None, None
+
+    @staticmethod
+    def _normalize_dependencies(
+        resolved: Any,
+    ) -> dict[str, TaskExecution]:
+        if isinstance(resolved, TaskExecution):
+            values = (resolved,)
+        elif isinstance(resolved, Mapping):
+            values = tuple(resolved.values())
+        else:
+            try:
+                values = tuple(resolved)
+            except TypeError as exc:
+                raise TypeError(
+                    "dependency resolver must return TaskExecution values"
+                ) from exc
+
+        dependencies: dict[str, TaskExecution] = {}
+        for dependency in values:
+            if not isinstance(dependency, TaskExecution):
+                raise TypeError(
+                    "dependency resolver returned a non-TaskExecution value"
+                )
+            dependencies[dependency.id] = dependency
+        return dependencies
+
     async def _handle_cancelled(self, execution: TaskExecution) -> None:
         if execution.status is ExecutionStatus.CANCELLED:
             return
@@ -349,7 +592,10 @@ class TaskExecutor:
             execution.status = ExecutionStatus.CANCELLED
             execution.finished_at = finished_at
             execution.error_type = "CancelledError"
-            execution.error_message = "task execution was cancelled"
+            reason = None
+            if self.cancellation_manager is not None:
+                reason = await self.cancellation_manager.get_reason(execution.id)
+            execution.error_message = reason or "task execution was cancelled"
             if execution.started_at is not None:
                 execution.duration_ms = max(
                     0.0,
@@ -529,6 +775,7 @@ def _matches_error(error_type: str, configured: Sequence[str]) -> bool:
 
 
 __all__ = [
+    "DependencyResolver",
     "ExecutionRepository",
     "TaskEventListener",
     "TaskExecutor",

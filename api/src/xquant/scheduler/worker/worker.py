@@ -12,8 +12,9 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from xquant.scheduler.domain import TaskExecution
+from xquant.scheduler.domain import ExecutionStatus, TaskExecution
 
+from ..cancellation import CancellationManager
 from .heartbeat import HeartbeatStore
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class Worker:
         poll_interval: float | None = None,
         graceful_shutdown_timeout: float | None = None,
         heartbeat: HeartbeatStore | None = None,
+        cancellation_manager: CancellationManager | None = None,
         repository: Any | None = None,
         worker_id: str | None = None,
         now: Callable[[], datetime] | None = None,
@@ -89,6 +91,7 @@ class Worker:
         self.dispatcher = dispatcher
         self.executor = executor
         self.heartbeat = heartbeat
+        self.cancellation_manager = cancellation_manager
         self.repository = repository or getattr(executor, "repository", None)
         self.worker_id = worker_id or _default_worker_id()
         self._now = now or (lambda: datetime.now(UTC))
@@ -205,16 +208,52 @@ class Worker:
         try:
             execution = self._decode_delivery(delivery)
             execution = replace(execution, worker_id=self.worker_id)
+            if (
+                self.cancellation_manager is not None
+                and await self.cancellation_manager.is_cancelled(execution.id)
+            ):
+                await self._ack_cancelled(delivery, execution)
+                return
             if self.repository is not None:
-                await _maybe_await(self.repository.save(execution))
+                claim = getattr(self.repository, "claim", None)
+                if callable(claim):
+                    claimed = await _maybe_await(
+                        claim(
+                            execution.id,
+                            worker_id=self.worker_id,
+                            attempt=execution.attempt,
+                        )
+                    )
+                    if claimed is None:
+                        await self.dispatcher.ack(delivery)
+                        return
+                    execution = claimed
+                else:
+                    await _maybe_await(self.repository.save(execution))
             result = await self.executor.execute(execution)
             completed = result if isinstance(result, TaskExecution) else execution
             if completed.worker_id is None:
                 completed = replace(completed, worker_id=self.worker_id)
             if self.repository is not None:
                 await _maybe_await(self.repository.save(completed))
-            await self.dispatcher.ack(delivery)
+            if completed.status is ExecutionStatus.WAITING:
+                await self._ack_and_defer_waiting(delivery)
+            else:
+                await self.dispatcher.ack(delivery)
         except asyncio.CancelledError:
+            if (
+                execution is not None
+                and execution.status is ExecutionStatus.CANCELLED
+            ):
+                await _maybe_await(self.dispatcher.ack(delivery))
+                return
+            if (
+                self.cancellation_manager is not None
+                and execution is not None
+                and await self.cancellation_manager.is_cancelled(execution.id)
+            ):
+                await self._ack_cancelled(delivery, execution)
+                return
             await self._requeue(delivery, execution)
             raise
         except Exception:
@@ -222,6 +261,28 @@ class Worker:
             await self._requeue(delivery, execution)
         finally:
             self._set_running_count(max(0, self._running_count - 1))
+
+    async def _ack_cancelled(
+        self,
+        delivery: Any,
+        execution: TaskExecution | None,
+    ) -> None:
+        if execution is not None:
+            reason = None
+            if self.cancellation_manager is not None:
+                reason = await self.cancellation_manager.get_reason(execution.id)
+            updated = replace(
+                execution,
+                status=ExecutionStatus.CANCELLED,
+                finished_at=self._now(),
+                error_type="CancelledError",
+                error_message=reason or "task execution was cancelled",
+            )
+            if self.repository is not None:
+                await _maybe_await(self.repository.save(updated))
+        await _maybe_await(self.dispatcher.ack(delivery))
+        if execution is not None and self.cancellation_manager is not None:
+            await self.cancellation_manager.clear(execution.id)
 
     async def _requeue(
         self,
@@ -244,14 +305,30 @@ class Worker:
         if execution is not None:
             await self._save_requeue_state(execution)
 
+    async def _ack_and_defer_waiting(self, delivery: Any) -> None:
+        await _maybe_await(self.dispatcher.ack(delivery))
+        requeue = getattr(self.dispatcher, "requeue", None)
+        if not callable(requeue):
+            return
+        try:
+            await _maybe_await(
+                requeue(
+                    delivery,
+                    delay_seconds=max(
+                        1.0,
+                        self.config.retry_requeue_delay,
+                    ),
+                )
+            )
+        except Exception:
+            logger.exception("failed to requeue waiting scheduler delivery")
+
     async def _save_requeue_state(
         self,
         execution: TaskExecution | None,
     ) -> None:
         if execution is None or self.repository is None:
             return
-        from xquant.scheduler.domain import ExecutionStatus
-
         status = (
             ExecutionStatus.RETRYING
             if execution.attempt < execution.max_attempts

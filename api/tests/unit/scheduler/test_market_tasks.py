@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
-from xquant.marketdata.tasks import DatasetSyncHandler, WatchlistSyncHandler
-from xquant.scheduler.domain import TaskContext
+from xquant.marketdata.tasks import (
+    DatasetSyncHandler,
+    MarketWatchlistPlanner,
+    WatchlistSyncHandler,
+)
+from xquant.scheduler.domain import TaskContext, TaskExecution
 
 
 class _Database:
@@ -69,3 +73,24 @@ def test_watchlist_sync_handler_normalizes_batch_entries() -> None:
     assert result.metrics == {"symbol_count": 2, "record_count": 24}
     assert database.calls[0]["lookback"] == 500
     assert database.calls[1]["source"] == "yfinance"
+
+
+def test_market_watchlist_planner_builds_dependent_summary_node() -> None:
+    execution = TaskExecution(
+        id="plan-root",
+        task_name="market.symbol.sync",
+        scheduled_at=datetime(2026, 9, 15, 9, 31, tzinfo=UTC),
+        params={
+            "symbols": [
+                {"symbol": "600000"},
+                {"symbol": "000001"},
+            ]
+        },
+        trace_id="trace-plan",
+    )
+
+    plan = asyncio.run(MarketWatchlistPlanner().plan(execution))
+    order = plan.topological_order()
+
+    assert [node.key for node in order] == ["dataset-0", "dataset-1", "summary"]
+    assert order[-1].depends_on == ("dataset-0", "dataset-1")

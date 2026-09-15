@@ -29,6 +29,7 @@ def test_scheduler_api_is_available_when_enabled(tmp_path) -> None:
         assert {item["name"] for item in tasks.json()["items"]} == {
             "market.daily.sync",
             "market.symbol.sync",
+            "market.watchlist.summary",
         }
 
         created = client.post(
@@ -66,7 +67,7 @@ def test_schedule_changes_do_not_require_embedded_engine(tmp_path) -> None:
             enabled=True,
             embedded=False,
             engine_type="memory",
-            dispatcher_type="local",
+            dispatcher_type="redis",
         ),
     )
 

@@ -148,17 +148,45 @@ def test_memory_repositories_upsert_filter_and_find_stale() -> None:
                 created_at=NOW - timedelta(minutes=20),
             )
         )
+        await executions.save(
+            _execution(
+                "queued",
+                status=ExecutionStatus.QUEUED,
+                worker_id=None,
+            )
+        )
+
+        claimed = await executions.claim(
+            "queued",
+            worker_id="worker-claim",
+            attempt=1,
+        )
+        assert claimed is not None
+        assert claimed.status is ExecutionStatus.RUNNING
+        assert claimed.worker_id == "worker-claim"
+        assert (
+            await executions.claim(
+                "queued",
+                worker_id="worker-other",
+                attempt=1,
+            )
+            is None
+        )
 
         running = await executions.list(status=ExecutionStatus.RUNNING)
-        assert [item.id for item in running] == ["new-running", "old-running"]
+        assert [item.id for item in running] == [
+            "queued",
+            "new-running",
+            "old-running",
+        ]
         assert [
             item.id
             for item in await executions.list(
                 task_name="market.kline.sync",
-                limit=1,
+                limit=2,
                 offset=1,
             )
-        ] == ["old-running"]
+        ] == ["new-running", "old-running"]
         stale = await executions.find_stale_running(
             NOW - timedelta(minutes=5),
             worker_ids={"worker-1"},
@@ -210,6 +238,8 @@ class FakePostgresStore:
     ) -> Any:
         values = dict(params or {})
         self.calls.append((statement, values))
+        if fetch == "one" and "UPDATE scheduler.scheduler_execution" in statement:
+            return None
         if fetch == "one" and "RETURNING id" in statement:
             return {"id": values.get("schedule_id")}
         return None
@@ -257,6 +287,11 @@ def test_postgres_repositories_emit_expected_sql_with_fake_store() -> None:
                 status=ExecutionStatus.RUNNING,
                 started_at=NOW - timedelta(minutes=10),
             )
+        )
+        await executions.claim(
+            "postgres-execution",
+            worker_id="worker-1",
+            attempt=1,
         )
         await executions.list(
             status=ExecutionStatus.RUNNING,
@@ -314,6 +349,12 @@ def test_postgres_repositories_emit_expected_sql_with_fake_store() -> None:
         )
         assert "CAST(:params_json AS jsonb)" in execution_insert
         assert "ON CONFLICT (id) DO UPDATE" in execution_insert
+        execution_claim = _statement(
+            store,
+            "UPDATE scheduler.scheduler_execution",
+        )
+        assert "status IN ('PENDING', 'QUEUED', 'WAITING', 'RETRYING')" in execution_claim
+        assert "attempt = :attempt" in execution_claim
 
         execution_list = _statement(
             store,

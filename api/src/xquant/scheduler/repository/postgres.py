@@ -33,11 +33,11 @@ class PostgresTaskRepository(TaskRepository):
             INSERT INTO scheduler.scheduler_task
                 (name, handler, description, queue, priority, timeout_seconds,
                  retry_policy_json, concurrency_policy, rate_limit_key, enabled,
-                 updated_at)
+                 planner, updated_at)
             VALUES
                 (:name, :handler, :description, :queue, :priority,
                  :timeout_seconds, CAST(:retry_policy_json AS jsonb),
-                 :concurrency_policy, :rate_limit_key, :enabled, now())
+                 :concurrency_policy, :rate_limit_key, :enabled, :planner, now())
             ON CONFLICT (name) DO UPDATE SET
                 handler = EXCLUDED.handler,
                 description = EXCLUDED.description,
@@ -47,6 +47,7 @@ class PostgresTaskRepository(TaskRepository):
                 retry_policy_json = EXCLUDED.retry_policy_json,
                 concurrency_policy = EXCLUDED.concurrency_policy,
                 rate_limit_key = EXCLUDED.rate_limit_key,
+                planner = EXCLUDED.planner,
                 enabled = EXCLUDED.enabled,
                 updated_at = now()
             """,
@@ -62,6 +63,7 @@ class PostgresTaskRepository(TaskRepository):
                     getattr(task, "concurrency_policy", "FORBID")
                 ),
                 "rate_limit_key": getattr(task, "rate_limit_key", None),
+                "planner": getattr(task, "planner", None),
                 "enabled": getattr(task, "enabled", True),
             },
         )
@@ -71,7 +73,8 @@ class PostgresTaskRepository(TaskRepository):
         row = self._store.query_one(
             """
             SELECT name, handler, description, queue, priority, timeout_seconds,
-                   retry_policy_json, concurrency_policy, rate_limit_key, enabled
+                   retry_policy_json, concurrency_policy, rate_limit_key,
+                   planner, enabled
             FROM scheduler.scheduler_task
             WHERE name = :name
             """,
@@ -83,7 +86,8 @@ class PostgresTaskRepository(TaskRepository):
         rows = self._store.query(
             """
             SELECT name, handler, description, queue, priority, timeout_seconds,
-                   retry_policy_json, concurrency_policy, rate_limit_key, enabled
+                   retry_policy_json, concurrency_policy, rate_limit_key,
+                   planner, enabled
             FROM scheduler.scheduler_task
             ORDER BY name
             """
@@ -236,14 +240,15 @@ class PostgresExecutionRepository(ExecutionRepository):
         self._store.execute(
             """
             INSERT INTO scheduler.scheduler_execution
-                (id, task_name, schedule_id, parent_execution_id, queue, priority,
-                 status, params_json, scheduled_at, queued_at, started_at,
-                 finished_at, attempt, max_attempts, worker_id, trace_id,
-                 result_json, error_type, error_message, duration_ms, created_at,
-                 updated_at)
+                (id, task_name, schedule_id, parent_execution_id,
+                 depends_on_json, queue, priority, status, params_json,
+                 scheduled_at, queued_at, started_at, finished_at, attempt,
+                 max_attempts, worker_id, trace_id, result_json, error_type,
+                 error_message, duration_ms, created_at, updated_at)
             VALUES
-                (:id, :task_name, :schedule_id, :parent_execution_id, :queue,
-                 :priority, :status, CAST(:params_json AS jsonb),
+                (:id, :task_name, :schedule_id, :parent_execution_id,
+                 CAST(:depends_on_json AS jsonb), :queue, :priority, :status,
+                 CAST(:params_json AS jsonb),
                  CAST(:scheduled_at AS timestamptz), CAST(:queued_at AS timestamptz),
                  CAST(:started_at AS timestamptz), CAST(:finished_at AS timestamptz),
                  :attempt, :max_attempts, :worker_id, :trace_id,
@@ -253,6 +258,7 @@ class PostgresExecutionRepository(ExecutionRepository):
                 task_name = EXCLUDED.task_name,
                 schedule_id = EXCLUDED.schedule_id,
                 parent_execution_id = EXCLUDED.parent_execution_id,
+                depends_on_json = EXCLUDED.depends_on_json,
                 queue = EXCLUDED.queue,
                 priority = EXCLUDED.priority,
                 status = EXCLUDED.status,
@@ -280,6 +286,9 @@ class PostgresExecutionRepository(ExecutionRepository):
                 "parent_execution_id": getattr(
                     execution, "parent_execution_id", None
                 ),
+                "depends_on_json": dumps(
+                    getattr(execution, "depends_on", ())
+                ),
                 "queue": getattr(execution, "queue", "default"),
                 "priority": getattr(execution, "priority", 5),
                 "status": enum_value(execution.status),
@@ -305,6 +314,43 @@ class PostgresExecutionRepository(ExecutionRepository):
         row = self._store.query_one(
             _EXECUTION_SELECT + " WHERE id = :execution_id",
             {"execution_id": execution_id},
+        )
+        return _execution_from_row(row) if row is not None else None
+
+    async def claim(
+        self,
+        execution_id: str,
+        *,
+        worker_id: str,
+        attempt: int,
+    ) -> TaskExecution | None:
+        if not worker_id:
+            raise ValueError("worker_id cannot be empty")
+        if attempt < 1:
+            raise ValueError("attempt must be at least 1")
+        row = self._store.execute(
+            """
+            UPDATE scheduler.scheduler_execution
+            SET status = 'RUNNING',
+                worker_id = :worker_id,
+                started_at = COALESCE(started_at, now()),
+                updated_at = now()
+            WHERE id = :execution_id
+              AND attempt = :attempt
+              AND status IN ('PENDING', 'QUEUED', 'WAITING', 'RETRYING')
+            RETURNING id, task_name, schedule_id, parent_execution_id,
+                      depends_on_json, queue, priority, status, params_json,
+                      scheduled_at, queued_at, started_at, finished_at,
+                      attempt, max_attempts, worker_id, trace_id, result_json,
+                      error_type, error_message, duration_ms, created_at,
+                      updated_at
+            """,
+            {
+                "execution_id": execution_id,
+                "worker_id": worker_id,
+                "attempt": attempt,
+            },
+            fetch="one",
         )
         return _execution_from_row(row) if row is not None else None
 
@@ -400,10 +446,11 @@ class PostgresExecutionRepository(ExecutionRepository):
 
 
 _EXECUTION_SELECT = """
-    SELECT id, task_name, schedule_id, parent_execution_id, queue, priority,
-           status, params_json, scheduled_at, queued_at, started_at, finished_at,
-           attempt, max_attempts, worker_id, trace_id, result_json, error_type,
-           error_message, duration_ms, created_at, updated_at
+    SELECT id, task_name, schedule_id, parent_execution_id, depends_on_json,
+           queue, priority, status, params_json, scheduled_at, queued_at,
+           started_at, finished_at, attempt, max_attempts, worker_id, trace_id,
+           result_json, error_type, error_message, duration_ms, created_at,
+           updated_at
     FROM scheduler.scheduler_execution
 """
 
@@ -420,6 +467,7 @@ def _task_from_row(row: Mapping[str, Any]) -> TaskDefinition:
             "queue": row.get("queue", "default"),
             "priority": row.get("priority", 5),
             "rate_limit_key": row.get("rate_limit_key"),
+            "planner": row.get("planner"),
             "enabled": bool(row.get("enabled", True)),
         },
         TaskDefinition,
@@ -460,6 +508,9 @@ def _execution_from_row(row: Mapping[str, Any]) -> TaskExecution:
             "task_name": row["task_name"],
             "schedule_id": row.get("schedule_id"),
             "parent_execution_id": row.get("parent_execution_id"),
+            "depends_on": tuple(
+                decode_json(row.get("depends_on_json"), ()) or ()
+            ),
             "queue": row.get("queue", "default"),
             "priority": row.get("priority", 5),
             "status": row["status"],
