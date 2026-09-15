@@ -24,6 +24,11 @@ services:
       INFLUXDB_URL: https://influx.shawsx.com:8443
       INFLUXDB_DATABASE: quant-sentinel
       INFLUXDB_TOKEN: apiv3_50759e4cde73936ce9ca0a9940261323
+      SCHEDULER_ENABLED: "true"
+      SCHEDULER_EMBEDDED: "false"
+      SCHEDULER_ENGINE_TYPE: apscheduler
+      SCHEDULER_DISPATCHER_TYPE: redis
+      SCHEDULER_WORKER_CONCURRENCY: "8"
     volumes:
       - quant-sentinel-data:/app/data
       - quant-sentinel-logs:/app/logs

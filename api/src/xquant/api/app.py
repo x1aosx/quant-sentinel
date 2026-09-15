@@ -7,8 +7,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from xquant.ai.coordinator import MonitorManager
+from xquant.marketdata.tasks import register_market_tasks
 from xquant.notifications.feishu import send_feishu_message
 from xquant.registry import Database
+from xquant.scheduler.application import TaskRegistry
+from xquant.scheduler.runtime import build_scheduler_runtime
 from xquant.storage import StorageSettings
 from xquant.system_config import SystemConfigStore
 
@@ -41,20 +44,39 @@ def create_app(
         )
 
     monitor = MonitorManager(db, notification_callback=notify_monitor)
+    scheduler_registry = TaskRegistry()
+    if settings.scheduler.enabled:
+        register_market_tasks(scheduler_registry, db)
+    scheduler_runtime = build_scheduler_runtime(
+        db,
+        settings,
+        registry=scheduler_registry,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        yield
-        monitor.stop()
-        close = getattr(db, "close", None)
-        if callable(close):
-            close()
+        try:
+            if scheduler_runtime is not None:
+                await scheduler_runtime.start(
+                    start_engine=settings.scheduler.embedded,
+                    start_worker=False,
+                    start_recovery=False,
+                )
+            yield
+        finally:
+            if scheduler_runtime is not None:
+                await scheduler_runtime.shutdown()
+            monitor.stop()
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
 
     app = FastAPI(title="X-Quant API", version="0.3.0", lifespan=lifespan)
     app.state.db = db
     app.state.settings = settings
     app.state.system_config = system_config
     app.state.monitor = monitor
+    app.state.scheduler_runtime = scheduler_runtime
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "X-Quant local strategy-first quantitative research and management workbench"
 requires-python = ">=3.11"
 dependencies = [
+  "apscheduler>=3.10,<4",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.29",
   "pydantic>=2.6",
@@ -34,6 +35,8 @@ dev = [
 
 [project.scripts]
 xquant = "xquant.cli:main"
+xquant-scheduler = "xquant.scheduler.cli:scheduler_main"
+xquant-worker = "xquant.scheduler.cli:worker_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

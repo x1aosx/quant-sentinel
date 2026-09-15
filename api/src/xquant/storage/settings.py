@@ -9,6 +9,39 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class SchedulerSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="SCHEDULER_", extra="ignore")
+
+    enabled: bool = False
+    embedded: bool = False
+    engine_type: Literal["apscheduler", "memory"] = "apscheduler"
+    dispatcher_type: Literal["local", "redis"] = "local"
+    worker_queues: list[str] = Field(
+        default_factory=lambda: [
+            "realtime",
+            "market-data",
+            "strategy",
+            "backtest",
+            "model",
+            "notification",
+            "batch",
+            "low",
+            "default",
+        ]
+    )
+    worker_concurrency: int = Field(default=8, ge=1, le=256)
+    heartbeat_interval_seconds: float = Field(default=10.0, gt=0)
+    heartbeat_timeout_seconds: float = Field(default=60.0, gt=0)
+    lease_seconds: int = Field(default=3600, gt=0)
+    graceful_shutdown_timeout_seconds: float = Field(default=60.0, ge=0)
+    recovery_enabled: bool = True
+    recovery_interval_seconds: float = Field(default=30.0, gt=0)
+    queue_prefix: str = "xqs:scheduler"
+    lock_prefix: str = "xqs:lock"
+    default_timeout_seconds: int = Field(default=300, gt=0)
+    max_catch_up_runs: int = Field(default=30, ge=0, le=10_000)
+
+
 class PostgresSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POSTGRES_", extra="ignore")
 
@@ -104,6 +137,7 @@ class StorageSettings(BaseSettings):
     postgres: PostgresSettings = Field(default_factory=PostgresSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     influx: InfluxSettings = Field(default_factory=InfluxSettings)
+    scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
 
     @classmethod
     def load(cls) -> StorageSettings:
