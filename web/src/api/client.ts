@@ -200,16 +200,19 @@ export const api = {
       symbol?: string;
       timeframe?: string;
       limit?: number;
+      offset?: number;
     } = {},
   ) => {
     const search = new URLSearchParams({
       limit: String(params.limit ?? 50),
+      offset: String(params.offset ?? 0),
     });
     if (params.dataset_id) search.set('dataset_id', params.dataset_id);
     if (params.symbol) search.set('symbol', params.symbol);
     if (params.timeframe) search.set('timeframe', params.timeframe);
     return apiRequest<AIRecordListResponse>(`/ai/records?${search.toString()}`).then(
       (payload) => ({
+        ...payload,
         items: payload.items.map((item) => ({
           ...item,
           action: item.action ?? item.decision_action ?? null,

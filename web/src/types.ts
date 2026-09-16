@@ -528,6 +528,9 @@ export interface AIRecordSummary {
 
 export interface AIRecordListResponse {
   items: AIRecordSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface AIRecordDetailResponse {

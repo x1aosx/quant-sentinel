@@ -116,12 +116,18 @@ class Database:
             DELETE FROM ai_analysis_records
             WHERE symbol IS NOT NULL
               AND timeframe IS NOT NULL
-              AND rowid NOT IN (
-                  SELECT MAX(rowid)
-                  FROM ai_analysis_records
-                  WHERE symbol IS NOT NULL
-                    AND timeframe IS NOT NULL
-                  GROUP BY symbol, timeframe
+              AND EXISTS (
+                  SELECT 1
+                  FROM ai_analysis_records newer
+                  WHERE newer.symbol = ai_analysis_records.symbol
+                    AND newer.timeframe = ai_analysis_records.timeframe
+                    AND (
+                        newer.created_at > ai_analysis_records.created_at
+                        OR (
+                            newer.created_at = ai_analysis_records.created_at
+                            AND newer.rowid > ai_analysis_records.rowid
+                        )
+                    )
               )
             """
         )
@@ -459,6 +465,7 @@ class Database:
                 decision_action = excluded.decision_action,
                 confidence = excluded.confidence,
                 record_json = excluded.record_json
+            WHERE excluded.created_at >= ai_analysis_records.created_at
             """,
             {
                 **summary,
@@ -480,8 +487,10 @@ class Database:
         symbol: str | None = None,
         timeframe: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         normalized_limit = _normalize_record_limit(limit)
+        normalized_offset = _normalize_record_offset(offset)
         conn = self._connect()
         if dataset_id is not None:
             rows = conn.execute(
@@ -491,9 +500,9 @@ class Database:
                 FROM ai_analysis_records
                 WHERE dataset_id = ?
                 ORDER BY created_at DESC, rowid DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (dataset_id, normalized_limit),
+                (dataset_id, normalized_limit, normalized_offset),
             ).fetchall()
         elif symbol is not None or timeframe is not None:
             clauses: list[str] = []
@@ -504,7 +513,7 @@ class Database:
             if timeframe is not None:
                 clauses.append("timeframe = ?")
                 params.append(timeframe)
-            params.append(normalized_limit)
+            params.extend((normalized_limit, normalized_offset))
             rows = conn.execute(
                 f"""
                 SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
@@ -512,7 +521,7 @@ class Database:
                 FROM ai_analysis_records
                 WHERE {' AND '.join(clauses)}
                 ORDER BY created_at DESC, rowid DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
                 params,
             ).fetchall()
@@ -523,12 +532,55 @@ class Database:
                        duration_ms, decision_action, confidence
                 FROM ai_analysis_records
                 ORDER BY created_at DESC, rowid DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (normalized_limit,),
+                (normalized_limit, normalized_offset),
             ).fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def count_analysis_records(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+    ) -> int:
+        conn = self._connect()
+        if dataset_id is not None:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM ai_analysis_records
+                WHERE dataset_id = ?
+                """,
+                (dataset_id,),
+            ).fetchone()
+        elif symbol is not None or timeframe is not None:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if symbol is not None:
+                clauses.append("symbol = ?")
+                params.append(symbol)
+            if timeframe is not None:
+                clauses.append("timeframe = ?")
+                params.append(timeframe)
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM ai_analysis_records
+                WHERE {' AND '.join(clauses)}
+                """,
+                params,
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM ai_analysis_records
+                """
+            ).fetchone()
+        conn.close()
+        return int(row["total"]) if row is not None else 0
 
     def get_analysis_record(self, record_id: str) -> dict[str, Any]:
         conn = self._connect()
@@ -584,6 +636,14 @@ def _normalize_record_limit(limit: int) -> int:
     except (TypeError, ValueError):
         parsed = 50
     return max(1, min(200, parsed))
+
+
+def _normalize_record_offset(offset: int) -> int:
+    try:
+        parsed = int(offset)
+    except (TypeError, ValueError):
+        parsed = 0
+    return max(0, parsed)
 
 
 def _record_dataset_id(record: Mapping[str, Any], dataset_id: str | None) -> str | None:

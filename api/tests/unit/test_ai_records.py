@@ -62,6 +62,16 @@ class FakePostgresStore:
             return
         symbol = values.get("symbol")
         timeframe = values.get("timeframe")
+        existing = next(
+            (
+                row
+                for row in self.rows.values()
+                if row.get("symbol") == symbol and row.get("timeframe") == timeframe
+            ),
+            None,
+        )
+        if existing is not None and str(values["created_at"]) < str(existing["created_at"]):
+            return
         if symbol is not None and timeframe is not None:
             self.rows = {
                 key: row
@@ -81,23 +91,43 @@ class FakePostgresStore:
     def query(self, statement: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         values = dict(params or {})
         self.statements.append((statement, values))
-        rows = list(self.rows.values())
-        if "WHERE dataset_id = :dataset_id" in statement:
-            rows = [
-                row for row in rows if row.get("dataset_id") == values.get("dataset_id")
-            ]
+        rows = self._filtered_rows(statement, values)
+        if "SELECT COUNT(*) AS total" in statement:
+            return [{"total": len(rows)}]
         rows.sort(key=lambda row: (str(row["created_at"]), str(row["id"])), reverse=True)
         limit = int(values["limit"])
-        return [dict(row) for row in rows[:limit]]
+        offset = int(values.get("offset", 0))
+        return [dict(row) for row in rows[offset : offset + limit]]
 
     def query_one(
         self,
         statement: str,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        record_id = str((params or {}).get("record_id") or "")
+        values = dict(params or {})
+        if "SELECT COUNT(*) AS total" in statement:
+            return {"total": len(self._filtered_rows(statement, values))}
+        record_id = str(values.get("record_id") or "")
         row = self.rows.get(record_id)
         return dict(row) if row else None
+
+    def _filtered_rows(
+        self,
+        statement: str,
+        values: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        rows = list(self.rows.values())
+        if "dataset_id = :dataset_id" in statement:
+            rows = [
+                row for row in rows if row.get("dataset_id") == values.get("dataset_id")
+            ]
+        if "symbol = :symbol" in statement:
+            rows = [row for row in rows if row.get("symbol") == values.get("symbol")]
+        if "timeframe = :timeframe" in statement:
+            rows = [
+                row for row in rows if row.get("timeframe") == values.get("timeframe")
+            ]
+        return rows
 
 
 def test_sqlite_analysis_records_keep_latest_per_symbol_timeframe(tmp_path: Path) -> None:
@@ -137,6 +167,12 @@ def test_sqlite_analysis_records_keep_latest_per_symbol_timeframe(tmp_path: Path
     ] == [other["id"]]
     assert len(database.list_analysis_records(limit=1)) == 1
     assert len(database.list_analysis_records(limit=50)) == 2
+    assert [item["id"] for item in database.list_analysis_records(limit=1, offset=1)] == [
+        second["id"]
+    ]
+    assert database.count_analysis_records() == 2
+    assert database.count_analysis_records(symbol="DEMO.RESEARCH") == 1
+    assert database.count_analysis_records(timeframe="15m") == 1
 
     with pytest.raises(KeyError):
         database.get_analysis_record(first["id"])
@@ -153,6 +189,25 @@ def test_sqlite_analysis_records_keep_latest_per_symbol_timeframe(tmp_path: Path
 
     database._migrate()
     assert len(database.list_analysis_records(dataset_id="dataset-a")) == 1
+
+
+def test_sqlite_analysis_records_ignore_stale_duplicate(tmp_path: Path) -> None:
+    database = SqliteDatabase(tmp_path / "quant.db")
+    newest = database.save_analysis_record(
+        _record("ai-newest", "2026-01-01T00:00:01+00:00"),
+        dataset_id="dataset-newest",
+    )
+    stale = database.save_analysis_record(
+        _record("ai-stale", "2026-01-01T00:00:00+00:00"),
+        dataset_id="dataset-stale",
+    )
+
+    items = database.list_analysis_records()
+
+    assert [item["id"] for item in items] == [newest["id"]]
+    assert items[0]["dataset_id"] == "dataset-newest"
+    with pytest.raises(KeyError):
+        database.get_analysis_record(stale["id"])
 
 
 def test_sqlite_migration_collapses_existing_duplicate_analysis_records(
@@ -185,8 +240,8 @@ def test_sqlite_migration_collapses_existing_duplicate_analysis_records(
         confidence=81.0,
     )
     for persisted_id, dataset_id, record in (
-        ("legacy-old-row", "dataset-old", older),
         ("legacy-new-row", "dataset-new", newer),
+        ("legacy-old-row", "dataset-old", older),
     ):
         conn.execute(
             """
@@ -239,6 +294,8 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
         confidence=88.0,
     )
     replaced = database.save_analysis_record(replacement, dataset_id="dataset-pg-latest")
+    stale = _record("ai-postgres-stale", "2026-01-02T00:00:00+00:00")
+    database.save_analysis_record(stale, dataset_id="dataset-pg-stale")
     items = database.list_analysis_records(dataset_id="dataset-pg-latest", limit=50)
     detail = database.get_analysis_record(replaced["id"])
 
@@ -248,6 +305,8 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
     assert detail["record"] == replacement
     assert detail["dataset_id"] == "dataset-pg-latest"
     assert database.list_analysis_records(dataset_id="dataset-pg") == []
+    assert database.count_analysis_records() == 1
+    assert database.count_analysis_records(dataset_id="dataset-pg-latest") == 1
     with pytest.raises(KeyError):
         database.get_analysis_record(saved["id"])
     insert_statements = [
@@ -263,6 +322,7 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
     assert insert_statements
     assert "CAST(:record AS jsonb)" in insert_statements[0]
     assert "ON CONFLICT (symbol, timeframe) DO UPDATE" in insert_statements[0]
+    assert "WHERE EXCLUDED.created_at >= current_record.created_at" in insert_statements[0]
     assert query_statements
 
     with pytest.raises(KeyError):

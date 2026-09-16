@@ -18,11 +18,13 @@ from ..storage import (
     RedisStore,
     StorageSettings,
 )
-from .bar_utils import dedupe_sorted_bars, parse_session_time as _parse_time
+from .bar_utils import dedupe_sorted_bars
+from .bar_utils import parse_session_time as _parse_time
 from .bar_utils import session_sort_key as _session_sort_key
 from .sqlite import Database as LegacySqliteDatabase
 from .sqlite import (
     _normalize_record_limit,
+    _normalize_record_offset,
     _record_created_at,
     _record_dataset_id,
     _record_summary,
@@ -505,7 +507,7 @@ class Database:
         stored_record = _sanitize_json(record)
         self.postgres.execute(
             """
-            INSERT INTO research.ai_analysis_record
+            INSERT INTO research.ai_analysis_record AS current_record
                 (id, record_id, dataset_id, symbol, timeframe, status, created_at,
                  duration_ms, decision_action, confidence, record)
             VALUES
@@ -524,6 +526,7 @@ class Database:
                 decision_action = EXCLUDED.decision_action,
                 confidence = EXCLUDED.confidence,
                 record = EXCLUDED.record
+            WHERE EXCLUDED.created_at >= current_record.created_at
             """,
             {
                 **summary,
@@ -543,8 +546,10 @@ class Database:
         symbol: str | None = None,
         timeframe: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         normalized_limit = _normalize_record_limit(limit)
+        normalized_offset = _normalize_record_offset(offset)
         columns = """
             SELECT id::text, record_id, dataset_id, symbol, timeframe, status, created_at,
                    duration_ms, decision_action, confidence
@@ -556,13 +561,20 @@ class Database:
                 + """
                 WHERE dataset_id = :dataset_id
                 ORDER BY created_at DESC, id DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """,
-                {"dataset_id": dataset_id, "limit": normalized_limit},
+                {
+                    "dataset_id": dataset_id,
+                    "limit": normalized_limit,
+                    "offset": normalized_offset,
+                },
             )
         elif symbol is not None or timeframe is not None:
             clauses: list[str] = []
-            params: dict[str, Any] = {"limit": normalized_limit}
+            params: dict[str, Any] = {
+                "limit": normalized_limit,
+                "offset": normalized_offset,
+            }
             if symbol is not None:
                 clauses.append("symbol = :symbol")
                 params["symbol"] = symbol
@@ -574,7 +586,7 @@ class Database:
                 + f"""
                 WHERE {' AND '.join(clauses)}
                 ORDER BY created_at DESC, id DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """,
                 params,
             )
@@ -583,9 +595,9 @@ class Database:
                 columns
                 + """
                 ORDER BY created_at DESC, id DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """,
-                {"limit": normalized_limit},
+                {"limit": normalized_limit, "offset": normalized_offset},
             )
         summary_fields = (
             "id",
@@ -600,6 +612,44 @@ class Database:
             "confidence",
         )
         return [{field: row.get(field) for field in summary_fields} for row in rows]
+
+    def count_analysis_records(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+    ) -> int:
+        query = """
+            SELECT COUNT(*) AS total
+            FROM research.ai_analysis_record
+        """
+        if dataset_id is not None:
+            row = self.postgres.query_one(
+                query
+                + """
+                WHERE dataset_id = :dataset_id
+                """,
+                {"dataset_id": dataset_id},
+            )
+        elif symbol is not None or timeframe is not None:
+            clauses: list[str] = []
+            params: dict[str, Any] = {}
+            if symbol is not None:
+                clauses.append("symbol = :symbol")
+                params["symbol"] = symbol
+            if timeframe is not None:
+                clauses.append("timeframe = :timeframe")
+                params["timeframe"] = timeframe
+            row = self.postgres.query_one(
+                query
+                + f"""
+                WHERE {' AND '.join(clauses)}
+                """,
+                params,
+            )
+        else:
+            row = self.postgres.query_one(query)
+        return int(row.get("total", 0)) if row is not None else 0
 
     def get_analysis_record(self, record_id: str) -> dict[str, Any]:
         try:

@@ -289,14 +289,22 @@ def list_analysis_records(
     symbol: str | None = None,
     timeframe: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
+    filters = {
+        "dataset_id": str(dataset_id or "").strip() or None,
+        "symbol": str(symbol or "").strip().upper() or None,
+        "timeframe": str(timeframe or "").strip().lower() or None,
+    }
     return {
         "items": db.list_analysis_records(
-            dataset_id=str(dataset_id or "").strip() or None,
-            symbol=str(symbol or "").strip().upper() or None,
-            timeframe=str(timeframe or "").strip().lower() or None,
+            **filters,
             limit=limit,
-        )
+            offset=offset,
+        ),
+        "total": db.count_analysis_records(**filters),
+        "limit": limit,
+        "offset": offset,
     }
 
 

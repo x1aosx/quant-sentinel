@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   Activity,
   Bell,
   Bot,
   CalendarClock,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CheckCircle2,
   Download,
@@ -111,6 +117,8 @@ const WEEKDAY_OPTIONS = [
   { value: 6, label: '周六' },
   { value: 7, label: '周日' },
 ];
+
+const HISTORY_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
 function targetFromDataset(dataset: DatasetSummary): MonitorTarget {
   return {
@@ -287,6 +295,8 @@ export function AIAnalysisPage() {
     DEFAULT_REALTIME_TIMEFRAME,
   );
   const [historyTimeframe, setHistoryTimeframe] = useState('');
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(20);
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<MonitorSchedule>(
     DEFAULT_MONITOR_SCHEDULE,
@@ -326,6 +336,10 @@ export function AIAnalysisPage() {
   });
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
   const stockGroups = useMemo(() => groupDatasetsByStock(datasets), [datasets]);
+  const historyTimeframes = useMemo(
+    () => Array.from(new Set(datasets.map((dataset) => dataset.timeframe))).sort(),
+    [datasets],
+  );
   const selectedDataset = datasets.find((dataset) => dataset.id === datasetId);
   const selectedSymbol = selectedDataset?.symbol ?? '';
   const selectedTimeframe = selectedDataset?.timeframe ?? '';
@@ -339,16 +353,29 @@ export function AIAnalysisPage() {
   const watchlistDataset = watchlistTimeframes.find(
     (dataset) => dataset.timeframe === watchlistTimeframe,
   );
+  const historyOffset = (historyPage - 1) * historyPageSize;
   const historyQuery = useQuery({
-    queryKey: ['ai-records', selectedSymbol, historyTimeframe],
+    queryKey: ['ai-records', historyTimeframe, historyPage, historyPageSize],
     queryFn: () =>
       api.listAIRecords({
-        symbol: selectedSymbol,
         timeframe: historyTimeframe || undefined,
-        limit: 50,
+        limit: historyPageSize,
+        offset: historyOffset,
       }),
-    enabled: Boolean(selectedSymbol),
+    placeholderData: keepPreviousData,
   });
+  const historyTotal = historyQuery.data?.total ?? 0;
+  const historyTotalPages = Math.max(1, Math.ceil(historyTotal / historyPageSize));
+  const historyDisplayedPage = historyQuery.data
+    ? Math.floor(historyQuery.data.offset / historyQuery.data.limit) + 1
+    : historyPage;
+  const historyPageStart =
+    historyTotal > 0 ? (historyQuery.data?.offset ?? historyOffset) + 1 : 0;
+  const historyPageEnd =
+    historyTotal > 0
+      ? (historyQuery.data?.offset ?? historyOffset) +
+        (historyQuery.data?.items.length ?? 0)
+      : 0;
   const config = configQuery.data;
 
   const {
@@ -405,11 +432,10 @@ export function AIAnalysisPage() {
   }, [stockGroups, watchlistSymbol, watchlistTimeframe]);
 
   useEffect(() => {
-    if (!selectedGroup || !historyTimeframe) return;
-    if (!datasetForTimeframe(selectedGroup, historyTimeframe)) {
-      setHistoryTimeframe('');
-    }
-  }, [historyTimeframe, selectedGroup]);
+    if (!historyQuery.data) return;
+    const lastPage = Math.max(1, Math.ceil(historyQuery.data.total / historyPageSize));
+    if (historyPage > lastPage) setHistoryPage(lastPage);
+  }, [historyPage, historyPageSize, historyQuery.data]);
 
   useEffect(() => {
     if (!config || watchlistHydrated.current) return;
@@ -757,7 +783,7 @@ export function AIAnalysisPage() {
       if (item.dataset_id) setDatasetId(item.dataset_id);
       setMode('single');
       setView('decision');
-      setNotice(`已载入历史分析：${item.symbol} ${item.timeframe}`);
+      setNotice(`已载入分析结果：${item.symbol} ${item.timeframe}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -966,29 +992,30 @@ export function AIAnalysisPage() {
             <div className="section-title">
               <div className="section-title-main">
                 <History size={15} />
-                历史分析结果
-                {historyQuery.data?.items.length ? (
-                  <span className="tag">{historyQuery.data.items.length} 条</span>
-                ) : null}
+                分析结果
+                {historyQuery.data ? <span className="tag">{historyTotal} 条</span> : null}
               </div>
               <div className="section-title-actions">
                 <select
                   value={historyTimeframe}
-                  onChange={(event) => setHistoryTimeframe(event.target.value)}
-                  disabled={!selectedGroup}
-                  aria-label="按周期筛选历史分析结果"
+                  onChange={(event) => {
+                    setHistoryTimeframe(event.target.value);
+                    setHistoryPage(1);
+                  }}
+                  disabled={!historyTimeframes.length}
+                  aria-label="按周期筛选分析结果"
                 >
                   <option value="">全部周期</option>
-                  {(selectedGroup?.datasets ?? []).map((dataset) => (
-                    <option key={dataset.id} value={dataset.timeframe}>
-                      {formatTimeframeLabel(dataset.timeframe)}
+                  {historyTimeframes.map((timeframe) => (
+                    <option key={timeframe} value={timeframe}>
+                      {formatTimeframeLabel(timeframe)}
                     </option>
                   ))}
                 </select>
                 <button
                   className="button"
                   onClick={() => void historyQuery.refetch()}
-                  disabled={!selectedSymbol || historyQuery.isFetching}
+                  disabled={historyQuery.isFetching}
                 >
                   <RefreshCcw size={14} />
                   {historyQuery.isFetching ? '刷新中...' : '刷新'}
@@ -1013,14 +1040,14 @@ export function AIAnalysisPage() {
                   {historyQuery.isLoading ? (
                     <tr>
                       <td colSpan={8}>
-                        <div className="empty">正在加载历史分析记录...</div>
+                        <div className="empty">正在加载分析结果...</div>
                       </td>
                     </tr>
                   ) : historyQuery.isError ? (
                     <tr>
                       <td colSpan={8}>
                         <div className="empty">
-                          历史记录加载失败：
+                          分析结果加载失败：
                           {historyQuery.error instanceof Error
                             ? historyQuery.error.message
                             : '未知错误'}
@@ -1030,7 +1057,7 @@ export function AIAnalysisPage() {
                   ) : (historyQuery.data?.items.length ?? 0) === 0 ? (
                     <tr>
                       <td colSpan={8}>
-                        <div className="empty">当前股票筛选下还没有已保存的分析记录。</div>
+                        <div className="empty">还没有已保存的分析结果。</div>
                       </td>
                     </tr>
                   ) : (
@@ -1099,6 +1126,58 @@ export function AIAnalysisPage() {
                 </tbody>
               </table>
             </div>
+            {historyTotal > 0 ? (
+              <div className="summary-pagination">
+                <span className="muted">
+                  第 {historyPageStart}-{historyPageEnd} 条，共 {historyTotal} 条
+                </span>
+                <div className="summary-page-actions">
+                  <label className="history-page-size">
+                    每页
+                    <select
+                      value={historyPageSize}
+                      onChange={(event) => {
+                        setHistoryPageSize(Number(event.target.value));
+                        setHistoryPage(1);
+                      }}
+                      disabled={historyQuery.isFetching}
+                    >
+                      {HISTORY_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => setHistoryPage((current) => Math.max(current - 1, 1))}
+                    disabled={historyQuery.isFetching || historyPage <= 1}
+                  >
+                    <ChevronLeft size={14} />
+                    上一页
+                  </button>
+                  <span className="summary-page-indicator">
+                    第 {Math.min(historyDisplayedPage, historyTotalPages)} /{' '}
+                    {historyTotalPages} 页
+                  </span>
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() =>
+                      setHistoryPage((current) =>
+                        Math.min(current + 1, historyTotalPages),
+                      )
+                    }
+                    disabled={historyQuery.isFetching || historyPage >= historyTotalPages}
+                  >
+                    下一页
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (

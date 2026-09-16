@@ -157,6 +157,51 @@ def test_ai_analysis_accepts_stock_timeframe_and_filters_history(tmp_path) -> No
         assert items[0]["timeframe"] == "15m"
 
 
+def test_ai_records_list_all_symbols_with_pagination(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "quant.db")) as client:
+        database = client.app.state.db
+        for record_id, symbol, created_at in (
+            ("record-old", "AAA", "2026-01-01T00:00:00+00:00"),
+            ("record-new", "BBB", "2026-01-01T00:00:01+00:00"),
+        ):
+            database.save_analysis_record(
+                {
+                    "id": record_id,
+                    "symbol": symbol,
+                    "timeframe": "1d",
+                    "status": "ok",
+                    "created_at": created_at,
+                    "stage2_decision": {
+                        "decision": {
+                            "action": "LONG",
+                            "confidence": 75,
+                        }
+                    },
+                }
+            )
+
+        first_page = client.get(
+            "/api/v1/ai/records",
+            params={"limit": 1, "offset": 0},
+        )
+        second_page = client.get(
+            "/api/v1/ai/records",
+            params={"limit": 1, "offset": 1},
+        )
+
+        assert first_page.status_code == 200, first_page.text
+        assert second_page.status_code == 200, second_page.text
+        first_payload = first_page.json()
+        second_payload = second_page.json()
+        assert first_payload["total"] == 2
+        assert first_payload["limit"] == 1
+        assert first_payload["offset"] == 0
+        assert first_payload["items"][0]["symbol"] == "BBB"
+        assert second_payload["total"] == 2
+        assert second_payload["offset"] == 1
+        assert second_payload["items"][0]["symbol"] == "AAA"
+
+
 def test_streaming_endpoint_returns_final_record(tmp_path) -> None:
     with TestClient(create_app(tmp_path / "quant.db")) as client:
         dataset_id = _create_sample_dataset(client)
