@@ -1,7 +1,9 @@
 import { Navigate, createBrowserRouter } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { AIAnalysisPage } from './pages/AIAnalysisPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DataCenterPage } from './pages/DataCenterPage';
+import { MarketAnalysisPage } from './pages/MarketAnalysisPage';
 import { SchedulerPage } from './pages/SchedulerPage';
 import { StockAnalysisWorkbenchPage } from './pages/StockAnalysisWorkbenchPage';
 import { SystemConfigPage } from './pages/SystemConfigPage';
@@ -15,11 +17,11 @@ export const router = createBrowserRouter(
         { index: true, element: <DashboardPage /> },
         { path: 'data', element: <DataCenterPage /> },
         { path: 'analysis', element: <StockAnalysisWorkbenchPage /> },
-        { path: 'ai', element: <Navigate to="/analysis" replace /> },
-        { path: 'market-analysis', element: <Navigate to="/analysis" replace /> },
+        { path: 'ai', element: <AIAnalysisPage /> },
+        { path: 'market-analysis', element: <MarketAnalysisPage /> },
         { path: 'scheduler', element: <SchedulerPage /> },
-        { path: 'support-resistance', element: <Navigate to="/analysis" replace /> },
-        { path: 'price-action', element: <Navigate to="/analysis" replace /> },
+        { path: 'support-resistance', element: <Navigate to="/market-analysis" replace /> },
+        { path: 'price-action', element: <Navigate to="/market-analysis" replace /> },
         { path: 'settings', element: <SystemConfigPage /> },
       ],
     },
