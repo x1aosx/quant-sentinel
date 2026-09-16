@@ -69,7 +69,8 @@ function restoreState(): AIAnalysisSessionState {
       streamLog: typeof value.streamLog === 'string' ? value.streamLog : '',
       running: value.running === true,
       notice: typeof value.notice === 'string' ? value.notice : '',
-      error: typeof value.error === 'string' ? value.error : '',
+      // Operation errors are transient and must not outlive the page session.
+      error: '',
       question: typeof value.question === 'string' ? value.question : '',
       lastBatch: isObject(value.lastBatch)
         ? (value.lastBatch as BatchAnalyzeResponse)

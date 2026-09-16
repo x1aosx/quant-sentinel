@@ -123,6 +123,14 @@ function monitorTargetKey(target: MonitorTarget) {
   return `${target.source}:${target.symbol}:${target.timeframe}:${target.exchange ?? ''}`;
 }
 
+function isRetryableMonitorSaveError(reason: unknown) {
+  if (!(reason instanceof Error)) return false;
+  return (
+    /请求失败（(502|503|504)）/.test(reason.message) ||
+    /Failed to fetch|NetworkError|Load failed/i.test(reason.message)
+  );
+}
+
 interface DatasetProductGroup {
   key: string;
   symbol: string;
@@ -349,9 +357,15 @@ export function AIAnalysisPage() {
   } = useMutation({
     mutationFn: (items: MonitorTarget[]) =>
       api.saveSystemConfig({ monitor_watchlist: items }),
+    retry: (failureCount, reason) =>
+      failureCount < 2 && isRetryableMonitorSaveError(reason),
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
     onSuccess: (value, submitted) => {
       watchlistSnapshot.current = JSON.stringify(submitted);
       queryClient.setQueryData(['system-config'], value);
+      updateAIAnalysisSession((current) =>
+        current.error.startsWith('盯盘列表保存失败：') ? { error: '' } : {},
+      );
     },
     onError: (reason: Error) => setError(`盯盘列表保存失败：${reason.message}`),
   });
@@ -391,15 +405,18 @@ export function AIAnalysisPage() {
     });
     setScheduleReady(true);
     watchlistHydrated.current = true;
+    updateAIAnalysisSession((current) =>
+      current.error.startsWith('盯盘列表保存失败：') ? { error: '' } : {},
+    );
   }, [config]);
 
   useEffect(() => {
-    if (!scheduleReady) return;
+    if (!scheduleReady || persistWatchlistPending) return;
     const serialized = JSON.stringify(watchlist);
     if (serialized === watchlistSnapshot.current) return;
     const timer = window.setTimeout(() => persistWatchlist(watchlist), 400);
     return () => window.clearTimeout(timer);
-  }, [persistWatchlist, scheduleReady, watchlist]);
+  }, [persistWatchlist, persistWatchlistPending, scheduleReady, watchlist]);
 
   const importRemote = useMutation({
     mutationFn: () =>
