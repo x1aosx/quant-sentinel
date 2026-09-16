@@ -1,7 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Activity,
-  BrainCircuit,
   Crosshair,
   Database,
   Gauge,
@@ -18,8 +17,7 @@ const navGroups = [
     items: [
       { to: '/', label: '驾驶台', icon: Gauge },
       { to: '/data', label: '数据中心', icon: Database },
-      { to: '/ai', label: 'AI 分析', icon: BrainCircuit },
-      { to: '/market-analysis', label: '量价分析', icon: Crosshair },
+      { to: '/analysis', label: '股票分析', icon: Crosshair },
     ],
   },
   {
@@ -34,8 +32,11 @@ const navGroups = [
 const titles: Record<string, string> = {
   '/': '驾驶台',
   '/data': '数据中心',
-  '/ai': 'AI 分析',
-  '/market-analysis': '支撑阻力与价格行为',
+  '/analysis': '股票分析',
+  '/ai': '股票分析',
+  '/market-analysis': '股票分析',
+  '/support-resistance': '股票分析',
+  '/price-action': '股票分析',
   '/scheduler': '任务中心',
   '/settings': '系统配置',
 };
@@ -85,10 +86,6 @@ export function Layout() {
             <span className={healthBadgeClass}>
               <Activity size={14} />
               健康 {health?.status ?? 'unknown'}
-            </span>
-            <span className="badge badge-neutral">
-              <Database size={14} />
-              数据集 {health?.dataset_count ?? 0}
             </span>
           </div>
         </header>
