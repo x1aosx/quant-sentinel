@@ -18,7 +18,6 @@ from .domain import (
     Theme,
     compute_content_hash,
     ensure_utc,
-    information_id,
     utc_iso,
 )
 
@@ -113,7 +112,7 @@ class SqliteIntelligenceRepository:
             """
             CREATE TABLE IF NOT EXISTS intelligence_information (
                 id TEXT PRIMARY KEY,
-                content_hash TEXT NOT NULL UNIQUE,
+                content_hash TEXT NOT NULL,
                 source TEXT NOT NULL,
                 source_type TEXT NOT NULL,
                 title TEXT NOT NULL,
@@ -218,7 +217,7 @@ class SqliteIntelligenceRepository:
                     :id, :content_hash, :source, :source_type, :title, :publish_time,
                     :fetch_time, :process_time, :available_time, :status, :payload
                 )
-                ON CONFLICT(content_hash) DO UPDATE SET
+                ON CONFLICT(id) DO UPDATE SET
                     id = excluded.id,
                     source = excluded.source,
                     source_type = excluded.source_type,
@@ -616,7 +615,7 @@ class PostgresIntelligenceRepository:
                 :fetch_time, :process_time, :available_time, :status,
                 CAST(:payload AS JSONB)
             )
-            ON CONFLICT(content_hash) DO UPDATE SET
+            ON CONFLICT(id) DO UPDATE SET
                 id = excluded.id,
                 source = excluded.source,
                 source_type = excluded.source_type,
@@ -938,12 +937,10 @@ class PostgresIntelligenceRepository:
 
 def _prepare_information(item: RawInformation) -> RawInformation:
     content_hash = item.content_hash or compute_content_hash(item.title, item.content)
-    if item.content_hash == content_hash and str(item.id) == str(
-        information_id(content_hash)
-    ):
+    if item.content_hash == content_hash:
         return item
     return RawInformation(
-        id=information_id(content_hash),
+        id=item.id,
         source=item.source,
         source_type=item.source_type,
         url=item.url,
@@ -1001,7 +998,7 @@ def _postgres_schema(schema: str) -> tuple[str, ...]:
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.information (
             id TEXT PRIMARY KEY,
-            content_hash TEXT NOT NULL UNIQUE,
+            content_hash TEXT NOT NULL,
             source TEXT NOT NULL,
             source_type TEXT NOT NULL,
             title TEXT NOT NULL,

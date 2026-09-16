@@ -8,7 +8,6 @@ from .domain import (
     MarketRegime,
 )
 
-
 REGIME_OVERRIDES: dict[MarketRegime, dict[str, float]] = {
     MarketRegime.BULL: {
         "market_fit": 0.08,

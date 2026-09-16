@@ -16,7 +16,7 @@ from .domain import (
     ThemeSnapshot,
     utc_now,
 )
-from .engine import DiscoveryEngine, MODEL_VERSION
+from .engine import MODEL_VERSION, DiscoveryEngine
 from .state_machine import CandidateStateMachine
 from .weights import dynamic_weights
 

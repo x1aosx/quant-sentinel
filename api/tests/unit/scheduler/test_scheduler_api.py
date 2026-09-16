@@ -30,6 +30,9 @@ def test_scheduler_api_is_available_when_enabled(tmp_path) -> None:
             "market.daily.sync",
             "market.symbol.sync",
             "market.watchlist.summary",
+            "intelligence.collect",
+            "intelligence.process",
+            "intelligence.brief.morning",
         }
 
         created = client.post(

@@ -491,6 +491,23 @@ export interface FeishuConfig {
   app_configured?: boolean;
 }
 
+export type IntelligenceSourceType = 'NEWS' | 'POLICY' | 'ANNOUNCEMENT';
+
+export interface IntelligenceFeedConfig {
+  id: string;
+  url: string;
+  source: string;
+  source_type: IntelligenceSourceType;
+  language: string;
+  enabled: boolean;
+}
+
+export interface IntelligenceConfig {
+  enabled: boolean;
+  lookback_hours: number;
+  feeds: IntelligenceFeedConfig[];
+}
+
 export interface MonitorTarget {
   symbol: string;
   timeframe: string;
@@ -517,6 +534,7 @@ export interface SystemConfig {
   analysis: AnalysisSettingsPayload;
   monitor_schedule: MonitorSchedule;
   feishu: FeishuConfig;
+  intelligence: IntelligenceConfig;
   monitor_watchlist: MonitorTarget[];
 }
 
@@ -703,4 +721,170 @@ export interface WorkerSummary {
   status?: string | null;
   running_tasks?: number;
   ttl_seconds?: number | null;
+}
+
+export type IntelligenceThemeCategory = 'hot' | 'emerging' | 'overcrowded';
+
+export interface ThemeReference {
+  id: string;
+  code?: string | null;
+  name: string;
+}
+
+export interface MarketEvent {
+  id: string;
+  event_type: string;
+  title: string;
+  summary: string;
+  country?: string | null;
+  importance: number;
+  sentiment: number;
+  confidence: number;
+  novelty: number;
+  impact_direction: string;
+  impact_horizon: string;
+  event_time: string;
+  first_publish_time: string;
+  last_update_time: string;
+  heat_score: number;
+  source_count: number;
+  status: string;
+  affected_themes?: string[];
+  affected_industries?: string[];
+  affected_stocks?: string[];
+}
+
+export interface ThemeSummary {
+  id: string;
+  code?: string | null;
+  name: string;
+  description?: string | null;
+  status?: string | null;
+  category?: IntelligenceThemeCategory | string | null;
+  current_heat_score: number;
+  forward_heat_score: number;
+  crowding_score: number;
+  sentiment_score?: number | null;
+  policy_score?: number | null;
+  capital_score?: number | null;
+  confidence?: number | null;
+  event_count?: number;
+  stock_count?: number;
+  updated_at?: string | null;
+}
+
+export interface IntelligenceBriefSection {
+  title: string;
+  content: string | string[];
+}
+
+export interface IntelligenceBrief {
+  id?: string;
+  brief_date?: string | null;
+  trade_date?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  content?: string | null;
+  generated_at?: string | null;
+  sections?: IntelligenceBriefSection[] | null;
+  market_environment?: string | null;
+  important_policies?: string[];
+  global_events?: string[];
+  current_hotspots?: string[];
+  potential_hotspots?: string[];
+  focus_stocks?: string[];
+  holding_impacts?: string[];
+  risk_events?: string[];
+}
+
+export interface IntelligenceOverview {
+  information_count: number;
+  event_count: number;
+  theme_count: number;
+  source_count: number;
+  generated_at: string;
+  hot_events: MarketEvent[];
+  themes: ThemeSummary[];
+  brief: IntelligenceBrief | null;
+}
+
+export interface IntelligenceRunRequest {
+  process_only?: boolean;
+}
+
+export interface IntelligenceRunResult {
+  collected: number;
+  deduplicated: number;
+  event_count: number;
+  theme_count: number;
+  generated_at: string;
+}
+
+export interface MarketEventListResponse {
+  items: MarketEvent[];
+  count: number;
+}
+
+export interface ThemeListResponse {
+  items: ThemeSummary[];
+  count: number;
+}
+
+export interface MorningBriefResponse {
+  brief: IntelligenceBrief | null;
+}
+
+export type DiscoveryCandidateState =
+  | 'DISCOVERED'
+  | 'WATCH'
+  | 'FOCUS'
+  | 'DEEP_ANALYSIS'
+  | 'SIGNAL_READY'
+  | 'COOLDOWN'
+  | 'REMOVE';
+
+export type DiscoveryScoreMap = Record<string, number | null | undefined>;
+
+export interface DiscoveryScoreContribution {
+  key?: string;
+  factor?: string;
+  name?: string;
+  label?: string;
+  score?: number | null;
+  weight?: number | null;
+  contribution?: number | null;
+}
+
+export interface DiscoveryCandidate {
+  stock_id: string;
+  stock_code?: string | null;
+  code?: string | null;
+  symbol?: string | null;
+  stock_name?: string | null;
+  name?: string | null;
+  discovery_score: number;
+  rank: number;
+  state: DiscoveryCandidateState | string;
+  market_regime?: string | null;
+  theme_ids?: string[];
+  theme_names?: string[];
+  themes?: Array<string | ThemeReference>;
+  scores?: DiscoveryScoreMap | null;
+  score_contributions?: DiscoveryScoreContribution[] | DiscoveryScoreMap | null;
+  forward_heat_score?: number | null;
+  forward_theme_score?: number | null;
+  crowding_score?: number | null;
+  risk_score?: number | null;
+  reasons?: string[];
+  risks?: string[];
+  confidence?: number | null;
+  model_version: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DiscoveryCandidateListResponse {
+  trade_date: string;
+  items: DiscoveryCandidate[];
+  count: number;
 }

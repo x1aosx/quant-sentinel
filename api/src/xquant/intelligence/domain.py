@@ -222,6 +222,8 @@ class RawInformation(Serializable):
         self.language = str(self.language or "zh-CN").strip()
         self.raw_payload = dict(self.raw_payload or {})
         self.content_hash = str(self.content_hash or "").strip()
+        if not self.content_hash and self.title and self.content:
+            self.content_hash = compute_content_hash(self.title, self.content)
         self.status = InformationStatus(self.status)
 
         self.publish_time = ensure_utc(self.publish_time, field_name="publish_time") or utc_now()

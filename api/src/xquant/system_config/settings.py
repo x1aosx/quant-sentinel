@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 DecisionStance = Literal["conservative", "balanced", "aggressive", "extreme_aggressive"]
 ReasoningEffort = Literal["low", "medium", "high", "max"]
 MonitorScheduleMode = Literal["always", "a_share", "custom"]
+InformationSourceType = Literal["NEWS", "POLICY", "ANNOUNCEMENT"]
 
 DEFAULT_SYSTEM_CONFIG_PATH = Path("data/system-settings.json")
 SYSTEM_CONFIG_ENV = "XQUANT_SYSTEM_CONFIG_FILE"
@@ -134,6 +135,29 @@ class FeishuSettings(BaseModel):
     confidence_threshold: int = Field(default=0, ge=0, le=100)
 
 
+class IntelligenceFeedSettings(BaseModel):
+    """One configurable RSS or Atom source used by the intelligence center."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = ""
+    url: str
+    source: str
+    source_type: InformationSourceType = "NEWS"
+    language: str = "zh-CN"
+    enabled: bool = True
+
+
+class IntelligenceSettings(BaseModel):
+    """Market intelligence collection configuration."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    lookback_hours: int = Field(default=24, ge=1, le=24 * 30)
+    feeds: list[IntelligenceFeedSettings] = Field(default_factory=list)
+
+
 class MonitorWatchlistItem(BaseModel):
     """One monitored product with an independent analysis configuration."""
 
@@ -174,6 +198,7 @@ class SystemSettings(BaseModel):
         default_factory=MonitorScheduleSettings
     )
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
+    intelligence: IntelligenceSettings = Field(default_factory=IntelligenceSettings)
     monitor_watchlist: list[MonitorWatchlistItem] = Field(default_factory=list)
 
 
@@ -264,6 +289,7 @@ def masked_payload(settings: SystemSettings) -> dict[str, Any]:
         "analysis": settings.analysis.model_dump(),
         "monitor_schedule": settings.monitor_schedule.model_dump(),
         "feishu": feishu,
+        "intelligence": settings.intelligence.model_dump(),
         "monitor_watchlist": [
             item.model_dump() for item in settings.monitor_watchlist
         ],
@@ -283,6 +309,15 @@ def _apply_environment_overrides(settings: SystemSettings) -> SystemSettings:
         value = os.environ.get(env_name)
         if value is not None:
             data["feishu"][field_name] = value.strip()
+    raw_feeds = os.environ.get("XQUANT_INTELLIGENCE_FEEDS")
+    if raw_feeds is not None:
+        try:
+            feeds = json.loads(raw_feeds)
+        except json.JSONDecodeError as exc:
+            raise ValueError("XQUANT_INTELLIGENCE_FEEDS 必须是 JSON 数组") from exc
+        if not isinstance(feeds, list):
+            raise ValueError("XQUANT_INTELLIGENCE_FEEDS 必须是 JSON 数组")
+        data["intelligence"]["feeds"] = feeds
     return SystemSettings.model_validate(data)
 
 

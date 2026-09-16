@@ -209,9 +209,9 @@ def normalize_information(
     )
     title = clean_html(information.title)
     content = clean_html(information.content)
-    content_hash = compute_content_hash(title, content)
+    content_hash = information.content_hash or compute_content_hash(title, content)
     return RawInformation(
-        id=information_id(content_hash),
+        id=information.id if information.content_hash else information_id(content_hash),
         source=information.source,
         source_type=information.source_type,
         url=canonicalize_url(information.url),

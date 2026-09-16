@@ -77,7 +77,7 @@ class Serializable:
         return _json_safe(asdict(self))  # type: ignore[arg-type,return-value]
 
     @classmethod
-    def from_dict(cls: type[T], payload: Mapping[str, Any]) -> T:
+    def from_dict(cls, payload: Mapping[str, Any]) -> Self:
         if not isinstance(payload, Mapping):
             raise TypeError(f"{cls.__name__} payload must be a mapping")
         return cls(**dict(payload))
