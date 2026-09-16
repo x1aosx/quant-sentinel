@@ -343,11 +343,14 @@ export function AIAnalysisPage() {
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
   const config = configQuery.data;
 
-  const persistWatchlist = useMutation({
+  const {
+    mutate: persistWatchlist,
+    isPending: persistWatchlistPending,
+  } = useMutation({
     mutationFn: (items: MonitorTarget[]) =>
       api.saveSystemConfig({ monitor_watchlist: items }),
-    onSuccess: (value) => {
-      watchlistSnapshot.current = JSON.stringify(value.monitor_watchlist);
+    onSuccess: (value, submitted) => {
+      watchlistSnapshot.current = JSON.stringify(submitted);
       queryClient.setQueryData(['system-config'], value);
     },
     onError: (reason: Error) => setError(`盯盘列表保存失败：${reason.message}`),
@@ -394,7 +397,7 @@ export function AIAnalysisPage() {
     if (!scheduleReady) return;
     const serialized = JSON.stringify(watchlist);
     if (serialized === watchlistSnapshot.current) return;
-    const timer = window.setTimeout(() => persistWatchlist.mutate(watchlist), 400);
+    const timer = window.setTimeout(() => persistWatchlist(watchlist), 400);
     return () => window.clearTimeout(timer);
   }, [persistWatchlist, scheduleReady, watchlist]);
 
@@ -508,13 +511,14 @@ export function AIAnalysisPage() {
 
   const saveMonitorConfig = useMutation({
     mutationFn: async () => {
+      const submittedWatchlist = watchlist;
       const value = await api.saveSystemConfig({
-        monitor_watchlist: watchlist,
+        monitor_watchlist: submittedWatchlist,
         monitor_schedule: scheduleDraft,
       });
       if (monitorQuery.data?.running) {
         await api.stopMonitor();
-        const targets = watchlist.filter((target) => target.enabled);
+        const targets = submittedWatchlist.filter((target) => target.enabled);
         if (targets.length) {
           await api.startMonitor({
             targets,
@@ -524,10 +528,10 @@ export function AIAnalysisPage() {
           });
         }
       }
-      return value;
+      return { value, submittedWatchlist };
     },
-    onSuccess: (value) => {
-      watchlistSnapshot.current = JSON.stringify(value.monitor_watchlist);
+    onSuccess: ({ value, submittedWatchlist }) => {
+      watchlistSnapshot.current = JSON.stringify(submittedWatchlist);
       queryClient.setQueryData(['system-config'], value);
       setNotice(
         monitorQuery.data?.running ? '盯盘配置已保存并重新启动' : '盯盘列表与调度配置已保存',
@@ -541,14 +545,15 @@ export function AIAnalysisPage() {
 
   const startMonitor = useMutation({
     mutationFn: async () => {
+      const submittedWatchlist = watchlist;
       const value = await api.saveSystemConfig({
-        monitor_watchlist: watchlist,
+        monitor_watchlist: submittedWatchlist,
         monitor_schedule: scheduleDraft,
       });
-      watchlistSnapshot.current = JSON.stringify(value.monitor_watchlist);
+      watchlistSnapshot.current = JSON.stringify(submittedWatchlist);
       queryClient.setQueryData(['system-config'], value);
       return api.startMonitor({
-        targets: watchlist.filter((target) => target.enabled),
+        targets: submittedWatchlist.filter((target) => target.enabled),
         interval_seconds: config?.analysis.monitor_interval_seconds ?? 60,
         auto_notify: config?.feishu.enabled ?? false,
         monitor_schedule: scheduleDraft,
@@ -1210,7 +1215,7 @@ export function AIAnalysisPage() {
                 <button
                   className="button"
                   onClick={() => saveMonitorConfig.mutate()}
-                  disabled={saveMonitorConfig.isPending || persistWatchlist.isPending}
+                  disabled={saveMonitorConfig.isPending || persistWatchlistPending}
                 >
                   <Save size={14} />
                   {saveMonitorConfig.isPending ? '保存中...' : '保存盯盘配置'}
