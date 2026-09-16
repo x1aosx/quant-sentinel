@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BrainCircuit,
@@ -24,6 +24,14 @@ import type {
   AnalysisInstrumentSummary,
   SrLevel,
 } from '../types';
+import {
+  DEFAULT_ANALYSIS_TIMEFRAME,
+  datasetForTimeframe,
+  findStockGroup,
+  formatTimeframeLabel,
+  groupDatasetsByStock,
+  preferredDataset,
+} from '../utils/datasetDisplay';
 
 const DIRECTION_LABELS: Record<string, string> = {
   bullish: '偏多',
@@ -51,7 +59,8 @@ const CHANGE_LABELS: Record<AnalysisChangeFilter, string> = {
 };
 
 interface AnalysisPayload {
-  dataset_id: string;
+  symbol: string;
+  timeframe: string;
   lookback?: number;
   n_zones?: number;
   direction: 'both' | 'long' | 'short';
@@ -135,7 +144,10 @@ function levelLabel(level: SrLevel | null | undefined): string {
 
 export function MarketAnalysisPage() {
   const queryClient = useQueryClient();
-  const [datasetId, setDatasetId] = useState('');
+  const [selectedSymbol, setSelectedSymbol] = useState('');
+  const [selectedTimeframe, setSelectedTimeframe] = useState(
+    DEFAULT_ANALYSIS_TIMEFRAME,
+  );
   const [lookback, setLookback] = useState('250');
   const [nZones, setNZones] = useState('6');
   const [direction, setDirection] = useState<'both' | 'long' | 'short'>('both');
@@ -144,7 +156,9 @@ export function MarketAnalysisPage() {
   const [stance, setStance] = useState<'conservative' | 'balanced' | 'aggressive'>('balanced');
   const [pageError, setPageError] = useState('');
   const [summaryKeyword, setSummaryKeyword] = useState('');
-  const [summaryTimeframe, setSummaryTimeframe] = useState('');
+  const [summaryTimeframe, setSummaryTimeframe] = useState(
+    DEFAULT_ANALYSIS_TIMEFRAME,
+  );
   const [summaryTrend, setSummaryTrend] = useState('');
   const [summaryChange, setSummaryChange] = useState<AnalysisChangeFilter | ''>('');
   const [summaryPage, setSummaryPage] = useState(1);
@@ -172,6 +186,9 @@ export function MarketAnalysisPage() {
     },
   });
   const datasets = datasetsQuery.data?.items ?? [];
+  const stockGroups = useMemo(() => groupDatasetsByStock(datasets), [datasets]);
+  const selectedGroup = findStockGroup(stockGroups, selectedSymbol);
+  const selectedDataset = datasetForTimeframe(selectedGroup, selectedTimeframe);
   const summaryData = summariesQuery.data;
   const summaryTotalPages = summaryData?.total_pages ?? 0;
   const summaryPageStart =
@@ -186,14 +203,21 @@ export function MarketAnalysisPage() {
     ? `${summaryData.from_cache ? '缓存结果' : '实时计算'} · ${fmtGeneratedAt(summaryData.generated_at)}`
     : '';
   const hasSummaryFilters = Boolean(
-    summaryKeyword.trim() || summaryTimeframe || summaryTrend || summaryChange,
+    summaryKeyword.trim() ||
+      summaryTimeframe !== DEFAULT_ANALYSIS_TIMEFRAME ||
+      summaryTrend ||
+      summaryChange,
   );
 
   useEffect(() => {
-    if (!datasetId && datasets.length) {
-      setDatasetId(datasets[0].id);
+    if (!stockGroups.length) return;
+    const group = findStockGroup(stockGroups, selectedSymbol) ?? stockGroups[0];
+    if (group.symbol !== selectedSymbol) setSelectedSymbol(group.symbol);
+    if (!datasetForTimeframe(group, selectedTimeframe)) {
+      const dataset = preferredDataset(group, selectedTimeframe);
+      if (dataset) setSelectedTimeframe(dataset.timeframe);
     }
-  }, [datasetId, datasets]);
+  }, [selectedSymbol, selectedTimeframe, stockGroups]);
 
   useEffect(() => {
     if (!summaryData) return;
@@ -205,8 +229,7 @@ export function MarketAnalysisPage() {
     mutationFn: (payload: AnalysisPayload) => api.analyzeSupportResistance(payload),
   });
 
-  const selectedDataset = datasets.find((item) => item.id === datasetId);
-  const activeDatasetId = analysis.variables?.dataset_id ?? datasetId;
+  const activeSymbol = analysis.variables?.symbol ?? selectedSymbol;
   const result = analysis.data;
   const riskReward = result?.summary.risk_reward;
   const context = result?.price_action.market_context;
@@ -216,13 +239,14 @@ export function MarketAnalysisPage() {
   const resultChangeClass =
     resultChange === null ? 'market-flat' : resultChange >= 0 ? 'market-up' : 'market-down';
 
-  const buildPayload = (targetDatasetId: string): AnalysisPayload => {
+  const buildPayload = (symbol: string, timeframe: string): AnalysisPayload => {
     const parsedLookback = parseOptionalInt(lookback, 'lookback');
     const parsedNZones = parseOptionalInt(nZones, '区间数量');
     const parsedRiskFraction = parseOptionalFloat(riskFraction, 'risk_fraction', 0.0001, 0.2);
     const parsedMinRr = parseOptionalFloat(minRr, 'min_rr', 0, 20);
     return {
-      dataset_id: targetDatasetId,
+      symbol,
+      timeframe,
       ...(parsedLookback !== undefined ? { lookback: parsedLookback } : {}),
       ...(parsedNZones !== undefined ? { n_zones: parsedNZones } : {}),
       direction,
@@ -232,15 +256,22 @@ export function MarketAnalysisPage() {
     };
   };
 
-  const runAnalysis = (targetDatasetId: string, scrollToDetail = false) => {
+  const runAnalysis = (
+    symbol: string,
+    timeframe: string,
+    scrollToDetail = false,
+  ) => {
     setPageError('');
-    if (!targetDatasetId) {
-      setPageError('请先选择数据集（可先到数据中心导入）。');
+    const group = findStockGroup(stockGroups, symbol);
+    const dataset = datasetForTimeframe(group, timeframe);
+    if (!dataset) {
+      setPageError('请选择已有行情的股票与周期（可先到数据中心导入）。');
       return;
     }
     try {
-      const payload = buildPayload(targetDatasetId);
-      setDatasetId(targetDatasetId);
+      const payload = buildPayload(symbol, timeframe);
+      setSelectedSymbol(symbol);
+      setSelectedTimeframe(timeframe);
       if (scrollToDetail) {
         window.requestAnimationFrame(() => {
           detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -254,7 +285,7 @@ export function MarketAnalysisPage() {
   };
 
   const handleSummarySelect = (item: AnalysisInstrumentSummary) => {
-    runAnalysis(item.dataset_id, true);
+    runAnalysis(item.symbol, item.timeframe, true);
   };
 
   return (
@@ -263,7 +294,7 @@ export function MarketAnalysisPage() {
         <div>
           <h1>支撑阻力与价格行为</h1>
           <div className="muted">
-            用一个分析入口查看全部品种概览，并结合关键价位、市场结构与行为决策查看完整信息。
+            用一个分析入口查看全部股票概览，并结合关键价位、市场结构与行为决策查看完整信息。
           </div>
         </div>
         <span className="badge badge-info">simulation only</span>
@@ -273,8 +304,8 @@ export function MarketAnalysisPage() {
         <div className="section-title">
           <span className="section-title-main">
             <Layers size={16} />
-            全部品种汇总
-            <span className="tag">{summaryData?.count ?? 0} 个品种</span>
+            全部股票汇总
+            <span className="tag">{summaryData?.count ?? 0} 只股票</span>
           </span>
           <span className="section-title-actions">
             {summaryCacheLabel ? (
@@ -306,7 +337,7 @@ export function MarketAnalysisPage() {
                   setSummaryPage(1);
                 }}
                 placeholder="搜索 symbol 或名称"
-                aria-label="搜索汇总品种"
+                aria-label="搜索汇总股票"
               />
             </span>
           </label>
@@ -319,7 +350,6 @@ export function MarketAnalysisPage() {
                 setSummaryPage(1);
               }}
             >
-              <option value="">全部周期</option>
               {summaryTimeframe &&
               !(summaryData?.facets.timeframes ?? []).includes(summaryTimeframe) ? (
                 <option value={summaryTimeframe}>{summaryTimeframe}</option>
@@ -379,7 +409,7 @@ export function MarketAnalysisPage() {
         ) : null}
 
         {summariesQuery.isLoading ? (
-          <div className="empty">正在加载全部品种汇总...</div>
+          <div className="empty">正在加载全部股票汇总...</div>
         ) : summariesQuery.isError ? (
           <div className="empty">
             <span>
@@ -393,7 +423,7 @@ export function MarketAnalysisPage() {
               <table className="table summary-table">
                 <thead>
                   <tr>
-                    <th>品种</th>
+                    <th>股票</th>
                     <th>中文名称</th>
                     <th>现价</th>
                     <th>涨跌%</th>
@@ -409,10 +439,10 @@ export function MarketAnalysisPage() {
                 </thead>
                 <tbody>
                   {summaryData.items.map((item) => {
-                    const selected = item.dataset_id === activeDatasetId;
+                    const selected = item.symbol === activeSymbol;
                     return (
                       <tr
-                        key={item.dataset_id}
+                        key={item.symbol}
                         className={`summary-row${selected ? ' selected' : ''}`}
                         tabIndex={0}
                         role="button"
@@ -428,7 +458,10 @@ export function MarketAnalysisPage() {
                         <td>
                           <div className="summary-symbol">{item.symbol}</div>
                           <div className="summary-subtext">
-                            {item.timeframe} · {item.bars_used ?? 0} 根
+                            {formatTimeframeLabel(item.timeframe)} · {item.bars_used ?? 0} 根
+                            {item.available_timeframes.length > 1
+                              ? ` · ${item.available_timeframes.length} 个周期`
+                              : ''}
                           </div>
                         </td>
                         <td>{item.title}</td>
@@ -536,7 +569,7 @@ export function MarketAnalysisPage() {
             </div>
             {summaryData.errors.length ? (
               <div className="empty" style={{ marginTop: 14 }}>
-                {summaryData.errors.length} 个品种未能生成汇总：
+                {summaryData.errors.length} 只股票未能生成汇总：
                 {summaryData.errors.map((item) => `${item.symbol} ${item.detail}`).join('；')}
               </div>
             ) : null}
@@ -546,7 +579,9 @@ export function MarketAnalysisPage() {
           </>
         ) : summaryData ? (
           <div className="empty">
-            {hasSummaryFilters ? '没有符合筛选条件的品种。' : '暂无数据集，请先到数据中心导入品种行情。'}
+            {hasSummaryFilters
+              ? '没有符合筛选条件的股票。'
+              : '暂无股票数据，请先到数据中心导入行情。'}
           </div>
         ) : (
           <div className="empty">暂无汇总结果。</div>
@@ -559,19 +594,45 @@ export function MarketAnalysisPage() {
             <span className="row">
               <BrainCircuit size={16} />
               综合分析
-              {selectedDataset ? <span className="tag">{selectedDataset.symbol}</span> : null}
+              {selectedDataset ? (
+                <span className="tag">
+                  {selectedDataset.symbol} · {formatTimeframeLabel(selectedDataset.timeframe)}
+                </span>
+              ) : null}
             </span>
             <span className="tag">点击汇总行可直接载入</span>
           </div>
           <div className="form-grid analysis-form-grid">
             <label className="field">
-              <span>数据集</span>
-              <select value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
-                {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-                {datasets.map((dataset) => (
-                  <option key={dataset.id} value={dataset.id}>
-                    {dataset.title || dataset.symbol} · {dataset.symbol} · {dataset.timeframe} ·{' '}
-                    {dataset.bar_count} 根
+              <span>股票</span>
+              <select
+                value={selectedGroup?.symbol ?? ''}
+                onChange={(event) => {
+                  const group = findStockGroup(stockGroups, event.target.value);
+                  const dataset = preferredDataset(group, selectedTimeframe);
+                  if (!dataset) return;
+                  setSelectedSymbol(group?.symbol ?? '');
+                  setSelectedTimeframe(dataset.timeframe);
+                }}
+              >
+                {stockGroups.length === 0 ? <option value="">暂无股票</option> : null}
+                {stockGroups.map((group) => (
+                  <option key={group.symbol} value={group.symbol}>
+                    {group.title || group.symbol} · {group.symbol}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>周期</span>
+              <select
+                value={selectedTimeframe}
+                onChange={(event) => setSelectedTimeframe(event.target.value)}
+                disabled={!selectedGroup}
+              >
+                {(selectedGroup?.datasets ?? []).map((dataset) => (
+                  <option key={dataset.id} value={dataset.timeframe}>
+                    {formatTimeframeLabel(dataset.timeframe)} · {dataset.bar_count} 根
                   </option>
                 ))}
               </select>
@@ -638,8 +699,8 @@ export function MarketAnalysisPage() {
           <div className="row" style={{ marginTop: 14 }}>
             <button
               className="button button-primary"
-              onClick={() => runAnalysis(datasetId)}
-              disabled={analysis.isPending || !datasetId}
+              onClick={() => runAnalysis(selectedSymbol, selectedTimeframe)}
+              disabled={analysis.isPending || !selectedDataset}
             >
               {analysis.isPending ? <Loader2 size={14} /> : <Play size={14} />}
               {analysis.isPending ? '分析中...' : '开始综合分析'}
@@ -648,7 +709,7 @@ export function MarketAnalysisPage() {
           </div>
           {datasetsQuery.isError ? (
             <div className="empty" style={{ marginTop: 14 }}>
-              数据集列表加载失败：{(datasetsQuery.error as Error).message}
+              股票数据列表加载失败：{(datasetsQuery.error as Error).message}
             </div>
           ) : null}
           {pageError ? (
@@ -668,7 +729,7 @@ export function MarketAnalysisPage() {
         <div className="empty">
           <span>
             <ScanSearch size={18} style={{ display: 'block', margin: '0 auto 8px' }} />
-            选择数据集并开始分析，或点击上方汇总表任意品种查看完整信息。
+            选择股票与周期并开始分析，或点击上方汇总表任意股票查看完整信息。
           </span>
         </div>
       ) : null}

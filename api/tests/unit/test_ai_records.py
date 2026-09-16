@@ -20,13 +20,14 @@ def _record(
     symbol: str = "DEMO.RESEARCH",
     action: str = "LONG",
     confidence: float = 72.0,
+    timeframe: str = "1d",
 ) -> dict[str, Any]:
     return {
         "id": record_id,
         "created_at": created_at,
         "status": "ok",
         "symbol": symbol,
-        "timeframe": "1d",
+        "timeframe": timeframe,
         "duration_ms": 123.45,
         "snapshot": {"dataset_id": "nested-dataset"},
         "stage1_diagnosis": {"confidence": 65.0},
@@ -112,6 +113,7 @@ def test_sqlite_analysis_records_keep_latest_per_symbol_timeframe(tmp_path: Path
         "ai-other",
         "2026-01-01T00:00:02+00:00",
         symbol="OTHER",
+        timeframe="15m",
     )
 
     first = database.save_analysis_record(first_record, dataset_id="dataset-a")
@@ -127,6 +129,12 @@ def test_sqlite_analysis_records_keep_latest_per_symbol_timeframe(tmp_path: Path
     dataset_a_items = database.list_analysis_records(dataset_id="dataset-a")
     assert [item["id"] for item in dataset_a_items] == [second["id"]]
     assert database.list_analysis_records(dataset_id="dataset-b")[0]["id"] == other["id"]
+    assert [item["id"] for item in database.list_analysis_records(symbol="DEMO.RESEARCH")] == [
+        second["id"]
+    ]
+    assert [
+        item["id"] for item in database.list_analysis_records(timeframe="15m")
+    ] == [other["id"]]
     assert len(database.list_analysis_records(limit=1)) == 1
     assert len(database.list_analysis_records(limit=50)) == 2
 

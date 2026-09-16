@@ -22,7 +22,12 @@ from xquant.ai.service import (
 from xquant.registry import Database
 from xquant.system_config import SystemConfigStore
 
-from ..dependencies import get_database, get_dataset_or_404, get_monitor, get_system_config
+from ..dependencies import (
+    get_database,
+    get_monitor,
+    get_stock_timeframe_dataset_or_404,
+    get_system_config,
+)
 
 router = APIRouter(tags=["ai"])
 
@@ -93,7 +98,12 @@ def analyze_ai(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = payload or {}
-    dataset = get_dataset_or_404(db, str(payload.get("dataset_id") or ""))
+    dataset = get_stock_timeframe_dataset_or_404(
+        db,
+        dataset_id=str(payload.get("dataset_id") or ""),
+        symbol=str(payload.get("symbol") or ""),
+        timeframe=str(payload.get("timeframe") or ""),
+    )
     try:
         ai_settings = normalize_ai_settings(_merged_payload(store, payload))
         snapshot = build_snapshot(
@@ -117,7 +127,12 @@ def analyze_ai_stream(
     payload: dict[str, Any] | None = None,
 ) -> StreamingResponse:
     payload = payload or {}
-    dataset = get_dataset_or_404(db, str(payload.get("dataset_id") or ""))
+    dataset = get_stock_timeframe_dataset_or_404(
+        db,
+        dataset_id=str(payload.get("dataset_id") or ""),
+        symbol=str(payload.get("symbol") or ""),
+        timeframe=str(payload.get("timeframe") or ""),
+    )
     try:
         ai_settings = normalize_ai_settings(_merged_payload(store, payload))
         snapshot = build_snapshot(
@@ -271,9 +286,18 @@ def run_monitor_once(
 def list_analysis_records(
     db: Annotated[Database, Depends(get_database)],
     dataset_id: str | None = None,
+    symbol: str | None = None,
+    timeframe: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict[str, Any]:
-    return {"items": db.list_analysis_records(dataset_id=dataset_id, limit=limit)}
+    return {
+        "items": db.list_analysis_records(
+            dataset_id=str(dataset_id or "").strip() or None,
+            symbol=str(symbol or "").strip().upper() or None,
+            timeframe=str(timeframe or "").strip().lower() or None,
+            limit=limit,
+        )
+    }
 
 
 @router.get("/ai/records/{record_id}")

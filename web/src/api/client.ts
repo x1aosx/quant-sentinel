@@ -145,7 +145,9 @@ export const api = {
       method: 'DELETE',
     }),
   analyzeSupportResistance: (payload: {
-    dataset_id: string;
+    dataset_id?: string;
+    symbol?: string;
+    timeframe?: string;
     lookback?: number;
     n_zones?: number;
     direction?: 'both' | 'long' | 'short';
@@ -192,11 +194,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  listAIRecords: (params: { dataset_id?: string; limit?: number } = {}) => {
+  listAIRecords: (
+    params: {
+      dataset_id?: string;
+      symbol?: string;
+      timeframe?: string;
+      limit?: number;
+    } = {},
+  ) => {
     const search = new URLSearchParams({
       limit: String(params.limit ?? 50),
     });
     if (params.dataset_id) search.set('dataset_id', params.dataset_id);
+    if (params.symbol) search.set('symbol', params.symbol);
+    if (params.timeframe) search.set('timeframe', params.timeframe);
     return apiRequest<AIRecordListResponse>(`/ai/records?${search.toString()}`).then(
       (payload) => ({
         items: payload.items.map((item) => ({

@@ -48,7 +48,16 @@ import {
   probabilityRows,
   responseText,
 } from '../utils/aiRecord';
-import { formatTimeframeLabel } from '../utils/datasetDisplay';
+import {
+  DEFAULT_ANALYSIS_TIMEFRAME,
+  DEFAULT_REALTIME_TIMEFRAME,
+  REALTIME_TIMEFRAMES,
+  datasetForTimeframe,
+  findStockGroup,
+  formatTimeframeLabel,
+  groupDatasetsByStock,
+  preferredDataset,
+} from '../utils/datasetDisplay';
 import {
   beginAIAnalysisRequest,
   finishAIAnalysisRequest,
@@ -131,13 +140,6 @@ function isRetryableMonitorSaveError(reason: unknown) {
   );
 }
 
-interface DatasetProductGroup {
-  key: string;
-  symbol: string;
-  title: string;
-  datasets: DatasetSummary[];
-}
-
 interface MonitorProductEntry {
   index: number;
   target: MonitorTarget;
@@ -153,31 +155,6 @@ interface MonitorProductGroup {
 
 function normalizeProductSymbol(value: string) {
   return value.trim().toUpperCase();
-}
-
-function groupDatasetsByProduct(datasets: DatasetSummary[]): DatasetProductGroup[] {
-  const groups: DatasetProductGroup[] = [];
-  const groupBySymbol = new Map<string, DatasetProductGroup>();
-
-  datasets.forEach((dataset) => {
-    const symbol = normalizeProductSymbol(dataset.symbol);
-    const key = symbol || `dataset:${dataset.id}`;
-    let group = groupBySymbol.get(key);
-    if (!group) {
-      group = {
-        key,
-        symbol: dataset.symbol,
-        title: dataset.title || '',
-        datasets: [],
-      };
-      groupBySymbol.set(key, group);
-      groups.push(group);
-    }
-    if (!group.title && dataset.title) group.title = dataset.title;
-    group.datasets.push(dataset);
-  });
-
-  return groups;
 }
 
 function groupWatchlistByProduct(
@@ -305,7 +282,11 @@ export function AIAnalysisPage() {
   >('yfinance');
   const [importExchange, setImportExchange] = useState('');
   const [watchlist, setWatchlist] = useState<MonitorTarget[]>([]);
-  const [watchlistDatasetId, setWatchlistDatasetId] = useState('');
+  const [watchlistSymbol, setWatchlistSymbol] = useState('');
+  const [watchlistTimeframe, setWatchlistTimeframe] = useState(
+    DEFAULT_REALTIME_TIMEFRAME,
+  );
+  const [historyTimeframe, setHistoryTimeframe] = useState('');
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<MonitorSchedule>(
     DEFAULT_MONITOR_SCHEDULE,
@@ -343,12 +324,31 @@ export function AIAnalysisPage() {
     queryFn: api.getMonitorStatus,
     refetchInterval: 4000,
   });
-  const historyQuery = useQuery({
-    queryKey: ['ai-records', datasetId],
-    queryFn: () => api.listAIRecords({ dataset_id: datasetId, limit: 50 }),
-    enabled: Boolean(datasetId),
-  });
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
+  const stockGroups = useMemo(() => groupDatasetsByStock(datasets), [datasets]);
+  const selectedDataset = datasets.find((dataset) => dataset.id === datasetId);
+  const selectedSymbol = selectedDataset?.symbol ?? '';
+  const selectedTimeframe = selectedDataset?.timeframe ?? '';
+  const selectedGroup = findStockGroup(stockGroups, selectedSymbol);
+  const watchlistGroup = findStockGroup(stockGroups, watchlistSymbol);
+  const watchlistTimeframes = (watchlistGroup?.datasets ?? []).filter((dataset) =>
+    REALTIME_TIMEFRAMES.includes(
+      dataset.timeframe as (typeof REALTIME_TIMEFRAMES)[number],
+    ),
+  );
+  const watchlistDataset = watchlistTimeframes.find(
+    (dataset) => dataset.timeframe === watchlistTimeframe,
+  );
+  const historyQuery = useQuery({
+    queryKey: ['ai-records', selectedSymbol, historyTimeframe],
+    queryFn: () =>
+      api.listAIRecords({
+        symbol: selectedSymbol,
+        timeframe: historyTimeframe || undefined,
+        limit: 50,
+      }),
+    enabled: Boolean(selectedSymbol),
+  });
   const config = configQuery.data;
 
   const {
@@ -373,16 +373,43 @@ export function AIAnalysisPage() {
   useEffect(() => {
     if (!datasets.length) return;
     if (!datasetId || !datasets.some((dataset) => dataset.id === datasetId)) {
-      setDatasetId(datasets[0].id);
+      const preferred =
+        datasets.find((dataset) => dataset.timeframe === DEFAULT_ANALYSIS_TIMEFRAME) ||
+        preferredDataset(stockGroups[0]) ||
+        datasets[0];
+      setDatasetId(preferred.id);
     }
-  }, [datasetId, datasets]);
+  }, [datasetId, datasets, stockGroups]);
 
   useEffect(() => {
-    if (!datasets.length) return;
-    if (!watchlistDatasetId || !datasets.some((dataset) => dataset.id === watchlistDatasetId)) {
-      setWatchlistDatasetId(datasets[0].id);
+    if (!stockGroups.length) return;
+    const group = findStockGroup(stockGroups, watchlistSymbol) ?? stockGroups[0];
+    if (group.symbol !== watchlistSymbol) setWatchlistSymbol(group.symbol);
+    const selected = group.datasets.find(
+      (dataset) =>
+        dataset.timeframe === watchlistTimeframe &&
+        REALTIME_TIMEFRAMES.includes(
+          dataset.timeframe as (typeof REALTIME_TIMEFRAMES)[number],
+        ),
+    );
+    if (!selected) {
+      const fallback =
+        datasetForTimeframe(group, DEFAULT_REALTIME_TIMEFRAME) ??
+        group.datasets.find((dataset) =>
+          REALTIME_TIMEFRAMES.includes(
+            dataset.timeframe as (typeof REALTIME_TIMEFRAMES)[number],
+          ),
+        );
+      setWatchlistTimeframe(fallback?.timeframe ?? '');
     }
-  }, [datasets, watchlistDatasetId]);
+  }, [stockGroups, watchlistSymbol, watchlistTimeframe]);
+
+  useEffect(() => {
+    if (!selectedGroup || !historyTimeframe) return;
+    if (!datasetForTimeframe(selectedGroup, historyTimeframe)) {
+      setHistoryTimeframe('');
+    }
+  }, [historyTimeframe, selectedGroup]);
 
   useEffect(() => {
     if (!config || watchlistHydrated.current) return;
@@ -638,7 +665,6 @@ export function AIAnalysisPage() {
   const supports = (snapshot?.support_resistance?.supports_only ?? []) as SrLevel[];
   const resistances = (snapshot?.support_resistance?.resistances ?? []) as SrLevel[];
   const monitorItems = monitorQuery.data?.items ?? [];
-  const datasetProducts = useMemo(() => groupDatasetsByProduct(datasets), [datasets]);
   const monitorProducts = useMemo(
     () => groupWatchlistByProduct(watchlist, datasets),
     [datasets, watchlist],
@@ -678,15 +704,26 @@ export function AIAnalysisPage() {
     );
   };
 
-  const addDatasetToWatchlist = () => {
-    const dataset = datasets.find((item) => item.id === watchlistDatasetId);
-    if (!dataset) return;
-    if (watchlist.some((target) => target.dataset_id === dataset.id)) {
-      setNotice(`数据集已在盯盘列表中：${dataset.symbol} ${dataset.timeframe}`);
+  const addWatchlistPeriod = () => {
+    if (!watchlistDataset) return;
+    if (
+      watchlist.some(
+        (target) =>
+          target.symbol.trim().toUpperCase() ===
+            watchlistDataset.symbol.trim().toUpperCase() &&
+          target.timeframe.trim().toLowerCase() ===
+            watchlistDataset.timeframe.trim().toLowerCase(),
+      )
+    ) {
+      setNotice(
+        `盯盘中已包含该周期：${watchlistDataset.symbol} ${watchlistDataset.timeframe}`,
+      );
       return;
     }
-    setWatchlist((current) => [...current, targetFromDataset(dataset)]);
-    setNotice(`已加入盯盘：${dataset.title || dataset.symbol} ${dataset.timeframe}`);
+    setWatchlist((current) => [...current, targetFromDataset(watchlistDataset)]);
+    setNotice(
+      `已加入盯盘：${watchlistDataset.title || watchlistDataset.symbol} ${watchlistDataset.timeframe}`,
+    );
   };
 
   const addCustomTarget = () => {
@@ -717,6 +754,7 @@ export function AIAnalysisPage() {
     try {
       const loaded = await api.getAIRecord(item.id);
       setRecord(loaded);
+      if (item.dataset_id) setDatasetId(item.dataset_id);
       setMode('single');
       setView('decision');
       setNotice(`已载入历史分析：${item.symbol} ${item.timeframe}`);
@@ -740,6 +778,18 @@ export function AIAnalysisPage() {
     }
   };
 
+  const selectAnalysisStock = (symbol: string) => {
+    const group = findStockGroup(stockGroups, symbol);
+    const dataset =
+      datasetForTimeframe(group, selectedTimeframe) || preferredDataset(group);
+    if (dataset) setDatasetId(dataset.id);
+  };
+
+  const selectAnalysisTimeframe = (timeframe: string) => {
+    const dataset = datasetForTimeframe(selectedGroup, timeframe);
+    if (dataset) setDatasetId(dataset.id);
+  };
+
   return (
     <div className="stack">
       <div className="page-header">
@@ -750,7 +800,9 @@ export function AIAnalysisPage() {
           </div>
         </div>
         <div className="row">
-          <span className="tag">{datasets.length} 个数据集</span>
+          <span className="tag">
+            {stockGroups.length} 只股票 / {datasets.length} 个周期
+          </span>
           <span className={config?.provider.api_key_configured ? 'badge badge-ok' : 'badge badge-warn'}>
             {config?.provider.api_key_configured ? '模型已配置' : '本地研究模式'}
           </span>
@@ -768,7 +820,7 @@ export function AIAnalysisPage() {
           <Sparkles size={18} />
           <span>
             <strong>单次分析</strong>
-            <small>选择数据集执行完整两阶段分析</small>
+            <small>选择股票与周期执行完整两阶段分析</small>
           </span>
         </button>
         <button
@@ -848,7 +900,7 @@ export function AIAnalysisPage() {
                 <Download size={14} />
                 {importRemote.isPending ? '下载中...' : '下载行情'}
               </button>
-              <span className="muted">导入 500 根公开行情并更新数据集。</span>
+              <span className="muted">导入 500 根公开行情并更新该股票周期数据。</span>
             </div>
           </div>
 
@@ -858,17 +910,36 @@ export function AIAnalysisPage() {
               分析执行
               <span className="tag">两阶段</span>
             </div>
-            <div className="field">
-              <label htmlFor="ai-dataset">分析数据集</label>
-              <select id="ai-dataset" value={datasetId} onChange={(event) => setDatasetId(event.target.value)}>
-                {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-                {datasets.map((dataset) => (
-                  <option key={dataset.id} value={dataset.id}>
-                    {dataset.title || dataset.symbol} · {dataset.symbol} · {dataset.timeframe} ·{' '}
-                    {dataset.bar_count} 根
-                  </option>
-                ))}
-              </select>
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="ai-stock">股票</label>
+                <select
+                  id="ai-stock"
+                  value={selectedGroup?.symbol ?? ''}
+                  onChange={(event) => selectAnalysisStock(event.target.value)}
+                >
+                  {stockGroups.length === 0 ? <option value="">暂无股票</option> : null}
+                  {stockGroups.map((group) => (
+                    <option key={group.symbol} value={group.symbol}>
+                      {group.title || group.symbol} · {group.symbol}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="ai-analysis-timeframe">分析周期</label>
+                <select
+                  id="ai-analysis-timeframe"
+                  value={selectedTimeframe}
+                  onChange={(event) => selectAnalysisTimeframe(event.target.value)}
+                >
+                  {(selectedGroup?.datasets ?? []).map((dataset) => (
+                    <option key={dataset.id} value={dataset.timeframe}>
+                      {formatTimeframeLabel(dataset.timeframe)} · {dataset.bar_count} 根
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="row" style={{ marginTop: 14 }}>
               <button
@@ -901,11 +972,23 @@ export function AIAnalysisPage() {
                 ) : null}
               </div>
               <div className="section-title-actions">
-                <span className="muted">{datasetId ? '按当前数据集筛选' : '选择数据集后显示记录'}</span>
+                <select
+                  value={historyTimeframe}
+                  onChange={(event) => setHistoryTimeframe(event.target.value)}
+                  disabled={!selectedGroup}
+                  aria-label="按周期筛选历史分析结果"
+                >
+                  <option value="">全部周期</option>
+                  {(selectedGroup?.datasets ?? []).map((dataset) => (
+                    <option key={dataset.id} value={dataset.timeframe}>
+                      {formatTimeframeLabel(dataset.timeframe)}
+                    </option>
+                  ))}
+                </select>
                 <button
                   className="button"
                   onClick={() => void historyQuery.refetch()}
-                  disabled={!datasetId || historyQuery.isFetching}
+                  disabled={!selectedSymbol || historyQuery.isFetching}
                 >
                   <RefreshCcw size={14} />
                   {historyQuery.isFetching ? '刷新中...' : '刷新'}
@@ -947,7 +1030,7 @@ export function AIAnalysisPage() {
                   ) : (historyQuery.data?.items.length ?? 0) === 0 ? (
                     <tr>
                       <td colSpan={8}>
-                        <div className="empty">当前数据集还没有已保存的分析记录。</div>
+                        <div className="empty">当前股票筛选下还没有已保存的分析记录。</div>
                       </td>
                     </tr>
                   ) : (
@@ -1074,40 +1157,47 @@ export function AIAnalysisPage() {
           <div className="monitor-config-grid">
             <section className="monitor-config-block">
               <div className="section-title compact-title">
-                <span>监控数据集</span>
+                <span>监控股票</span>
                 <span className="muted">
-                  {monitorProducts.length} 个产品 / {watchlist.length} 个周期
+                  {monitorProducts.length} 只股票 / {watchlist.length} 个周期
                 </span>
               </div>
               <div className="monitor-add-row">
                 <select
-                  aria-label="选择要加入盯盘的数据集"
-                  value={watchlistDatasetId}
-                  onChange={(event) => setWatchlistDatasetId(event.target.value)}
+                  aria-label="选择要加入盯盘的股票"
+                  value={watchlistGroup?.symbol ?? ''}
+                  onChange={(event) => setWatchlistSymbol(event.target.value)}
                 >
-                  {datasets.length === 0 ? <option value="">暂无数据集</option> : null}
-                  {datasetProducts.map((product) => (
-                    <optgroup
-                      key={product.key}
-                      label={`${product.title || product.symbol} · ${product.symbol}`}
-                    >
-                      {product.datasets.map((dataset) => (
-                        <option key={dataset.id} value={dataset.id}>
-                          {formatTimeframeLabel(dataset.timeframe)} · {dataset.timeframe} ·{' '}
-                          {dataset.bar_count} 根
-                        </option>
-                      ))}
-                    </optgroup>
+                  {stockGroups.length === 0 ? <option value="">暂无股票</option> : null}
+                  {stockGroups.map((group) => (
+                    <option key={group.symbol} value={group.symbol}>
+                      {group.title || group.symbol} · {group.symbol}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="选择要加入盯盘的周期"
+                  value={watchlistTimeframe}
+                  onChange={(event) => setWatchlistTimeframe(event.target.value)}
+                  disabled={!watchlistTimeframes.length}
+                >
+                  {!watchlistTimeframes.length ? (
+                    <option value="">暂无实时周期</option>
+                  ) : null}
+                  {watchlistTimeframes.map((dataset) => (
+                    <option key={dataset.id} value={dataset.timeframe}>
+                      {formatTimeframeLabel(dataset.timeframe)} · {dataset.bar_count} 根
+                    </option>
                   ))}
                 </select>
                 <div className="row">
                   <button
                     className="button"
-                    onClick={addDatasetToWatchlist}
-                    disabled={!watchlistDatasetId}
+                    onClick={addWatchlistPeriod}
+                    disabled={!watchlistDataset}
                   >
                     <Plus size={14} />
-                    加入数据集
+                    加入周期
                   </button>
                   <button className="button" onClick={addCustomTarget}>
                     <Plus size={14} />
@@ -1246,7 +1336,7 @@ export function AIAnalysisPage() {
 
           <div className="monitor-status-list">
             {watchlist.length === 0 ? (
-              <div className="empty">从上方数据集选择器加入监控项后开始盯盘。</div>
+              <div className="empty">从上方选择股票与实时周期后开始盯盘。</div>
             ) : (
               monitorProducts.map((product) => {
                 const statuses = product.entries.map((entry) =>
@@ -1402,11 +1492,11 @@ export function AIAnalysisPage() {
                               <div className="monitor-status-detail">
                                 <div className="monitor-detail-grid">
                                   <div className="meta-item">
-                                    <div className="label">数据集</div>
+                                    <div className="label">股票与周期</div>
                                     <div className="value">
                                       {dataset
-                                        ? `${dataset.title || dataset.symbol} · ${dataset.id}`
-                                        : '旧配置项（未绑定数据集）'}
+                                        ? `${dataset.title || dataset.symbol} · ${formatTimeframeLabel(dataset.timeframe)}`
+                                        : `${target.symbol} · ${formatTimeframeLabel(target.timeframe)}`}
                                     </div>
                                   </div>
                                   <div className="meta-item">
@@ -1587,7 +1677,7 @@ export function AIAnalysisPage() {
         </div>
 
         {!record && view !== 'live' ? (
-          <div className="empty">选择数据集执行分析，或从盯盘列表打开最近结果。</div>
+          <div className="empty">选择股票与周期执行分析，或从盯盘列表打开最近结果。</div>
         ) : null}
 
         {view === 'live' ? (

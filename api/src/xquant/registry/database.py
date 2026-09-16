@@ -540,6 +540,8 @@ class Database:
     def list_analysis_records(
         self,
         dataset_id: str | None = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         normalized_limit = _normalize_record_limit(limit)
@@ -557,6 +559,24 @@ class Database:
                 LIMIT :limit
                 """,
                 {"dataset_id": dataset_id, "limit": normalized_limit},
+            )
+        elif symbol is not None or timeframe is not None:
+            clauses: list[str] = []
+            params: dict[str, Any] = {"limit": normalized_limit}
+            if symbol is not None:
+                clauses.append("symbol = :symbol")
+                params["symbol"] = symbol
+            if timeframe is not None:
+                clauses.append("timeframe = :timeframe")
+                params["timeframe"] = timeframe
+            rows = self.postgres.query(
+                columns
+                + f"""
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC, id DESC
+                LIMIT :limit
+                """,
+                params,
             )
         else:
             rows = self.postgres.query(

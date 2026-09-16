@@ -11,13 +11,15 @@ from xquant.analysis.price_action import analyze_price_action
 from xquant.analysis.sr_levels import detect_support_resistance
 from xquant.registry import Database
 
-from ..dependencies import get_database, get_dataset_or_404
+from ..dependencies import get_database, get_stock_timeframe_dataset_or_404
 from ..validation import int_in, number_in
 
 router = APIRouter(tags=["analysis"])
 
-_INSTRUMENTS_CACHE_KEY = "analysis:instruments:snapshot:v1"
+_INSTRUMENTS_CACHE_KEY_PREFIX = "analysis:instruments:snapshot:v2"
 _INSTRUMENTS_CACHE_TTL_SECONDS = 300
+_DEFAULT_ANALYSIS_TIMEFRAME = "1d"
+_TIMEFRAME_ORDER = ("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")
 _FINGERPRINT_FIELDS = (
     "id",
     "symbol",
@@ -101,6 +103,14 @@ def _summary_item(dataset: dict[str, Any], bars: list[dict[str, Any]]) -> dict[s
     }
 
 
+def _timeframe_sort_key(timeframe: str) -> tuple[int, str]:
+    normalized = str(timeframe or "").strip().lower()
+    try:
+        return (_TIMEFRAME_ORDER.index(normalized), normalized)
+    except ValueError:
+        return (len(_TIMEFRAME_ORDER), normalized)
+
+
 def _fingerprint_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -133,19 +143,49 @@ def _dataset_fingerprint(datasets: list[dict[str, Any]]) -> str:
 def _build_snapshot(
     db: Database,
     datasets: list[dict[str, Any]],
+    *,
+    timeframe: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    latest_by_symbol: dict[str, dict[str, Any]] = {}
+    datasets_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for dataset in datasets:
         symbol = str(dataset.get("symbol") or "").strip().upper()
-        if symbol and symbol not in latest_by_symbol:
-            latest_by_symbol[symbol] = dataset
+        if not symbol:
+            continue
+        datasets_by_symbol.setdefault(symbol, []).append(dataset)
 
     items: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
-    for dataset in latest_by_symbol.values():
+    for symbol, symbol_datasets in datasets_by_symbol.items():
+        available_timeframes = sorted(
+            {
+                str(dataset.get("timeframe") or "").strip().lower()
+                for dataset in symbol_datasets
+                if str(dataset.get("timeframe") or "").strip()
+            },
+            key=_timeframe_sort_key,
+        )
+        dataset = next(
+            (
+                item
+                for item in symbol_datasets
+                if str(item.get("timeframe") or "").strip().lower() == timeframe
+            ),
+            None,
+        )
+        if dataset is None:
+            errors.append(
+                {
+                    "dataset_id": "",
+                    "symbol": symbol,
+                    "detail": f"缺少 {timeframe} 周期数据",
+                }
+            )
+            continue
         try:
             record = db.get_dataset(str(dataset["id"]))
-            items.append(_summary_item(record, list(record["bars"])))
+            item = _summary_item(record, list(record["bars"]))
+            item["available_timeframes"] = available_timeframes
+            items.append(item)
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(
                 {
@@ -161,11 +201,13 @@ def _snapshot_for_request(
     db: Database,
     datasets: list[dict[str, Any]],
     *,
+    timeframe: str,
     refresh: bool,
 ) -> tuple[dict[str, Any], bool]:
     fingerprint = _dataset_fingerprint(datasets)
+    cache_key = f"{_INSTRUMENTS_CACHE_KEY_PREFIX}:{timeframe}"
     if not refresh:
-        cached = db.get_cached_json(_INSTRUMENTS_CACHE_KEY)
+        cached = db.get_cached_json(cache_key)
         if (
             isinstance(cached, dict)
             and cached.get("fingerprint") == fingerprint
@@ -175,7 +217,7 @@ def _snapshot_for_request(
         ):
             return cached, True
 
-    items, errors = _build_snapshot(db, datasets)
+    items, errors = _build_snapshot(db, datasets, timeframe=timeframe)
     snapshot = {
         "fingerprint": fingerprint,
         "items": items,
@@ -183,7 +225,7 @@ def _snapshot_for_request(
         "generated_at": datetime.now(UTC).isoformat(),
     }
     db.set_cached_json(
-        _INSTRUMENTS_CACHE_KEY,
+        cache_key,
         snapshot,
         _INSTRUMENTS_CACHE_TTL_SECONDS,
     )
@@ -228,13 +270,17 @@ def _filter_items(
     return filtered
 
 
-def _facets(items: list[dict[str, Any]]) -> dict[str, list[str]]:
+def _facets(
+    items: list[dict[str, Any]],
+    datasets: list[dict[str, Any]],
+) -> dict[str, list[str]]:
     timeframes = sorted(
         {
-            str(item["timeframe"])
-            for item in items
-            if item.get("timeframe") not in (None, "")
-        }
+            str(dataset.get("timeframe") or "").strip().lower()
+            for dataset in datasets
+            if str(dataset.get("timeframe") or "").strip()
+        },
+        key=_timeframe_sort_key,
     )
     trends = sorted(
         {
@@ -251,7 +297,7 @@ def _facets(items: list[dict[str, Any]]) -> dict[str, list[str]]:
 def instrument_summaries(
     db: Annotated[Database, Depends(get_database)],
     keyword: Annotated[str | None, Query()] = None,
-    timeframe: Annotated[str | None, Query()] = None,
+    timeframe: Annotated[str, Query()] = _DEFAULT_ANALYSIS_TIMEFRAME,
     trend: Annotated[str | None, Query()] = None,
     change: Annotated[Literal["up", "down", "flat"] | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
@@ -259,12 +305,18 @@ def instrument_summaries(
     refresh: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     datasets = db.list_datasets()
-    snapshot, from_cache = _snapshot_for_request(db, datasets, refresh=refresh)
+    normalized_timeframe = str(timeframe or _DEFAULT_ANALYSIS_TIMEFRAME).strip().lower()
+    snapshot, from_cache = _snapshot_for_request(
+        db,
+        datasets,
+        timeframe=normalized_timeframe,
+        refresh=refresh,
+    )
     all_items = list(snapshot["items"])
     filtered_items = _filter_items(
         all_items,
         keyword=keyword,
-        timeframe=timeframe,
+        timeframe=normalized_timeframe,
         trend=trend,
         change=change,
     )
@@ -279,7 +331,8 @@ def instrument_summaries(
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size,
-        "facets": _facets(all_items),
+        "timeframe": normalized_timeframe,
+        "facets": _facets(all_items, datasets),
         "from_cache": from_cache,
         "generated_at": snapshot["generated_at"],
     }
@@ -291,7 +344,12 @@ def support_resistance(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = payload or {}
-    dataset = get_dataset_or_404(db, str(payload.get("dataset_id") or ""))
+    dataset = get_stock_timeframe_dataset_or_404(
+        db,
+        dataset_id=str(payload.get("dataset_id") or ""),
+        symbol=str(payload.get("symbol") or ""),
+        timeframe=str(payload.get("timeframe") or ""),
+    )
     try:
         lookback = int_in(payload.get("lookback"), 60, 1000, 250)
         result = detect_support_resistance(

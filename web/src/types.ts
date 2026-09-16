@@ -237,6 +237,7 @@ export interface AnalysisInstrumentSummary {
   symbol: string;
   title: string;
   timeframe: string;
+  available_timeframes: string[];
   current_price: number | null;
   change_pct: number | null;
   touch_probability: number | null;
@@ -280,6 +281,7 @@ export interface AnalysisInstrumentSummariesResponse {
   page: number;
   page_size: number;
   total_pages: number;
+  timeframe: string;
   facets: {
     timeframes: string[];
     trends: string[];

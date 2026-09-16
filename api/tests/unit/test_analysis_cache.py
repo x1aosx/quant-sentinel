@@ -85,12 +85,13 @@ def test_instrument_summaries_cache_filter_pagination_and_invalidation(
                 client, symbol="AAA", title="Alpha", timeframe="1d"
             ),
             "BBB": _create_dataset(
-                client, symbol="BBB", title="Beta", timeframe="4h"
+                client, symbol="BBB", title="Beta", timeframe="1d"
             ),
             "CCC": _create_dataset(
                 client, symbol="CCC", title="Gamma", timeframe="1d"
             ),
         }
+        _create_dataset(client, symbol="BBB", title="Beta", timeframe="4h")
 
         first = client.get("/api/v1/analysis/instruments", params={"page_size": 2})
         assert first.status_code == 200, first.text
@@ -102,7 +103,7 @@ def test_instrument_summaries_cache_filter_pagination_and_invalidation(
         assert first_payload["page_size"] == 2
         assert first_payload["total_pages"] == 2
         assert first_payload["facets"] == {
-            "timeframes": ["1d", "4h"],
+            "timeframes": ["4h", "1d"],
             "trends": ["上涨", "下跌", "震荡"],
         }
         assert sorted(summary_calls) == ["AAA", "BBB", "CCC"]

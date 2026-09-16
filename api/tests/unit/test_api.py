@@ -125,6 +125,44 @@ def test_dataset_validation_rejects_short_and_bad_bars(tmp_path) -> None:
         assert bad.status_code == 400
 
 
+def test_analysis_accepts_stock_timeframe_and_defaults_to_daily(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        daily = client.post("/api/v1/datasets/sample", json={"timeframe": "1d"}).json()
+        intraday = client.post(
+            "/api/v1/datasets/sample",
+            json={"timeframe": "15m"},
+        ).json()
+
+        default_summary = client.get("/api/v1/analysis/instruments")
+        assert default_summary.status_code == 200, default_summary.text
+        default_payload = default_summary.json()
+        assert default_payload["timeframe"] == "1d"
+        assert default_payload["count"] == 1
+        assert default_payload["items"][0]["dataset_id"] == daily["id"]
+        assert default_payload["items"][0]["available_timeframes"] == ["15m", "1d"]
+
+        intraday_summary = client.get(
+            "/api/v1/analysis/instruments",
+            params={"timeframe": "15m"},
+        )
+        assert intraday_summary.status_code == 200, intraday_summary.text
+        intraday_payload = intraday_summary.json()
+        assert intraday_payload["count"] == 1
+        assert intraday_payload["items"][0]["dataset_id"] == intraday["id"]
+
+        response = client.post(
+            "/api/v1/analysis/support-resistance",
+            json={
+                "symbol": "DEMO.RESEARCH",
+                "timeframe": "15m",
+                "lookback": 120,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["symbol"] == "DEMO.RESEARCH"
+        assert response.json()["timeframe"] == "15m"
+
+
 def test_delete_dataset_removes_it_and_returns_404_on_repeat(tmp_path) -> None:
     with TestClient(create_app(tmp_path / "xquant.db")) as client:
         created = client.post("/api/v1/datasets/sample", json={"timeframe": "1d"}).json()

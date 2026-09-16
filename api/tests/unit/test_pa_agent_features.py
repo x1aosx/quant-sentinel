@@ -129,6 +129,34 @@ def test_batch_and_monitor_endpoints_use_local_research_mode(tmp_path) -> None:
         assert stopped.json()["running"] is False
 
 
+def test_ai_analysis_accepts_stock_timeframe_and_filters_history(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "quant.db")) as client:
+        _create_sample_dataset(client)
+        intraday = client.post(
+            "/api/v1/datasets/sample",
+            json={"timeframe": "15m"},
+        )
+        assert intraday.status_code == 200, intraday.text
+
+        response = client.post(
+            "/api/v1/ai/analyze",
+            json={"symbol": "DEMO.RESEARCH", "timeframe": "15m"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["symbol"] == "DEMO.RESEARCH"
+        assert response.json()["timeframe"] == "15m"
+
+        history = client.get(
+            "/api/v1/ai/records",
+            params={"symbol": "DEMO.RESEARCH", "timeframe": "15m"},
+        )
+        assert history.status_code == 200, history.text
+        items = history.json()["items"]
+        assert len(items) == 1
+        assert items[0]["dataset_id"] == intraday.json()["id"]
+        assert items[0]["timeframe"] == "15m"
+
+
 def test_streaming_endpoint_returns_final_record(tmp_path) -> None:
     with TestClient(create_app(tmp_path / "quant.db")) as client:
         dataset_id = _create_sample_dataset(client)

@@ -477,6 +477,8 @@ class Database:
     def list_analysis_records(
         self,
         dataset_id: str | None = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         normalized_limit = _normalize_record_limit(limit)
@@ -492,6 +494,27 @@ class Database:
                 LIMIT ?
                 """,
                 (dataset_id, normalized_limit),
+            ).fetchall()
+        elif symbol is not None or timeframe is not None:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if symbol is not None:
+                clauses.append("symbol = ?")
+                params.append(symbol)
+            if timeframe is not None:
+                clauses.append("timeframe = ?")
+                params.append(timeframe)
+            params.append(normalized_limit)
+            rows = conn.execute(
+                f"""
+                SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
+                       duration_ms, decision_action, confidence
+                FROM ai_analysis_records
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                params,
             ).fetchall()
         else:
             rows = conn.execute(
