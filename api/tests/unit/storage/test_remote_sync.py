@@ -385,6 +385,77 @@ def test_dataset_read_sorts_legacy_cached_sessions() -> None:
     ]
 
 
+def test_dataset_read_deduplicates_legacy_cached_sessions() -> None:
+    postgres = FakePostgres()
+    influx = FakeInflux()
+    redis = FakeRedis()
+    database = Database(
+        settings=StorageSettings(storage_backend="postgres", auto_migrate=False),
+        postgres=postgres,
+        redis_store=redis,  # type: ignore[arg-type]
+        influx=influx,
+    )
+    bars = [
+        {
+            "session_id": session_id,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1_000.0,
+        }
+        for session_id in ("202609111000", "202609111030", "202609111000")
+    ]
+    created = database.insert_dataset(
+        {
+            "symbol": "600519",
+            "title": "贵州茅台",
+            "timeframe": "30m",
+            "bars": bars,
+            "created_at": datetime(2026, 2, 1, tzinfo=UTC),
+        }
+    )
+    redis.cached = list(bars)
+
+    record = database.get_dataset(created["id"])
+
+    assert [bar["session_id"] for bar in record["bars"]] == [
+        "202609111000",
+        "202609111030",
+    ]
+
+
+def test_legacy_sqlite_read_deduplicates_stored_sessions(tmp_path) -> None:
+    database = LegacySqliteDatabase(tmp_path / "legacy.db")
+    bars = [
+        {
+            "session_id": session_id,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1_000.0,
+        }
+        for session_id in ("202609111000", "202609111030", "202609111000")
+    ]
+    created = database.insert_dataset(
+        {
+            "symbol": "600519",
+            "title": "贵州茅台",
+            "timeframe": "30m",
+            "bars": bars,
+            "created_at": datetime(2026, 2, 1, tzinfo=UTC).isoformat(),
+        }
+    )
+
+    record = database.get_dataset(created["id"])
+
+    assert [bar["session_id"] for bar in record["bars"]] == [
+        "202609111000",
+        "202609111030",
+    ]
+
+
 def test_database_delete_dataset_soft_deletes_metadata_and_cache() -> None:
     postgres = FakePostgres()
     influx = FakeInflux()

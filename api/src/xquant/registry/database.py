@@ -18,6 +18,8 @@ from ..storage import (
     RedisStore,
     StorageSettings,
 )
+from .bar_utils import dedupe_sorted_bars, parse_session_time as _parse_time
+from .bar_utils import session_sort_key as _session_sort_key
 from .sqlite import Database as LegacySqliteDatabase
 from .sqlite import (
     _normalize_record_limit,
@@ -455,7 +457,7 @@ class Database:
             lambda: self._fetch_dataset_bars(metadata["id"]),
             ttl_seconds=120,
         )
-        bars.sort(key=lambda bar: _session_sort_key(str(bar.get("session_id") or "")))
+        bars = dedupe_sorted_bars(bars)
         return {"summary": metadata, "bars": bars}
 
     def delete_dataset(self, dataset_id: str) -> dict[str, Any]:
@@ -848,45 +850,7 @@ class Database:
         )
         for bar in bars:
             bar.pop("_source_seq", None)
-        return bars
-
-
-def _parse_time(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        parsed = None
-    if parsed is None:
-        formats = (
-            ("%Y%m%d%H%M%S", 14),
-            ("%Y%m%d%H%M", 12),
-            ("%Y%m%d", 8),
-            ("%Y-%m-%d %H:%M:%S", 19),
-            ("%Y-%m-%d %H:%M", 16),
-        )
-        for time_format, expected_length in formats:
-            if len(text) != expected_length:
-                continue
-            try:
-                parsed = datetime.strptime(f"{text}+0000", f"{time_format}%z")
-                break
-            except ValueError:
-                continue
-    if parsed is None:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
-def _session_sort_key(session_id: str) -> tuple[float, str]:
-    parsed = _parse_time(session_id)
-    return (parsed.timestamp(), session_id) if parsed is not None else (float("inf"), session_id)
+        return dedupe_sorted_bars(bars)
 
 
 def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

@@ -14,6 +14,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from xquant.marketdata.remote import fetch_remote_bars, resolve_instrument_title
 
+from .bar_utils import dedupe_sorted_bars, session_sort_key
+
 _PROCESS_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
 _PROCESS_CACHE_LOCK = threading.Lock()
 
@@ -285,7 +287,10 @@ class Database:
             session_id = str(bar.get("session_id") or "").strip()
             if session_id:
                 merged[session_id] = {**bar, "session_id": session_id}
-        bars = [merged[key] for key in sorted(merged)]
+        bars = sorted(
+            merged.values(),
+            key=lambda bar: session_sort_key(str(bar.get("session_id") or "")),
+        )
         synced_at = datetime.now(UTC).isoformat()
         source = str(remote["source"])
         source_provider = str(remote["source_provider"])
@@ -391,7 +396,7 @@ class Database:
                 )
                 conn.commit()
         conn.close()
-        bars = json.loads(record.pop("bars_json"))
+        bars = dedupe_sorted_bars(json.loads(record.pop("bars_json")))
         summary = {
             "id": record["id"],
             "symbol": record["symbol"],
