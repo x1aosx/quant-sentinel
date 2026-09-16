@@ -10,6 +10,8 @@ import type {
   MonitorStatus,
   ScheduleDefinition,
   SchedulerTrigger,
+  StockAnalysisAISummary,
+  StockAnalysisResponse,
   SyncDatasetResponse,
   SystemConfig,
   TaskDefinition,
@@ -67,6 +69,23 @@ export const api = {
     mode: string;
   }>('/dashboard'),
   listDatasets: () => apiRequest<{ items: DatasetSummary[] }>('/datasets'),
+  getStockAnalysis: (
+    symbol: string,
+    options: { refresh?: boolean; include_ai?: boolean } = {},
+  ) => {
+    const search = new URLSearchParams({
+      refresh: String(options.refresh ?? false),
+      include_ai: String(options.include_ai ?? false),
+    });
+    return apiRequest<StockAnalysisResponse>(
+      `/stocks/${encodeURIComponent(symbol)}/analysis?${search.toString()}`,
+    );
+  },
+  generateStockAnalysisAI: (symbol: string) =>
+    apiRequest<StockAnalysisAISummary | StockAnalysisResponse>(
+      `/stocks/${encodeURIComponent(symbol)}/analysis/ai`,
+      { method: 'POST' },
+    ),
   getInstrumentSummaries: (params: AnalysisInstrumentSummariesParams = {}) => {
     const search = new URLSearchParams({
       page: String(params.page ?? 1),

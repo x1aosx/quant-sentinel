@@ -149,6 +149,89 @@ export interface UnifiedAnalysisResult extends SrAnalysisResult {
   price_action: PaAnalysisResult;
 }
 
+export interface StockAnalysisQuote {
+  current_price: number | null;
+  change_pct: number | null;
+  last_session: string | null;
+  timeframe: string | null;
+}
+
+export interface TimeframeAnalysisResult {
+  symbol: string;
+  timeframe: string;
+  timestamp: string;
+  trend: string;
+  trend_score: number;
+  phase: string;
+  momentum_score: number;
+  volatility_score: number;
+  support_levels: number[];
+  resistance_levels: number[];
+  volume_state: string;
+  price_structure: string;
+  signals: string[];
+  confidence: number;
+  raw_result: Record<string, unknown>;
+}
+
+export interface MultiTimeframeAnalysisResult {
+  symbol: string;
+  timestamp: string;
+  strategic_trend: string;
+  strategic_score: number;
+  intraday_state: string;
+  confirmation_state: string;
+  execution_state: string;
+  alignment_score: number;
+  conflict_score: number;
+  bullish_score: number;
+  bearish_score: number;
+  summary_state: string;
+  missing_timeframes: string[];
+  metadata: {
+    profile?: Record<string, string>;
+    [key: string]: unknown;
+  };
+}
+
+export interface StockAnalysisDecision {
+  action: string;
+  confidence: number;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  risk_reward: number | null;
+  trigger_conditions: string[];
+  invalid_conditions: string[];
+  risk_flags: string[];
+  reason_codes: string[];
+}
+
+export interface StockAnalysisAISummary {
+  status: string;
+  source: string;
+  summary: string;
+  cycle_explanation: string;
+  scenarios: unknown;
+  risks: string[];
+  trigger_conditions: string[];
+  invalid_conditions: string[];
+  notification_text: string;
+}
+
+export interface StockAnalysisResponse {
+  symbol: string;
+  name: string;
+  quote: StockAnalysisQuote;
+  timeframes: Record<string, TimeframeAnalysisResult>;
+  multi_timeframe: MultiTimeframeAnalysisResult;
+  decision: StockAnalysisDecision;
+  ai_summary: StockAnalysisAISummary | null;
+  generated_at: string;
+  from_cache: boolean;
+  versions: Record<string, string>;
+}
+
 export interface AnalysisInstrumentSummary {
   dataset_id: string;
   symbol: string;
