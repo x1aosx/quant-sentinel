@@ -5,7 +5,9 @@ import {
   Database,
   Gauge,
   Hexagon,
+  Newspaper,
   Settings2,
+  Telescope,
   Workflow,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -18,6 +20,8 @@ const navGroups = [
       { to: '/', label: '驾驶台', icon: Gauge },
       { to: '/data', label: '数据中心', icon: Database },
       { to: '/analysis', label: '股票分析', icon: Crosshair },
+      { to: '/intelligence', label: '市场情报', icon: Newspaper },
+      { to: '/discovery', label: '机会发现', icon: Telescope },
     ],
   },
   {
@@ -33,6 +37,8 @@ const titles: Record<string, string> = {
   '/': '驾驶台',
   '/data': '数据中心',
   '/analysis': '股票分析',
+  '/intelligence': '市场情报',
+  '/discovery': '机会发现',
   '/ai': '股票分析',
   '/market-analysis': '股票分析',
   '/support-resistance': '股票分析',

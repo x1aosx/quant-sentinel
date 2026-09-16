@@ -1,0 +1,68 @@
+from .domain import (
+    DEFAULT_SCORE_WEIGHTS,
+    PENALTY_FEATURES,
+    CandidateState,
+    DiscoveryCandidate,
+    DiscoveryResult,
+    DiscoveryWeights,
+    EventSnapshot,
+    MarketRegime,
+    ScoreComponent,
+    StockSnapshot,
+    ThemeSnapshot,
+)
+from .engine import (
+    MODEL_VERSION,
+    DiscoveryEngine,
+    discover,
+    rank_candidates,
+    select_top_n,
+    select_top_percentile,
+    weighted_discovery_score,
+)
+from .service import (
+    CandidatePersistence,
+    DiscoveryCandidateRepository,
+    DiscoveryDataSource,
+    DiscoveryService,
+)
+from .state_machine import (
+    ALLOWED_TRANSITIONS,
+    DEFAULT_STATE_MACHINE,
+    CandidateStateMachine,
+    InvalidStateTransition,
+    transition_candidate,
+)
+from .weights import dynamic_weights, regime_weights
+
+__all__ = [
+    "ALLOWED_TRANSITIONS",
+    "DEFAULT_SCORE_WEIGHTS",
+    "DEFAULT_STATE_MACHINE",
+    "MODEL_VERSION",
+    "PENALTY_FEATURES",
+    "CandidatePersistence",
+    "CandidateState",
+    "CandidateStateMachine",
+    "DiscoveryCandidate",
+    "DiscoveryCandidateRepository",
+    "DiscoveryDataSource",
+    "DiscoveryEngine",
+    "DiscoveryResult",
+    "DiscoveryService",
+    "DiscoveryWeights",
+    "EventSnapshot",
+    "InvalidStateTransition",
+    "MarketRegime",
+    "ScoreComponent",
+    "StockSnapshot",
+    "ThemeSnapshot",
+    "discover",
+    "dynamic_weights",
+    "rank_candidates",
+    "regime_weights",
+    "select_top_n",
+    "select_top_percentile",
+    "transition_candidate",
+    "weighted_discovery_score",
+]

@@ -4,6 +4,7 @@ import {
   Bell,
   CalendarClock,
   Check,
+  Newspaper,
   Plus,
   RefreshCcw,
   Save,
@@ -15,6 +16,8 @@ import {
 import { api } from '../api/client';
 import type {
   DatasetSummary,
+  IntelligenceConfig,
+  IntelligenceFeedConfig,
   MonitorSchedule,
   MonitorTarget,
   SystemConfig,
@@ -39,6 +42,12 @@ const EMPTY_TARGET: MonitorTarget = {
     decision_stance: 'balanced',
     enable_next_bar_prediction: true,
   },
+};
+
+const EMPTY_INTELLIGENCE: IntelligenceConfig = {
+  enabled: true,
+  lookback_hours: 24,
+  feeds: [],
 };
 
 const WEEKDAY_OPTIONS = [
@@ -81,6 +90,7 @@ export function SystemConfigPage() {
       setForm({
         ...configQuery.data,
         monitor_schedule: configQuery.data.monitor_schedule ?? DEFAULT_MONITOR_SCHEDULE,
+        intelligence: configQuery.data.intelligence ?? EMPTY_INTELLIGENCE,
       });
     }
   }, [configQuery.data]);
@@ -141,6 +151,29 @@ export function SystemConfigPage() {
     });
   const updateFeishu = (patch: Partial<SystemConfig['feishu']>) =>
     setForm({ ...form, feishu: { ...form.feishu, ...patch } });
+  const updateIntelligence = (patch: Partial<IntelligenceConfig>) =>
+    setForm({ ...form, intelligence: { ...form.intelligence, ...patch } });
+  const updateFeed = (index: number, patch: Partial<IntelligenceFeedConfig>) => {
+    const feeds = form.intelligence.feeds.map((feed, feedIndex) =>
+      feedIndex === index ? { ...feed, ...patch } : feed,
+    );
+    updateIntelligence({ feeds });
+  };
+  const addFeed = () => {
+    updateIntelligence({
+      feeds: [
+        ...form.intelligence.feeds,
+        {
+          id: `feed-${Date.now()}`,
+          url: '',
+          source: '',
+          source_type: 'NEWS',
+          language: 'zh-CN',
+          enabled: true,
+        },
+      ],
+    });
+  };
   const updateTarget = (index: number, patch: Partial<MonitorTarget>) => {
     const monitor_watchlist = form.monitor_watchlist.map((target, targetIndex) =>
       targetIndex === index ? { ...target, ...patch } : target,
@@ -289,6 +322,112 @@ export function SystemConfigPage() {
             </p>
           </div>
         </div>
+      </div>
+
+      <div className="panel">
+        <div className="section-title">
+          <Newspaper size={15} />
+          市场情报源
+          <span className="badge badge-neutral">{form.intelligence.feeds.length} 个数据源</span>
+        </div>
+        <div className="row intelligence-config-toolbar">
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={form.intelligence.enabled}
+              onChange={(event) => updateIntelligence({ enabled: event.target.checked })}
+            />
+            启用情报采集
+          </label>
+          <div className="field">
+            <label htmlFor="config-intelligence-lookback">回溯小时数</label>
+            <input
+              id="config-intelligence-lookback"
+              type="number"
+              min="1"
+              max="720"
+              value={form.intelligence.lookback_hours}
+              onChange={(event) =>
+                updateIntelligence({
+                  lookback_hours: Number(event.target.value) || 24,
+                })
+              }
+            />
+          </div>
+          <button className="button" type="button" onClick={addFeed}>
+            <Plus size={14} />
+            添加 RSS/Atom
+          </button>
+        </div>
+        {form.intelligence.feeds.length ? (
+          <div className="intelligence-source-list">
+            {form.intelligence.feeds.map((feed, index) => (
+              <div className="intelligence-source-row" key={`${feed.id}-${index}`}>
+                <label className="checkbox-row intelligence-source-enabled">
+                  <input
+                    type="checkbox"
+                    checked={feed.enabled}
+                    onChange={(event) => updateFeed(index, { enabled: event.target.checked })}
+                  />
+                  启用
+                </label>
+                <div className="field">
+                  <label htmlFor={`intelligence-feed-name-${index}`}>来源名称</label>
+                  <input
+                    id={`intelligence-feed-name-${index}`}
+                    value={feed.source}
+                    onChange={(event) => updateFeed(index, { source: event.target.value })}
+                    placeholder="例如：交易所公告"
+                  />
+                </div>
+                <div className="field intelligence-source-url">
+                  <label htmlFor={`intelligence-feed-url-${index}`}>RSS/Atom URL</label>
+                  <input
+                    id={`intelligence-feed-url-${index}`}
+                    value={feed.url}
+                    onChange={(event) => updateFeed(index, { url: event.target.value })}
+                    placeholder="https://example.com/feed.xml"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor={`intelligence-feed-type-${index}`}>类型</label>
+                  <select
+                    id={`intelligence-feed-type-${index}`}
+                    value={feed.source_type}
+                    onChange={(event) =>
+                      updateFeed(index, {
+                        source_type: event.target
+                          .value as IntelligenceFeedConfig['source_type'],
+                      })
+                    }
+                  >
+                    <option value="NEWS">新闻</option>
+                    <option value="POLICY">政策</option>
+                    <option value="ANNOUNCEMENT">公告</option>
+                  </select>
+                </div>
+                <button
+                  className="button button-danger intelligence-source-remove"
+                  type="button"
+                  onClick={() =>
+                    updateIntelligence({
+                      feeds: form.intelligence.feeds.filter(
+                        (_item, feedIndex) => feedIndex !== index,
+                      ),
+                    })
+                  }
+                  aria-label="删除情报源"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty intelligence-source-empty">
+            尚未配置情报源。添加 RSS 或 Atom 地址后，可在市场情报页执行采集。
+          </div>
+        )}
       </div>
 
       <div className="panel">

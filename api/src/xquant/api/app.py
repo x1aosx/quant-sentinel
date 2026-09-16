@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from xquant.ai.coordinator import MonitorManager
+from xquant.intelligence import register_intelligence_tasks
 from xquant.marketdata.tasks import register_market_tasks
 from xquant.notifications.feishu import send_feishu_message
 from xquant.registry import Database
@@ -15,6 +16,7 @@ from xquant.scheduler.runtime import build_scheduler_runtime
 from xquant.storage import StorageSettings
 from xquant.system_config import SystemConfigStore
 
+from .intelligence_runtime import build_intelligence_runtime
 from .routes import api_router
 
 
@@ -29,6 +31,7 @@ def create_app(
     if config_path is None and db_path is not None:
         config_path = db_path.with_name("system-settings.json")
     system_config = SystemConfigStore(config_path)
+    intelligence_runtime = build_intelligence_runtime(db, settings, system_config)
 
     def notify_monitor(record, _target, _state):
         feishu = system_config.settings.feishu
@@ -47,6 +50,7 @@ def create_app(
     scheduler_registry = TaskRegistry()
     if settings.scheduler.enabled:
         register_market_tasks(scheduler_registry, db)
+        register_intelligence_tasks(scheduler_registry, intelligence_runtime.service)
     scheduler_runtime = build_scheduler_runtime(
         db,
         settings,
@@ -76,6 +80,8 @@ def create_app(
     app.state.settings = settings
     app.state.system_config = system_config
     app.state.monitor = monitor
+    app.state.intelligence_service = intelligence_runtime.api_service
+    app.state.discovery_service = intelligence_runtime.discovery_service
     app.state.scheduler_runtime = scheduler_runtime
     app.add_middleware(
         CORSMiddleware,
