@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ..core.models import (
@@ -35,7 +35,7 @@ _TIMEFRAME_ALIASES = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:

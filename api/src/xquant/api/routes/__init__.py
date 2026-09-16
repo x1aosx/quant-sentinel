@@ -10,6 +10,7 @@ from .health import router as health_router
 from .marketdata import router as marketdata_router
 from .notifications import router as notifications_router
 from .scheduler import router as scheduler_router
+from .stock_analysis import router as stock_analysis_router
 from .system import router as system_router
 
 api_router = APIRouter(prefix="/api/v1")
@@ -21,4 +22,5 @@ api_router.include_router(health_router)
 api_router.include_router(notifications_router)
 api_router.include_router(scheduler_router)
 api_router.include_router(marketdata_router)
+api_router.include_router(stock_analysis_router)
 api_router.include_router(system_router)

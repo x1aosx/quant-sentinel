@@ -8,7 +8,6 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
-
 ROLE_NAMES = ("strategic", "tactical", "confirmation", "execution")
 DEFAULT_ROLE_TIMEFRAMES = {
     "strategic": "1d",
@@ -139,7 +138,7 @@ class TimeframeAnalysisResult:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "TimeframeAnalysisResult":
+    def from_dict(cls, payload: Mapping[str, Any]) -> TimeframeAnalysisResult:
         return cls(
             symbol=payload.get("symbol", ""),
             timeframe=payload.get("timeframe", ""),
@@ -212,7 +211,7 @@ class MultiTimeframeProfile:
                 self.weights[role] = max(0.0, _float(raw_weights[role], default=0.0))
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any] | None) -> "MultiTimeframeProfile":
+    def from_payload(cls, payload: Mapping[str, Any] | None) -> MultiTimeframeProfile:
         return cls(payload=payload or {})
 
     def role_timeframes(self) -> dict[str, str]:
@@ -329,9 +328,9 @@ class QuantDecision:
 __all__ = [
     "DEFAULT_ROLE_TIMEFRAMES",
     "DEFAULT_ROLE_WEIGHTS",
+    "ROLE_NAMES",
     "MultiTimeframeProfile",
     "MultiTimeframeResult",
     "QuantDecision",
-    "ROLE_NAMES",
     "TimeframeAnalysisResult",
 ]

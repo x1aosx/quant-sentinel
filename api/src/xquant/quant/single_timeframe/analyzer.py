@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from xquant.analysis.price_action import analyze_price_action
@@ -17,7 +17,7 @@ _INSUFFICIENT_DATA_MARKERS = ("insufficient_data", "数据不足")
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:

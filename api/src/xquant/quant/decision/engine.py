@@ -151,11 +151,13 @@ def _candidate_prices(
         decision = raw_price_action.get("decision")
         if isinstance(decision, Mapping):
             raw_action = str(decision.get("action", "")).upper()
-            if action in {"BUY", "WAIT_BUY"} and raw_action == "LONG":
-                entry = decision.get("entry", entry)
-                stop = decision.get("stop")
-                target = decision.get("target")
-            elif action in {"SELL", "WAIT_SELL", "REDUCE"} and raw_action == "SHORT":
+            if (
+                (action in {"BUY", "WAIT_BUY"} and raw_action == "LONG")
+                or (
+                    action in {"SELL", "WAIT_SELL", "REDUCE"}
+                    and raw_action == "SHORT"
+                )
+            ):
                 entry = decision.get("entry", entry)
                 stop = decision.get("stop")
                 target = decision.get("target")
@@ -380,9 +382,7 @@ class QuantDecisionEngine:
                 execution_sign > 0
                 and coverage_ratio >= 0.75
                 and multi_timeframe.conflict_score < _HIGH_CONFLICT_THRESHOLD
-            ):
-                action = "WAIT_BUY"
-            elif (
+            ) or (
                 tactical_phase == "PULLBACK"
                 and confirmation_state in {"CONSOLIDATION", "BREAKOUT"}
                 and coverage_ratio >= 0.75
