@@ -6,8 +6,15 @@ import type {
   AnalysisInstrumentSummariesResponse,
   BatchAnalyzeResponse,
   DatasetSummary,
+  DiscoveryCandidateListResponse,
   HealthSummary,
+  IntelligenceOverview,
+  IntelligenceRunRequest,
+  IntelligenceRunResult,
+  IntelligenceThemeCategory,
+  MarketEventListResponse,
   MonitorStatus,
+  MorningBriefResponse,
   ScheduleDefinition,
   SchedulerTrigger,
   StockAnalysisAISummary,
@@ -16,6 +23,7 @@ import type {
   SystemConfig,
   TaskDefinition,
   TaskExecution,
+  ThemeListResponse,
   UnifiedAnalysisResult,
   WorkerSummary,
 } from '../types';
@@ -62,6 +70,38 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getHealth: () => apiRequest<HealthSummary>('/health'),
+  getIntelligenceOverview: () =>
+    apiRequest<IntelligenceOverview>('/intelligence/overview'),
+  runIntelligence: (payload: IntelligenceRunRequest = {}) =>
+    apiRequest<IntelligenceRunResult>('/intelligence/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listMarketEvents: (limit = 50) =>
+    apiRequest<MarketEventListResponse>(
+      `/intelligence/events?${new URLSearchParams({ limit: String(limit) }).toString()}`,
+    ),
+  listThemes: (params: { limit?: number; category?: IntelligenceThemeCategory } = {}) => {
+    const search = new URLSearchParams({ limit: String(params.limit ?? 50) });
+    if (params.category) search.set('category', params.category);
+    return apiRequest<ThemeListResponse>(`/themes?${search.toString()}`);
+  },
+  getMorningBrief: () => apiRequest<MorningBriefResponse>('/brief/morning'),
+  listDiscoveryCandidates: (
+    params: { state?: string; limit?: number } = {},
+  ) => {
+    const search = new URLSearchParams({
+      state: params.state ?? 'all',
+      limit: String(params.limit ?? 100),
+    });
+    return apiRequest<DiscoveryCandidateListResponse>(
+      `/discovery/candidates?${search.toString()}`,
+    );
+  },
+  refreshDiscovery: () =>
+    apiRequest<DiscoveryCandidateListResponse>('/discovery/refresh', {
+      method: 'POST',
+    }),
   getDashboard: () => apiRequest<{
     status: string;
     dataset_count: number;
