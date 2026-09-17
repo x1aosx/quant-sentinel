@@ -83,6 +83,14 @@ export function downloadIntelligenceSourcesCsv(
   );
 }
 
+export function downloadIntelligenceSourcesTemplate(): void {
+  downloadTextFile(
+    'intelligence-sources-template.csv',
+    exportIntelligenceSourcesCsv([]),
+    'text/csv;charset=utf-8',
+  );
+}
+
 export function parseIntelligenceSourcesCsv(
   text: string,
 ): IntelligenceSourceImportResult {
