@@ -69,6 +69,7 @@ export interface BacktestRun {
 export interface BacktestCreateRequest {
   name?: string;
   strategy_id: string;
+  strategy_version?: string;
   data_snapshot_id?: string;
   start_date?: string;
   end_date?: string;

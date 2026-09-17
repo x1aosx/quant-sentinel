@@ -163,6 +163,9 @@ class BarFrame:
 
 
 class MarketDataPort(Protocol):
+    def get_dataset_metadata(self, dataset_id: str) -> Mapping[str, Any]:
+        ...
+
     def load_bars(
         self,
         symbol: str,
@@ -181,6 +184,9 @@ class XQSMarketDataAdapter:
 
     def __init__(self, database: Any) -> None:
         self.database = database
+
+    def get_dataset_metadata(self, dataset_id: str) -> Mapping[str, Any]:
+        return self.database.get_dataset(str(dataset_id))["summary"]
 
     def load_bars(
         self,

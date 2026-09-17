@@ -131,13 +131,27 @@ class TrainingManager:
             or payload.get("dataset_id")
             or ""
         ).strip()
-        raw_symbols = payload.get("symbols") or [payload.get("symbol")]
-        if not isinstance(raw_symbols, Sequence) or isinstance(raw_symbols, (str, bytes)):
-            raise TypeError("symbols must be a list")
-        symbols = [str(item).strip().upper() for item in raw_symbols if str(item).strip()]
+        timeframe = str(payload.get("timeframe") or "1d").strip().lower() or "1d"
+        dataset_title = ""
+        if dataset_id:
+            metadata = self.market_data.get_dataset_metadata(dataset_id)
+            symbol = str(metadata.get("symbol") or "").strip().upper()
+            if not symbol:
+                raise ValueError("dataset symbol is missing")
+            timeframe = str(metadata.get("timeframe") or timeframe).strip().lower() or "1d"
+            dataset_title = str(metadata.get("title") or "").strip()
+            symbols = [symbol]
+        else:
+            raw_symbols = payload.get("symbols") or [payload.get("symbol")]
+            if not isinstance(raw_symbols, Sequence) or isinstance(
+                raw_symbols, (str, bytes)
+            ):
+                raise TypeError("symbols must be a list")
+            symbols = [
+                str(item).strip().upper() for item in raw_symbols if str(item).strip()
+            ]
         if len(symbols) != 1:
             raise ValueError("current training implementation supports one symbol per run")
-        timeframe = str(payload.get("timeframe") or "1d").strip().lower() or "1d"
         frame = self.market_data.load_bars(
             symbols[0],
             timeframe,
@@ -156,6 +170,11 @@ class TrainingManager:
         batch_size = max(1, min(512, int(payload.get("batch_size") or 32)))
         seed = int(payload.get("seed", self.settings.mining.seed))
         run_id = uuid.uuid4().hex[:20]
+        run_name = (
+            str(payload.get("name") or "").strip()
+            or dataset_title
+            or f"{frame.symbol} {frame.timeframe}"
+        )
         run = TrainingRun(
             id=run_id,
             dataset_id=dataset_id or str(frame.symbol),
@@ -164,7 +183,7 @@ class TrainingManager:
         )
         public = _run_public(
             run,
-            name=str(payload.get("name") or f"{frame.symbol} {frame.timeframe}"),
+            name=run_name,
             market=str(payload.get("market") or "CN-A"),
             total_steps=total_steps,
             seed=seed,

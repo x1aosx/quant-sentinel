@@ -21,6 +21,7 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import { backtestApi } from '../../api/alphalab/backtests';
+import { strategyApi } from '../../api/alphalab/strategies';
 import {
   AlphaLabEmpty,
   AlphaLabError,
@@ -40,11 +41,13 @@ import type {
   BacktestCreateRequest,
   BacktestRun,
 } from '../../types/alphalab/backtest';
+import type { StrategyArtifact } from '../../types/alphalab/strategy';
 import '../../styles/alphalab.css';
 
 interface BacktestFormState {
   name: string;
   strategyId: string;
+  strategyVersion: string;
   dataSnapshotId: string;
   startDate: string;
   endDate: string;
@@ -57,6 +60,7 @@ interface BacktestFormState {
 const DEFAULT_FORM: BacktestFormState = {
   name: '',
   strategyId: '',
+  strategyVersion: '',
   dataSnapshotId: '',
   startDate: '',
   endDate: '',
@@ -65,6 +69,35 @@ const DEFAULT_FORM: BacktestFormState = {
   slippagePct: '0.0002',
   minExposure: '0.05',
 };
+
+function strategyOptionValue(strategy: StrategyArtifact): string {
+  return JSON.stringify([strategy.id, strategy.version]);
+}
+
+function strategyStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    CANDIDATE: '候选',
+    VALIDATED: '已验证',
+    PRODUCTION: '生产中',
+    DEPRECATED: '已弃用',
+    REJECTED: '已拒绝',
+  };
+  return labels[status.toUpperCase()] ?? status;
+}
+
+function strategyOptionLabel(strategy: StrategyArtifact): string {
+  const symbols =
+    strategy.symbols?.filter(Boolean).join(', ') ||
+    strategy.symbol_scope ||
+    '未指定标的';
+  const version = strategy.version ? `v${strategy.version}` : '版本未知';
+  return [
+    strategy.name || strategy.id,
+    symbols,
+    version,
+    strategyStatusLabel(strategy.status),
+  ].join(' · ');
+}
 
 interface ChartPoint {
   timestamp: string;
@@ -129,18 +162,34 @@ export function BacktestPage() {
     queryFn: backtestApi.overview,
     refetchInterval: 15_000,
   });
+  const strategiesQuery = useQuery({
+    queryKey: ['alphalab', 'strategy', 'list'],
+    queryFn: strategyApi.list,
+  });
   const runsQuery = useQuery({
     queryKey: ['alphalab', 'backtest', 'runs'],
     queryFn: backtestApi.list,
     refetchInterval: 8_000,
   });
 
+  const strategies = strategiesQuery.data ?? [];
   const runs = runsQuery.data ?? [];
+  const selectedStrategy =
+    strategies.find(
+      (strategy) =>
+        strategy.id === form.strategyId &&
+        strategy.version === form.strategyVersion,
+    ) ?? null;
   const selected = runs.find((run) => run.id === selectedId) ?? null;
   const selectedMetrics = selected?.metrics_json ?? {};
   const chartData = useMemo(() => buildChartData(selected), [selected]);
-  const queryError = overviewQuery.error ?? runsQuery.error;
-  const updatedAt = Math.max(overviewQuery.dataUpdatedAt, runsQuery.dataUpdatedAt);
+  const queryError =
+    overviewQuery.error ?? strategiesQuery.error ?? runsQuery.error;
+  const updatedAt = Math.max(
+    overviewQuery.dataUpdatedAt,
+    strategiesQuery.dataUpdatedAt,
+    runsQuery.dataUpdatedAt,
+  );
   const activeRuns = runs.filter((run) =>
     ['PENDING', 'QUEUED', 'RUNNING'].includes(String(run.status).toUpperCase()),
   ).length;
@@ -162,6 +211,7 @@ export function BacktestPage() {
 
   const refresh = () => {
     void overviewQuery.refetch();
+    void strategiesQuery.refetch();
     void runsQuery.refetch();
   };
 
@@ -169,8 +219,10 @@ export function BacktestPage() {
     event.preventDefault();
     setFormError('');
     setActionMessage('');
-    if (!form.strategyId.trim()) {
-      setFormError('strategy_id 不能为空');
+    if (!selectedStrategy) {
+      setFormError(
+        strategies.length ? '请选择已有策略' : '暂无可选策略，无法创建回测',
+      );
       return;
     }
     const initialCapital = Number(form.initialCapital);
@@ -193,7 +245,8 @@ export function BacktestPage() {
     }
     const payload: BacktestCreateRequest = {
       name: form.name.trim() || undefined,
-      strategy_id: form.strategyId.trim(),
+      strategy_id: selectedStrategy.id,
+      strategy_version: selectedStrategy.version || undefined,
       data_snapshot_id: form.dataSnapshotId.trim() || undefined,
       start_date: form.startDate || undefined,
       end_date: form.endDate || undefined,
@@ -216,7 +269,11 @@ export function BacktestPage() {
           </div>
         </div>
         <AlphaLabQueryStatus
-          isFetching={overviewQuery.isFetching || runsQuery.isFetching}
+          isFetching={
+            overviewQuery.isFetching ||
+            strategiesQuery.isFetching ||
+            runsQuery.isFetching
+          }
           isError={Boolean(queryError)}
           updatedAt={updatedAt}
           onRefresh={refresh}
@@ -281,18 +338,68 @@ export function BacktestPage() {
               />
             </div>
             <div className="field">
-              <label htmlFor="alpha-backtest-strategy">Strategy ID</label>
-              <input
-                id="alpha-backtest-strategy"
-                value={form.strategyId}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    strategyId: event.target.value,
-                  }))
-                }
-                placeholder="策略 UUID"
-              />
+              <label htmlFor="alpha-backtest-strategy">策略</label>
+              {strategiesQuery.isLoading ? (
+                <>
+                  <select id="alpha-backtest-strategy" disabled>
+                    <option>加载策略中...</option>
+                  </select>
+                  <span className="muted">正在加载已有策略列表</span>
+                </>
+              ) : strategiesQuery.isError ? (
+                <>
+                  <select id="alpha-backtest-strategy" disabled>
+                    <option>策略列表加载失败</option>
+                  </select>
+                  <span className="error-text">请刷新页面后重试</span>
+                </>
+              ) : strategies.length ? (
+                <>
+                  <select
+                    id="alpha-backtest-strategy"
+                    value={
+                      selectedStrategy
+                        ? strategyOptionValue(selectedStrategy)
+                        : ''
+                    }
+                    onChange={(event) => {
+                      const strategy =
+                        strategies.find(
+                          (item) =>
+                            strategyOptionValue(item) === event.target.value,
+                        ) ?? null;
+                      setForm((current) => ({
+                        ...current,
+                        strategyId: strategy?.id ?? '',
+                        strategyVersion: strategy?.version ?? '',
+                      }));
+                    }}
+                    disabled={createMutation.isPending}
+                  >
+                    <option value="">请选择已有策略</option>
+                    {strategies.map((strategy, index) => (
+                      <option
+                        key={`${strategyOptionValue(strategy)}:${index}`}
+                        value={strategyOptionValue(strategy)}
+                      >
+                        {strategyOptionLabel(strategy)}
+                      </option>
+                    ))}
+                  </select>
+                  {!selectedStrategy ? (
+                    <span className="muted">请选择策略后再开始回测</span>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <select id="alpha-backtest-strategy" disabled>
+                    <option>暂无可选策略</option>
+                  </select>
+                  <span className="muted">
+                    请先在策略资产中导入或训练策略
+                  </span>
+                </>
+              )}
             </div>
             <div className="field">
               <label htmlFor="alpha-backtest-snapshot">数据快照</label>
@@ -400,7 +507,12 @@ export function BacktestPage() {
             <button
               type="submit"
               className="button button-primary"
-              disabled={createMutation.isPending}
+              disabled={
+                createMutation.isPending ||
+                strategiesQuery.isLoading ||
+                Boolean(strategiesQuery.isError) ||
+                !selectedStrategy
+              }
             >
               <Play size={14} />
               {createMutation.isPending ? '提交中' : '开始回测'}
