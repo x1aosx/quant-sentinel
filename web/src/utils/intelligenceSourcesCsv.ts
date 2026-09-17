@@ -32,6 +32,15 @@ const HEADERS: SourceField[] = [
   'enabled',
 ];
 
+const TEMPLATE_HEADERS = [
+  '编号',
+  '来源名称',
+  '订阅地址',
+  '类型',
+  '语言',
+  '启用',
+];
+
 const SOURCE_TYPE_ALIASES: Record<string, IntelligenceSourceType> = {
   NEWS: 'NEWS',
   POLICY: 'POLICY',
@@ -86,7 +95,7 @@ export function downloadIntelligenceSourcesCsv(
 export function downloadIntelligenceSourcesTemplate(): void {
   downloadTextFile(
     'intelligence-sources-template.csv',
-    exportIntelligenceSourcesCsv([]),
+    TEMPLATE_HEADERS.map(csvCell).join(','),
     'text/csv;charset=utf-8',
   );
 }
