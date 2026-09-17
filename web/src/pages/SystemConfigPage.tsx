@@ -5,6 +5,7 @@ import {
   CalendarClock,
   Check,
   Download,
+  FileDown,
   Newspaper,
   Plus,
   RefreshCcw,
@@ -26,6 +27,7 @@ import type {
 } from '../types';
 import {
   downloadIntelligenceSourcesCsv,
+  downloadIntelligenceSourcesTemplate,
   mergeIntelligenceSources,
   parseIntelligenceSourcesCsv,
 } from '../utils/intelligenceSourcesCsv';
@@ -410,6 +412,14 @@ export function SystemConfigPage() {
             <button className="button" type="button" onClick={exportSources}>
               <Download size={14} />
               导出 CSV
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={downloadIntelligenceSourcesTemplate}
+            >
+              <FileDown size={14} />
+              下载导入模板
             </button>
             <input
               ref={sourceFileInputRef}
