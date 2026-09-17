@@ -10,6 +10,7 @@ import {
   Rocket,
 } from 'lucide-react';
 import { trainingApi } from '../../api/alphalab/training';
+import { api } from '../../api/client';
 import {
   AlphaLabEmpty,
   AlphaLabError,
@@ -26,16 +27,16 @@ import {
   progressValue,
   shortId,
 } from '../../components/alphalab/format';
+import type { DatasetSummary } from '../../types';
 import type { TrainingRun } from '../../types/alphalab/training';
+import { formatTimeframeLabel } from '../../utils/datasetDisplay';
 import '../../styles/alphalab.css';
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'QUEUED', 'RUNNING']);
 
 interface TrainingFormState {
   name: string;
-  symbols: string;
-  timeframe: string;
-  dataSnapshotId: string;
+  datasetId: string;
   configProfile: string;
   seed: string;
   totalSteps: string;
@@ -46,9 +47,7 @@ interface TrainingFormState {
 
 const DEFAULT_FORM: TrainingFormState = {
   name: '',
-  symbols: '',
-  timeframe: '1d',
-  dataSnapshotId: '',
+  datasetId: '',
   configProfile: 'alpha_master_compat',
   seed: '42',
   totalSteps: '1000',
@@ -56,6 +55,13 @@ const DEFAULT_FORM: TrainingFormState = {
   device: 'auto',
   fromScratch: true,
 };
+
+function datasetOptionLabel(dataset: DatasetSummary): string {
+  const title = dataset.title?.trim();
+  const name = title || dataset.symbol;
+  const symbol = title && title !== dataset.symbol ? ` · ${dataset.symbol}` : '';
+  return `${name}${symbol} · ${formatTimeframeLabel(dataset.timeframe)} · ${dataset.bar_count} 根`;
+}
 
 function isActive(run: TrainingRun): boolean {
   return ACTIVE_STATUSES.has(String(run.status).toUpperCase());
@@ -98,6 +104,10 @@ export function TrainingPage() {
     queryFn: trainingApi.list,
     refetchInterval: 5_000,
   });
+  const datasetsQuery = useQuery({
+    queryKey: ['datasets'],
+    queryFn: api.listDatasets,
+  });
   const detailQuery = useQuery({
     queryKey: ['alphalab', 'training', 'run', selectedId],
     queryFn: () => trainingApi.get(selectedId),
@@ -106,6 +116,10 @@ export function TrainingPage() {
   });
 
   const runs = runsQuery.data ?? [];
+  const datasets = datasetsQuery.data?.items ?? [];
+  const selectedDataset = datasets.find(
+    (dataset) => dataset.id === form.datasetId,
+  );
   const selectedRun =
     detailQuery.data ?? runs.find((run) => run.id === selectedId) ?? null;
   const activeRuns = runs.filter(isActive).length;
@@ -119,6 +133,7 @@ export function TrainingPage() {
   const updatedAt = Math.max(
     overviewQuery.dataUpdatedAt,
     runsQuery.dataUpdatedAt,
+    datasetsQuery.dataUpdatedAt,
     detailQuery.dataUpdatedAt,
   );
 
@@ -147,6 +162,7 @@ export function TrainingPage() {
   const refresh = () => {
     void overviewQuery.refetch();
     void runsQuery.refetch();
+    void datasetsQuery.refetch();
     if (selectedId) void detailQuery.refetch();
   };
 
@@ -154,20 +170,20 @@ export function TrainingPage() {
     event.preventDefault();
     setFormError('');
     setActionMessage('');
-    const symbols = Array.from(
-      new Set(
-        form.symbols
-          .split(/[\s,，;；]+/)
-          .map((symbol) => symbol.trim().toUpperCase())
-          .filter(Boolean),
-      ),
-    );
-    if (!symbols.length) {
-      setFormError('至少填写一个标的');
+    if (!datasets.length) {
+      setFormError('暂无可用于训练的数据集，请先在数据中心导入行情');
       return;
     }
-    if (!form.timeframe.trim()) {
-      setFormError('请选择周期');
+    if (!selectedDataset) {
+      setFormError('请选择一个已有数据集');
+      return;
+    }
+    if (!selectedDataset.symbol.trim()) {
+      setFormError('所选数据集缺少标的');
+      return;
+    }
+    if (!selectedDataset.timeframe.trim()) {
+      setFormError('所选数据集缺少周期');
       return;
     }
     const seed = Number(form.seed);
@@ -187,9 +203,9 @@ export function TrainingPage() {
     }
     createMutation.mutate({
       name: form.name.trim() || undefined,
-      symbols,
-      timeframe: form.timeframe.trim(),
-      data_snapshot_id: form.dataSnapshotId.trim() || undefined,
+      symbols: [selectedDataset.symbol.trim()],
+      timeframe: selectedDataset.timeframe.trim(),
+      data_snapshot_id: selectedDataset.id,
       config_profile: form.configProfile.trim() || undefined,
       seed,
       from_scratch: form.fromScratch,
@@ -211,9 +227,12 @@ export function TrainingPage() {
         </div>
         <AlphaLabQueryStatus
           isFetching={
-            overviewQuery.isFetching || runsQuery.isFetching || detailQuery.isFetching
+            overviewQuery.isFetching ||
+            runsQuery.isFetching ||
+            datasetsQuery.isFetching ||
+            detailQuery.isFetching
           }
-          isError={Boolean(queryError)}
+          isError={Boolean(queryError || datasetsQuery.error)}
           updatedAt={updatedAt}
           onRefresh={refresh}
         />
@@ -260,6 +279,69 @@ export function TrainingPage() {
         </div>
         <form onSubmit={submit}>
           <div className="form-grid alphalab-form-grid">
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label htmlFor="alpha-training-dataset">数据集</label>
+              <select
+                id="alpha-training-dataset"
+                value={form.datasetId}
+                onChange={(event) => {
+                  const dataset = datasets.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  setForm((current) => ({
+                    ...current,
+                    datasetId: event.target.value,
+                    name: dataset
+                      ? dataset.title?.trim() || dataset.symbol.trim()
+                      : '',
+                  }));
+                }}
+                disabled={
+                  datasetsQuery.isLoading ||
+                  datasetsQuery.isError ||
+                  datasets.length === 0
+                }
+              >
+                <option value="">
+                  {datasetsQuery.isLoading
+                    ? '正在加载数据集...'
+                    : datasetsQuery.isError
+                      ? '数据集加载失败'
+                      : datasets.length
+                        ? '请选择数据集'
+                        : '暂无可用数据集'}
+                </option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.id} value={dataset.id}>
+                    {datasetOptionLabel(dataset)}
+                  </option>
+                ))}
+              </select>
+              {datasetsQuery.isLoading ? (
+                <div className="muted">正在加载可用数据集...</div>
+              ) : null}
+              {datasetsQuery.isError ? (
+                <div className="row">
+                  <span className="error-text">
+                    数据集加载失败：{errorText(datasetsQuery.error)}
+                  </span>
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => void datasetsQuery.refetch()}
+                  >
+                    重试
+                  </button>
+                </div>
+              ) : null}
+              {!datasetsQuery.isLoading &&
+              !datasetsQuery.isError &&
+              datasets.length === 0 ? (
+                <div className="error-text">
+                  暂无可用于训练的数据集，请先在数据中心导入行情。
+                </div>
+              ) : null}
+            </div>
             <div className="field">
               <label htmlFor="alpha-training-name">任务名称</label>
               <input
@@ -275,41 +357,27 @@ export function TrainingPage() {
               <label htmlFor="alpha-training-symbols">标的</label>
               <input
                 id="alpha-training-symbols"
-                value={form.symbols}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, symbols: event.target.value }))
-                }
-                placeholder="600519.SH, 000001.SZ"
+                value={selectedDataset?.symbol ?? ''}
+                placeholder="选择数据集后自动填充"
+                readOnly
               />
             </div>
             <div className="field">
               <label htmlFor="alpha-training-timeframe">周期</label>
-              <select
+              <input
                 id="alpha-training-timeframe"
-                value={form.timeframe}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, timeframe: event.target.value }))
-                }
-              >
-                <option value="1d">1d</option>
-                <option value="1h">1h</option>
-                <option value="30m">30m</option>
-                <option value="15m">15m</option>
-                <option value="5m">5m</option>
-              </select>
+                value={selectedDataset?.timeframe ?? ''}
+                placeholder="选择数据集后自动填充"
+                readOnly
+              />
             </div>
             <div className="field">
               <label htmlFor="alpha-training-snapshot">数据快照</label>
               <input
                 id="alpha-training-snapshot"
-                value={form.dataSnapshotId}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    dataSnapshotId: event.target.value,
-                  }))
-                }
-                placeholder="可选"
+                value={selectedDataset?.id ?? ''}
+                placeholder="选择数据集后自动填充"
+                readOnly
               />
             </div>
             <div className="field">
@@ -404,7 +472,7 @@ export function TrainingPage() {
             <button
               className="button button-primary"
               type="submit"
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || !selectedDataset}
             >
               <Rocket size={14} />
               {createMutation.isPending ? '提交中' : '开始训练'}
