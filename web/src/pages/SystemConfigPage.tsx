@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   CalendarClock,
   Check,
+  Download,
   Newspaper,
   Plus,
   RefreshCcw,
@@ -11,6 +12,7 @@ import {
   ServerCog,
   ShieldCheck,
   Trash2,
+  Upload,
   Wifi,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -22,6 +24,11 @@ import type {
   MonitorTarget,
   SystemConfig,
 } from '../types';
+import {
+  downloadIntelligenceSourcesCsv,
+  mergeIntelligenceSources,
+  parseIntelligenceSourcesCsv,
+} from '../utils/intelligenceSourcesCsv';
 
 const DEFAULT_MONITOR_SCHEDULE: MonitorSchedule = {
   mode: 'always',
@@ -83,6 +90,7 @@ export function SystemConfigPage() {
   const [watchlistDatasetId, setWatchlistDatasetId] = useState('');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const sourceFileInputRef = useRef<HTMLInputElement>(null);
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
 
   useEffect(() => {
@@ -173,6 +181,38 @@ export function SystemConfigPage() {
         },
       ],
     });
+  };
+  const exportSources = () => {
+    downloadIntelligenceSourcesCsv(form.intelligence.feeds);
+    setError('');
+    setNotice(
+      `已导出 ${form.intelligence.feeds.length} 个情报源，CSV 文件可直接使用 Excel 打开。`,
+    );
+  };
+  const importSources = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      const parsed = parseIntelligenceSourcesCsv(await file.text());
+      if (!parsed.feeds.length) {
+        throw new Error(parsed.errors[0] ?? '文件中没有可导入的情报源。');
+      }
+      const merged = mergeIntelligenceSources(
+        form.intelligence.feeds,
+        parsed.feeds,
+      );
+      updateIntelligence({ feeds: merged.feeds });
+      const details = [`已导入 ${merged.added} 个情报源`];
+      if (merged.duplicates) details.push(`跳过 ${merged.duplicates} 个重复项`);
+      if (parsed.invalidRows) details.push(`忽略 ${parsed.invalidRows} 行无效数据`);
+      setNotice(`${details.join('，')}。请保存系统配置后生效。`);
+      setError('');
+    } catch (reason) {
+      setNotice('');
+      setError(reason instanceof Error ? reason.message : '情报源导入失败。');
+    }
   };
   const updateTarget = (index: number, patch: Partial<MonitorTarget>) => {
     const monitor_watchlist = form.monitor_watchlist.map((target, targetIndex) =>
@@ -354,10 +394,31 @@ export function SystemConfigPage() {
               }
             />
           </div>
-          <button className="button" type="button" onClick={addFeed}>
-            <Plus size={14} />
-            添加 RSS/Atom
-          </button>
+          <div className="row intelligence-source-actions">
+            <button className="button" type="button" onClick={addFeed}>
+              <Plus size={14} />
+              添加 RSS/Atom
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={() => sourceFileInputRef.current?.click()}
+            >
+              <Upload size={14} />
+              导入 CSV
+            </button>
+            <button className="button" type="button" onClick={exportSources}>
+              <Download size={14} />
+              导出 CSV
+            </button>
+            <input
+              ref={sourceFileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              onChange={(event) => void importSources(event)}
+            />
+          </div>
         </div>
         {form.intelligence.feeds.length ? (
           <div className="intelligence-source-list">

@@ -3569,6 +3569,10 @@ textarea {
   min-width: 150px;
 }
 
+.intelligence-source-actions {
+  margin-left: auto;
+}
+
 .intelligence-source-list {
   display: grid;
   gap: 0;
@@ -3649,6 +3653,11 @@ textarea {
   .intelligence-source-row {
     grid-template-columns: 1fr 38px;
     align-items: end;
+  }
+
+  .intelligence-source-actions {
+    width: 100%;
+    margin-left: 0;
   }
 
   .intelligence-source-row .field,
