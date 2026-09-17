@@ -1,0 +1,498 @@
+.alphalab-page {
+  min-width: 0;
+}
+
+.alphalab-query-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.alphalab-query-status .button {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.alphalab-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.alphalab-status-dot.error {
+  background: var(--danger);
+}
+
+.alphalab-spin {
+  animation: alphalab-spin 0.9s linear infinite;
+}
+
+@keyframes alphalab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.alphalab-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 76px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--muted);
+  padding: 20px;
+  text-align: center;
+}
+
+.alphalab-state-error {
+  color: var(--danger);
+  border-color: #f2b8b5;
+  background: var(--danger-soft);
+}
+
+.alphalab-state-empty {
+  color: var(--muted);
+}
+
+.alphalab-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.alphalab-metric {
+  min-width: 0;
+}
+
+.alphalab-metric-value {
+  margin-top: 7px;
+  color: var(--heading);
+  font-size: 24px;
+  font-weight: 750;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-metric-detail {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-form-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.alphalab-json-field {
+  grid-column: 1 / -1;
+}
+
+.alphalab-json-field textarea {
+  min-height: 180px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.alphalab-checkbox {
+  align-self: end;
+  min-height: 38px;
+}
+
+.alphalab-form-actions {
+  margin-top: 14px;
+}
+
+.alphalab-table {
+  min-width: 1060px;
+  font-variant-numeric: tabular-nums;
+}
+
+.alphalab-table tbody tr {
+  cursor: pointer;
+}
+
+.alphalab-table .selected-row {
+  background: rgba(223, 241, 236, 0.48);
+}
+
+.alphalab-table .selected-row:hover {
+  background: rgba(223, 241, 236, 0.66);
+}
+
+.alphalab-cell-main {
+  color: var(--heading);
+  font-weight: 650;
+}
+
+.alphalab-compact-cell {
+  max-width: 220px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-formula-cell {
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+}
+
+.alphalab-progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 150px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.alphalab-progress-cell .progress {
+  flex: 1;
+  min-width: 80px;
+}
+
+.alphalab-status-running,
+.alphalab-status-info {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.alphalab-status-ok {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.alphalab-status-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.alphalab-status-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.alphalab-status-neutral {
+  color: #55636f;
+  background: #e9edf1;
+}
+
+.alphalab-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 260px;
+  color: var(--muted);
+}
+
+.alphalab-search input,
+.alphalab-signal-filter {
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.alphalab-detail-panel {
+  min-width: 0;
+}
+
+.alphalab-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.alphalab-detail-metrics .alphalab-metric {
+  border-top: 2px solid var(--accent-soft);
+  padding-top: 10px;
+}
+
+.alphalab-detail-metrics .alphalab-metric-value {
+  font-size: 17px;
+}
+
+.alphalab-formula {
+  display: grid;
+  gap: 8px;
+  border-left: 3px solid var(--accent);
+  background: var(--panel-muted);
+  padding: 12px 14px;
+}
+
+.alphalab-formula .label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.alphalab-formula .code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.alphalab-token-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.alphalab-subsection {
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.alphalab-subsection > .section-title {
+  margin-bottom: 10px;
+}
+
+.alphalab-detail-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.alphalab-json {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #f8fafb;
+  padding: 12px;
+  color: #3b4a56;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.alphalab-reference {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 10px;
+  border-left: 2px solid var(--accent-soft);
+  padding: 9px 10px;
+}
+
+.alphalab-reference strong {
+  color: var(--heading);
+}
+
+.alphalab-inline-error {
+  border: 1px solid #f2b8b5;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 10px 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-chart {
+  width: 100%;
+  height: 320px;
+  min-width: 0;
+}
+
+.alphalab-chart-small {
+  height: 260px;
+}
+
+.alphalab-return-list {
+  display: grid;
+  gap: 7px;
+}
+
+.alphalab-return-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #eef1f4;
+  padding: 6px 0;
+  font-size: 12px;
+}
+
+.alphalab-return-list > div:last-child {
+  border-bottom: 0;
+}
+
+.alphalab-return-list strong,
+.positive,
+.negative {
+  font-variant-numeric: tabular-nums;
+}
+
+.positive {
+  color: var(--accent);
+}
+
+.negative {
+  color: var(--danger);
+}
+
+.alphalab-direction {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.alphalab-direction.long {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.alphalab-direction.short {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.alphalab-direction.flat {
+  color: #55636f;
+  background: #e9edf1;
+}
+
+.alphalab-watch-table td {
+  vertical-align: middle;
+}
+
+.alphalab-watch-list {
+  display: grid;
+  gap: 6px;
+}
+
+.alphalab-watch-list > * {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+}
+
+.alphalab-watch-item {
+  width: 100%;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alphalab-watch-item:hover {
+  background: #f7f9fa;
+}
+
+.alphalab-watch-item.selected {
+  border-color: #b7d9cf;
+  background: var(--accent-soft);
+}
+
+.alphalab-watch-signal {
+  gap: 8px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.alphalab-watch-time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.alphalab-watch-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.alphalab-watch-actions .button {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.alphalab-signal-filter {
+  width: 260px;
+}
+
+@media (max-width: 1180px) {
+  .alphalab-metric-grid,
+  .alphalab-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .alphalab-query-status {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .alphalab-detail-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .alphalab-search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .alphalab-search input {
+    flex: 1;
+  }
+}
+
+@media (max-width: 700px) {
+  .alphalab-metric-grid,
+  .alphalab-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .alphalab-json-field {
+    grid-column: auto;
+  }
+
+  .alphalab-query-status {
+    justify-content: flex-start;
+  }
+
+  .alphalab-query-status .button {
+    margin-left: auto;
+  }
+
+  .alphalab-chart {
+    height: 260px;
+  }
+
+  .alphalab-signal-filter {
+    width: 100%;
+  }
+}
