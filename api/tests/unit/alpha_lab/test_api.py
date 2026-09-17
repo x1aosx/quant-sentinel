@@ -12,6 +12,7 @@ def test_alpha_lab_api_training_strategy_backtest_and_realtime(tmp_path) -> None
         dataset = client.post("/api/v1/datasets/sample", json={"timeframe": "1d"})
         assert dataset.status_code == 200, dataset.text
         dataset_id = dataset.json()["id"]
+        dataset_title = dataset.json()["title"]
 
         overview = client.get("/api/v1/alphalab/overview")
         assert overview.status_code == 200, overview.text
@@ -20,9 +21,6 @@ def test_alpha_lab_api_training_strategy_backtest_and_realtime(tmp_path) -> None
         created = client.post(
             "/api/v1/alphalab/training/runs",
             json={
-                "name": "alpha smoke",
-                "symbols": ["DEMO.RESEARCH"],
-                "timeframe": "1d",
                 "data_snapshot_id": dataset_id,
                 "total_steps": 1,
                 "batch_size": 2,
@@ -31,9 +29,14 @@ def test_alpha_lab_api_training_strategy_backtest_and_realtime(tmp_path) -> None
             },
         )
         assert created.status_code == 200, created.text
-        run_id = created.json()["id"]
+        created_run = created.json()
+        run_id = created_run["id"]
+        assert created_run["name"] == dataset_title
+        assert created_run["dataset_id"] == dataset_id
+        assert created_run["symbol"] == "DEMO.RESEARCH"
+        assert created_run["timeframe"] == "1d"
 
-        run = created.json()
+        run = created_run
         deadline = time.time() + 10
         while time.time() < deadline:
             response = client.get(f"/api/v1/alphalab/training/runs/{run_id}")
@@ -43,24 +46,28 @@ def test_alpha_lab_api_training_strategy_backtest_and_realtime(tmp_path) -> None
                 break
             time.sleep(0.05)
         assert run["status"] == "SUCCEEDED", run
+        assert run["name"] == dataset_title
+        assert run["dataset_id"] == dataset_id
 
         strategies = client.get("/api/v1/alphalab/strategies")
         assert strategies.status_code == 200, strategies.text
         items = strategies.json()["items"]
         assert items
         strategy = items[0]
+        assert strategy["name"] == dataset_title
+        assert strategy["data_snapshot_id"] == dataset_id
 
         backtest = client.post(
             "/api/v1/alphalab/backtests",
             json={
                 "strategy_id": strategy["strategy_id"],
-                "data_snapshot_id": dataset_id,
                 "initial_capital": 100_000,
                 "commission_pct": 0.03,
                 "slippage_pct": 0.02,
             },
         )
         assert backtest.status_code == 200, backtest.text
+        assert backtest.json()["dataset_id"] == dataset_id
         assert backtest.json()["metrics"]["trade_count"] >= 0
 
         watch = client.post(
