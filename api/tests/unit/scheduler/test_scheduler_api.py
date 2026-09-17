@@ -33,6 +33,9 @@ def test_scheduler_api_is_available_when_enabled(tmp_path) -> None:
             "intelligence.collect",
             "intelligence.process",
             "intelligence.brief.morning",
+            "alpha.training.run",
+            "alpha.backtest.run",
+            "alpha.realtime.evaluate",
         }
 
         created = client.post(

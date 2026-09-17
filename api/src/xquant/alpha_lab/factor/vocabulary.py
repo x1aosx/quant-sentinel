@@ -8,9 +8,13 @@ from .feature_registry import FEATURE_REGISTRY
 from .operator_registry import OPERATOR_REGISTRY
 
 
-def compute_vocab_version(token_names: tuple[str, ...]) -> str:
-    digest = hashlib.sha256("\n".join(token_names).encode("utf-8")).hexdigest()
-    return f"v{digest[:12]}"
+def compute_vocab_version(
+    token_names: tuple[str, ...],
+    runtime_version: str = "xqs-alpha-runtime-v1",
+) -> str:
+    semantic_payload = "\n".join((runtime_version, *token_names))
+    digest = hashlib.sha256(semantic_payload.encode("utf-8")).hexdigest()
+    return f"xqs-v{digest[:12]}"
 
 
 @dataclass(frozen=True)
@@ -19,7 +23,7 @@ class FactorSchema:
     feature_registry_hash: str
     operator_registry_hash: str
     token_names: tuple[str, ...]
-    runtime_version: str = "alpha-lab-runtime-v1"
+    runtime_version: str = "xqs-alpha-runtime-v1"
 
     def verify(self, artifact_version: str) -> None:
         if artifact_version != self.schema_version:

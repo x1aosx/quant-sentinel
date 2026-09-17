@@ -37,6 +37,9 @@ class InMemoryRealtimeWatchRepository:
     def list(self) -> list[RealtimeWatch]:
         return list(self._watches.values())
 
+    def delete(self, watch_id: str) -> bool:
+        return self._watches.pop(watch_id, None) is not None
+
 
 class FileRealtimeWatchRepository:
     """Durable watch state kept under AlphaLabSettings.artifact_root."""
@@ -95,6 +98,13 @@ class FileRealtimeWatchRepository:
             for path in sorted(self.root.glob("*.json"))
         ]
 
+    def delete(self, watch_id: str) -> bool:
+        path = self._path(watch_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
 
 @runtime_checkable
 class SignalStore(Protocol):
@@ -119,6 +129,14 @@ class InMemorySignalStore:
             return existing, False
         self._signals[signal.signal_key] = signal
         return signal, True
+
+    def list(self, *, limit: int | None = None) -> list[SignalRecord]:
+        records = sorted(
+            self._signals.values(),
+            key=lambda item: (item.generated_at, item.signal_key),
+            reverse=True,
+        )
+        return records[:limit] if limit is not None else records
 
 
 class FileSignalStore:
@@ -179,6 +197,19 @@ class FileSignalStore:
                 if os.path.exists(temporary_name):
                     os.unlink(temporary_name)
             return signal, True
+
+    def list(self, *, limit: int | None = None) -> list[SignalRecord]:
+        if not self.root.exists():
+            return []
+        records = [
+            SignalRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            for path in self.root.glob("*.json")
+        ]
+        records.sort(
+            key=lambda item: (item.generated_at, item.signal_key),
+            reverse=True,
+        )
+        return records[:limit] if limit is not None else records
 
 
 class InMemoryEventPublisher:

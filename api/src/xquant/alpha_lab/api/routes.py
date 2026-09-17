@@ -150,8 +150,14 @@ def evaluate_realtime(
 def list_realtime_signals(
     service: AlphaLabServiceDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    watch_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    return {"items": service.list_realtime_signals(limit=limit)}
+    return {
+        "items": service.list_realtime_signals(
+            limit=limit,
+            watch_id=watch_id,
+        )
+    }
 
 
 def alpha_lab_enabled(settings: AlphaLabSettings) -> bool:

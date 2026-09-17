@@ -54,7 +54,7 @@ class MiningSettings:
 
 @dataclass(frozen=True)
 class AlphaLabSettings:
-    enabled: bool = False
+    enabled: bool = True
     execution_enabled: bool = False
     artifact_root: Path = Path("data/alpha_lab")
     snapshot_root: Path = Path("data/alpha_lab/snapshots")
@@ -63,7 +63,7 @@ class AlphaLabSettings:
     @classmethod
     def from_env(cls) -> AlphaLabSettings:
         return cls(
-            enabled=_env_bool("ALPHA_LAB_ENABLED", False),
+            enabled=_env_bool("ALPHA_LAB_ENABLED", True),
             execution_enabled=_env_bool("ALPHA_LAB_EXECUTION_ENABLED", False),
             artifact_root=Path(
                 os.getenv("ALPHA_LAB_ARTIFACT_ROOT", "data/alpha_lab")

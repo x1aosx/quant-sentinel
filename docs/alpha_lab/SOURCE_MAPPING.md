@@ -30,8 +30,9 @@ behavior map, not a source-copy map.
 
 ## Vocabulary
 
-The ordered feature and operator registry is the compatibility boundary. The
-active registry is:
+The ordered feature and operator registry is the migration boundary. The
+independent runtime uses a distinct schema version until parity fixtures prove
+semantic equivalence. The active registry is:
 
 ```text
 feature token range: [0, 64]
@@ -45,6 +46,10 @@ The concrete upstream names and ordering are represented by the X-Quant
 registry. Changing a name or its order produces a different vocabulary version.
 Production artifacts with a different version must fail before consuming any
 token.
+
+Current status is intentionally "same token vocabulary, independent semantics,
+no upstream artifact compatibility". Importing an upstream `v9217a2c0d91a`
+artifact must hard fail rather than silently execute different formulas.
 
 ## Data Boundary
 

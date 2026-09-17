@@ -190,3 +190,36 @@ def test_metrics_robustness_and_report_are_finite_and_serializable() -> None:
         for item in report.robustness["cost_stress"]
     }
     assert stressed[2.0]["cost_total"] > stressed[1.0]["cost_total"]
+
+
+def test_multi_symbol_backtest_uses_each_symbol_price_series() -> None:
+    base = _frame()
+    second_close = base.close[0] * 1.5 + 10.0
+    frame = BarFrame(
+        symbol="PAIR",
+        timeframe=base.timeframe,
+        open=np.stack([base.open[0], base.open[0] * 1.5 + 10.0], axis=0),
+        high=np.stack([base.high[0], base.high[0] * 1.5 + 10.0], axis=0),
+        low=np.stack([base.low[0], base.low[0] * 1.5 + 10.0], axis=0),
+        close=np.stack([base.close[0], second_close], axis=0),
+        volume=np.stack([base.volume[0], base.volume[0] * 2.0], axis=0),
+        time=np.stack([base.time[0], base.time[0]], axis=0),
+        is_closed=np.stack([base.is_closed[0], base.is_closed[0]], axis=0),
+        source="test",
+    )
+    signals = np.zeros(frame.close.shape, dtype=np.float64)
+    signals[0, 3:8] = 1.0
+    signals[1, 6:10] = 1.0
+
+    report = BacktestEngine(formula_tokens=[0]).run_positions(
+        frame,
+        signals,
+        symbols=["A", "B"],
+        include_robustness=False,
+    )
+
+    second_execution = next(
+        item for item in report.executions if item.symbol == "B"
+    )
+    assert second_execution.execution_bar == 7
+    assert second_execution.price == frame.open[1, 7]

@@ -37,7 +37,7 @@ def _frame(n_bars: int = 260) -> BarFrame:
 def test_registry_and_vocabulary_are_deterministic() -> None:
     assert len(FEATURE_REGISTRY.names) == 65
     assert len(OPERATOR_REGISTRY.names) == 62
-    assert FORMULA_VOCAB.schema_version.startswith("v")
+    assert FORMULA_VOCAB.schema_version.startswith("xqs-v")
     assert len(FORMULA_VOCAB.token_names) == 127
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from xquant.alpha_lab.api import router as alpha_lab_router
+
 from .ai import router as ai_router
 from .analysis import router as analysis_router
 from .dashboard import router as dashboard_router
@@ -16,6 +18,7 @@ from .stock_analysis import router as stock_analysis_router
 from .system import router as system_router
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(alpha_lab_router)
 api_router.include_router(analysis_router)
 api_router.include_router(ai_router)
 api_router.include_router(dashboard_router)

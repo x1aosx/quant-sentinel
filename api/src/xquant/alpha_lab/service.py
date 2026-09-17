@@ -150,5 +150,10 @@ class AlphaLabService:
     def evaluate_realtime(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.realtime.evaluate(payload)
 
-    def list_realtime_signals(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        return self.realtime.list_signals(limit=limit)
+    def list_realtime_signals(
+        self,
+        *,
+        limit: int = 200,
+        watch_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.realtime.list_signals(limit=limit, watch_id=watch_id)

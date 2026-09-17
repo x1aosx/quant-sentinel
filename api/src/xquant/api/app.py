@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from xquant.ai.coordinator import MonitorManager
-from xquant.intelligence import register_intelligence_tasks
-from xquant.marketdata.tasks import register_market_tasks
+from xquant.alpha_lab.config import AlphaLabSettings
+from xquant.alpha_lab.runtime import build_alpha_lab_runtime
 from xquant.notifications.feishu import send_feishu_message
 from xquant.registry import Database
 from xquant.scheduler.application import TaskRegistry
 from xquant.scheduler.runtime import build_scheduler_runtime
 from xquant.storage import StorageSettings
 from xquant.system_config import SystemConfigStore
+from xquant.task_bootstrap import register_all_tasks
 
 from .intelligence_runtime import build_intelligence_runtime
 from .routes import api_router
@@ -32,6 +34,15 @@ def create_app(
         config_path = db_path.with_name("system-settings.json")
     system_config = SystemConfigStore(config_path)
     intelligence_runtime = build_intelligence_runtime(db, settings, system_config)
+    alpha_lab_settings = AlphaLabSettings.from_env()
+    if db_path is not None:
+        artifact_root = db_path.with_name("alpha_lab")
+        alpha_lab_settings = replace(
+            alpha_lab_settings,
+            artifact_root=artifact_root,
+            snapshot_root=artifact_root / "snapshots",
+        )
+    alpha_lab_runtime = build_alpha_lab_runtime(db, alpha_lab_settings)
 
     def notify_monitor(record, _target, _state):
         feishu = system_config.settings.feishu
@@ -49,8 +60,12 @@ def create_app(
     monitor = MonitorManager(db, notification_callback=notify_monitor)
     scheduler_registry = TaskRegistry()
     if settings.scheduler.enabled:
-        register_market_tasks(scheduler_registry, db)
-        register_intelligence_tasks(scheduler_registry, intelligence_runtime.service)
+        register_all_tasks(
+            scheduler_registry,
+            db,
+            intelligence_service=intelligence_runtime.service,
+            alpha_lab_runtime=alpha_lab_runtime,
+        )
     scheduler_runtime = build_scheduler_runtime(
         db,
         settings,
@@ -70,6 +85,8 @@ def create_app(
         finally:
             if scheduler_runtime is not None:
                 await scheduler_runtime.shutdown()
+            if alpha_lab_runtime is not None:
+                alpha_lab_runtime.shutdown()
             monitor.stop()
             close = getattr(db, "close", None)
             if callable(close):
@@ -82,6 +99,10 @@ def create_app(
     app.state.monitor = monitor
     app.state.intelligence_service = intelligence_runtime.api_service
     app.state.discovery_service = intelligence_runtime.discovery_service
+    app.state.alpha_lab_runtime = alpha_lab_runtime
+    app.state.alpha_lab_service = (
+        alpha_lab_runtime.service if alpha_lab_runtime is not None else None
+    )
     app.state.scheduler_runtime = scheduler_runtime
     app.add_middleware(
         CORSMiddleware,

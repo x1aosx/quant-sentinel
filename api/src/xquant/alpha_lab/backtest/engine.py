@@ -222,6 +222,7 @@ class BacktestEngine:
             standalone = self._run_symbol(
                 symbol=symbol,
                 frame=frame,
+                symbol_index=index,
                 signal_positions=signal_positions[index],
                 sessions=sessions,
                 position_scale=1.0,
@@ -230,6 +231,7 @@ class BacktestEngine:
             portfolio = self._run_symbol(
                 symbol=symbol,
                 frame=frame,
+                symbol_index=index,
                 signal_positions=signal_positions[index],
                 sessions=sessions,
                 position_scale=1.0 / max(n_symbols, 1),
@@ -322,6 +324,7 @@ class BacktestEngine:
         *,
         symbol: str,
         frame: BarFrame,
+        symbol_index: int,
         signal_positions: np.ndarray,
         sessions: np.ndarray,
         position_scale: float,
@@ -333,9 +336,9 @@ class BacktestEngine:
         scheduled = self.execution_model.schedule(signals[None, :])[0]
         target_positions = scheduled * position_scale
 
-        open_prices = frame.open[0]
-        close_prices = frame.close[0]
-        times = frame.time[0]
+        open_prices = frame.open[symbol_index]
+        close_prices = frame.close[symbol_index]
+        times = frame.time[symbol_index]
         n_bars = frame.n_bars
         initial_equity = self.config.initial_equity
         equity = np.empty(n_bars, dtype=np.float64)

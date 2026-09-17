@@ -6,10 +6,13 @@ import signal
 import sys
 from collections.abc import Sequence
 
-from xquant.marketdata.tasks import register_market_tasks
+from xquant.alpha_lab.runtime import build_alpha_lab_runtime
+from xquant.api.intelligence_runtime import build_intelligence_runtime
 from xquant.registry import Database
 from xquant.scheduler.application import TaskRegistry
 from xquant.storage import StorageSettings
+from xquant.system_config import SystemConfigStore
+from xquant.task_bootstrap import register_all_tasks
 
 from .runtime import SchedulerRuntime, build_scheduler_runtime
 
@@ -100,8 +103,19 @@ async def _run_worker(
 def _load_runtime() -> tuple[SchedulerRuntime, object]:
     settings = StorageSettings.load()
     db = Database.from_settings(settings)
+    alpha_lab_runtime = build_alpha_lab_runtime(db)
+    intelligence_runtime = build_intelligence_runtime(
+        db,
+        settings,
+        SystemConfigStore(),
+    )
     registry = TaskRegistry()
-    register_market_tasks(registry, db)
+    register_all_tasks(
+        registry,
+        db,
+        intelligence_service=intelligence_runtime.service,
+        alpha_lab_runtime=alpha_lab_runtime,
+    )
     runtime = build_scheduler_runtime(db, settings, registry=registry)
     if runtime is None:
         raise SystemExit("scheduler is disabled (set SCHEDULER_ENABLED=true)")

@@ -30,10 +30,16 @@ Any future direct source reuse requires a separate license decision and review.
 - Factor formulas are token programs, not Python expressions.
 - The upstream active vocabulary contains 65 features and 62 operators.
 - Feature tokens occupy `[0, 64]`; operator tokens occupy `[65, 126]`.
+- X-Quant preserves the names and ordering as the migration vocabulary, but the
+  independent runtime intentionally derives a distinct schema version from
+  `xqs-alpha-runtime-v1` plus the token list.
+- The upstream token-only version is `v9217a2c0d91a`. It must not be treated as
+  compatible with the independent runtime until golden parity fixtures pass and
+  the semantic implementation hash is aligned.
 - Product behavior is intentionally independent of the upstream source:
   - `4.0-registry` vocabulary schema tag
   - deterministic vocabulary version derived from the ordered token names
-  - `StackVM` executes `[N, F, T]` feature tensors to `[N, T]`
+- `StackVM` executes `[N, F, T]` feature tensors to `[N, T]`
   - `tanh` maps factor values to continuous positions
   - minimum exposure is `0.05`
   - `LONG`, `SHORT`, and `FLAT` thresholds use `+/- min_exposure`
