@@ -1,6 +1,12 @@
 import { Navigate, createBrowserRouter } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { AIAnalysisPage } from './pages/AIAnalysisPage';
+import {
+  BacktestPage,
+  LiveMonitorPage,
+  StrategyPage,
+  TrainingPage,
+} from './pages/alphalab';
 import { DashboardPage } from './pages/DashboardPage';
 import { DataCenterPage } from './pages/DataCenterPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
@@ -23,6 +29,10 @@ export const router = createBrowserRouter(
         { path: 'analysis', element: <StockAnalysisWorkbenchPage /> },
         { path: 'ai', element: <AIAnalysisPage /> },
         { path: 'market-analysis', element: <MarketAnalysisPage /> },
+        { path: 'alphalab/training', element: <TrainingPage /> },
+        { path: 'alphalab/strategies', element: <StrategyPage /> },
+        { path: 'alphalab/backtest', element: <BacktestPage /> },
+        { path: 'alphalab/realtime', element: <LiveMonitorPage /> },
         { path: 'scheduler', element: <SchedulerPage /> },
         { path: 'support-resistance', element: <Navigate to="/market-analysis" replace /> },
         { path: 'price-action', element: <Navigate to="/market-analysis" replace /> },
