@@ -20,11 +20,13 @@ from .factor import (
     OperatorRegistry,
     SignalKernel,
 )
+from .service import AlphaLabService
 
 __all__ = [
     "FEATURE_REGISTRY",
     "FORMULA_VOCAB",
     "OPERATOR_REGISTRY",
+    "AlphaLabService",
     "AlphaLabSettings",
     "BacktestResult",
     "BarFrame",
