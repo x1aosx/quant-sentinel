@@ -36,7 +36,7 @@ def _env_float(name: str, default: float) -> float:
 class MiningSettings:
     """Deterministic defaults used by the clean-room AlphaLab implementation."""
 
-    training_min_bars: int = 3_000
+    training_min_bars: int = 300
     realtime_min_bars: int = 800
     max_formula_length: int = 12
     min_formula_length: int = 3
@@ -72,7 +72,7 @@ class AlphaLabSettings:
                 os.getenv("ALPHA_LAB_SNAPSHOT_ROOT", "data/alpha_lab/snapshots")
             ),
             mining=MiningSettings(
-                training_min_bars=_env_int("ALPHA_LAB_TRAINING_MIN_BARS", 3_000),
+                training_min_bars=_env_int("ALPHA_LAB_TRAINING_MIN_BARS", 300),
                 realtime_min_bars=_env_int("ALPHA_LAB_REALTIME_MIN_BARS", 800),
                 max_formula_length=_env_int("ALPHA_LAB_MAX_FORMULA_LENGTH", 12),
                 min_formula_length=_env_int("ALPHA_LAB_MIN_FORMULA_LENGTH", 3),

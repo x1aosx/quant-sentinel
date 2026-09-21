@@ -38,6 +38,14 @@ import '../../styles/alphalab.css';
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'QUEUED', 'RUNNING']);
 
+// 训练所需最少 bar 数。仅用于前端提示，与后端 training_min_bars 对齐；
+// 最终校验仍以后端为准（不足时会返回 insufficient training bars 错误）。
+const TRAINING_MIN_BARS = 300;
+
+function hasEnoughBars(dataset: DatasetSummary): boolean {
+  return dataset.bar_count >= TRAINING_MIN_BARS;
+}
+
 interface TrainingFormState {
   name: string;
   datasetId: string;
@@ -64,7 +72,10 @@ function datasetOptionLabel(dataset: DatasetSummary): string {
   const title = dataset.title?.trim();
   const name = title || dataset.symbol;
   const symbol = title && title !== dataset.symbol ? ` · ${dataset.symbol}` : '';
-  return `${name}${symbol} · ${formatTimeframeLabel(dataset.timeframe)} · ${dataset.bar_count} 根`;
+  const warning = hasEnoughBars(dataset)
+    ? ''
+    : `（数据不足，仅 ${dataset.bar_count} 根，至少需 ${TRAINING_MIN_BARS} 根）`;
+  return `${name}${symbol} · ${formatTimeframeLabel(dataset.timeframe)} · ${dataset.bar_count} 根${warning}`;
 }
 
 function isActive(run: TrainingRun): boolean {
@@ -202,6 +213,12 @@ export function TrainingPage() {
     }
     if (!selectedDataset.timeframe.trim()) {
       setFormError('所选数据集缺少周期');
+      return;
+    }
+    if (!hasEnoughBars(selectedDataset)) {
+      setFormError(
+        `数据集仅 ${selectedDataset.bar_count} 根 bar，训练至少需要 ${TRAINING_MIN_BARS} 根，请选择更长历史的数据集`,
+      );
       return;
     }
     const seed = Number(form.seed);

@@ -130,30 +130,7 @@ class MiningEngine:
         return digest[:20]
 
     def _build_adaptive_plan(self, n_bars: int) -> WalkForwardPlan:
-        holdout = min(self.settings.holdout_bars, max(2, n_bars // 5))
-        development = n_bars - holdout
-        if development < 4:
-            raise ValueError("bar frame is too short to create training folds")
-        gap = min(self.settings.walk_forward_gap_bars, max(0, development // 50))
-        requested_folds = min(self.settings.walk_forward_folds, max(1, development // 4))
-        for folds in range(requested_folds, 0, -1):
-            validation = min(
-                self.settings.walk_forward_validation_bars,
-                max(2, (development - gap - 2) // folds),
-            )
-            available_train = development - gap - validation * folds
-            if available_train < 2:
-                continue
-            train = min(self.settings.walk_forward_train_bars, available_train)
-            return WalkForwardPlan.build(
-                n_bars,
-                train_bars=train,
-                validation_bars=validation,
-                gap=gap,
-                folds=folds,
-                holdout_bars=holdout,
-            )
-        raise ValueError("bar frame is too short for walk-forward validation")
+        return WalkForwardPlan.adaptive(n_bars, self.settings)
 
     def _factor(self, tokens: Sequence[int]) -> np.ndarray:
         return self.runtime.evaluate(

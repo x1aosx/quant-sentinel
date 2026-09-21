@@ -28,6 +28,7 @@ from .execution import (
 )
 from .factor import FORMULA_VOCAB, SignalKernel
 from .mining import MiningEngine
+from .mining.walk_forward import WalkForwardPlan
 from .realtime import (
     FileRealtimeWatchRepository,
     FileSignalStore,
@@ -162,10 +163,7 @@ class TrainingManager:
             payload.get("min_bars")
             or self.settings.mining.training_min_bars
         )
-        if frame.n_bars < minimum_bars and frame.symbol != "DEMO.RESEARCH":
-            raise InsufficientDataError(
-                f"insufficient training bars: {frame.n_bars}/{minimum_bars}"
-            )
+        self._validate_training_bars(frame, minimum_bars)
         total_steps = max(1, min(2_000, int(payload.get("total_steps") or 50)))
         batch_size = max(1, min(512, int(payload.get("batch_size") or 32)))
         seed = int(payload.get("seed", self.settings.mining.seed))
@@ -231,6 +229,26 @@ class TrainingManager:
             self._runs[run_id] = updated
             self._save_run(updated)
             return updated
+
+    def _validate_training_bars(self, frame: BarFrame, minimum_bars: int) -> None:
+        """训练数据量校验：minimum_bars 快速失败 + walk-forward 可行性。
+
+        可行性判断直接复用训练引擎的 WalkForwardPlan.adaptive，保证前置校验与
+        实际训练对「多少 bar 才够」的判断完全一致。DEMO.RESEARCH 样本数据集豁免。
+        """
+        if frame.n_bars < minimum_bars and frame.symbol != "DEMO.RESEARCH":
+            raise InsufficientDataError(
+                f"insufficient training bars: {frame.n_bars}/{minimum_bars}"
+            )
+        if frame.symbol == "DEMO.RESEARCH":
+            return
+        try:
+            WalkForwardPlan.adaptive(frame.n_bars, self.settings.mining)
+        except ValueError as exc:
+            raise InsufficientDataError(
+                f"insufficient training bars for walk-forward: "
+                f"n_bars={frame.n_bars} ({exc})"
+            ) from exc
 
     def _train(
         self,

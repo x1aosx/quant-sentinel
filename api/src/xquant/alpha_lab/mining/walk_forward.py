@@ -178,6 +178,44 @@ class WalkForwardPlan:
             holdout_bars=settings.holdout_bars,
         )
 
+    @classmethod
+    def adaptive(
+        cls,
+        n_bars: int,
+        settings: MiningSettings,
+    ) -> WalkForwardPlan:
+        """自适应构建 walk-forward 计划：数据不足时逐步降折、缩短训练窗。
+
+        训练引擎（MiningEngine）与训练前置校验（TrainingManager）共用此实现，
+        避免两处对「多少 bar 才够训练」的判断随时间漂移。
+
+        数据过短时抛 ValueError（调用方按语义转成 InsufficientDataError 或直接失败）。
+        """
+        holdout = min(settings.holdout_bars, max(2, n_bars // 5))
+        development = n_bars - holdout
+        if development < 4:
+            raise ValueError("bar frame is too short to create training folds")
+        gap = min(settings.walk_forward_gap_bars, max(0, development // 50))
+        requested_folds = min(settings.walk_forward_folds, max(1, development // 4))
+        for folds in range(requested_folds, 0, -1):
+            validation = min(
+                settings.walk_forward_validation_bars,
+                max(2, (development - gap - 2) // folds),
+            )
+            available_train = development - gap - validation * folds
+            if available_train < 2:
+                continue
+            train = min(settings.walk_forward_train_bars, available_train)
+            return cls.build(
+                n_bars,
+                train_bars=train,
+                validation_bars=validation,
+                gap=gap,
+                folds=folds,
+                holdout_bars=holdout,
+            )
+        raise ValueError("bar frame is too short for walk-forward validation")
+
 
 def build_walk_forward_plan(
     n_bars: int,
