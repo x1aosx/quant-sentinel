@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..config import AlphaLabSettings
+from ..errors import AlphaLabError
 
 router = APIRouter(prefix="/alphalab", tags=["alpha-lab"])
 
@@ -39,7 +40,7 @@ def create_training_run(
 ) -> dict[str, Any]:
     try:
         return service.create_training_run(payload)
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, AlphaLabError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
