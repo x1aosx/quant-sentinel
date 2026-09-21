@@ -303,11 +303,18 @@ export function AIAnalysisPage() {
   );
   const [scheduleReady, setScheduleReady] = useState(false);
   const [loadingRecordId, setLoadingRecordId] = useState('');
+  const [analysisDefaultPending, setAnalysisDefaultPending] = useState(true);
   const watchlistSnapshot = useRef('');
   const watchlistHydrated = useRef(false);
 
   const setMode = (value: AIAnalysisMode) =>
     updateAIAnalysisSession({ mode: value });
+  // 用户主动打开「单次分析」时，重新应用「分析周期默认天」；
+  // 分析执行、载入历史结果等内部流程不重置用户已选的周期。
+  const openSingleAnalysis = () => {
+    setAnalysisDefaultPending(true);
+    setMode('single');
+  };
   const setView = (value: ViewKey) => updateAIAnalysisSession({ view: value });
   const setDatasetId = (value: string) =>
     updateAIAnalysisSession({ datasetId: value });
@@ -336,6 +343,26 @@ export function AIAnalysisPage() {
   });
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
   const stockGroups = useMemo(() => groupDatasetsByStock(datasets), [datasets]);
+  const datasetById = useMemo(
+    () => new Map(datasets.map((dataset) => [dataset.id, dataset])),
+    [datasets],
+  );
+  const datasetTitleBySymbol = useMemo(() => {
+    const titleBySymbol = new Map<string, string>();
+    datasets.forEach((dataset) => {
+      const symbol = dataset.symbol.trim().toUpperCase();
+      const title = dataset.title?.trim();
+      if (symbol && title && !titleBySymbol.has(symbol)) {
+        titleBySymbol.set(symbol, title);
+      }
+    });
+    return titleBySymbol;
+  }, [datasets]);
+  const recordTitle = (item: AIRecordSummary) =>
+    item.title?.trim() ||
+    (item.dataset_id ? datasetById.get(item.dataset_id)?.title?.trim() : '') ||
+    datasetTitleBySymbol.get((item.symbol ?? '').trim().toUpperCase()) ||
+    '--';
   const historyTimeframes = useMemo(
     () => Array.from(new Set(datasets.map((dataset) => dataset.timeframe))).sort(),
     [datasets],
@@ -401,12 +428,31 @@ export function AIAnalysisPage() {
     if (!datasets.length) return;
     if (!datasetId || !datasets.some((dataset) => dataset.id === datasetId)) {
       const preferred =
+        datasetForTimeframe(stockGroups[0], DEFAULT_ANALYSIS_TIMEFRAME) ||
         datasets.find((dataset) => dataset.timeframe === DEFAULT_ANALYSIS_TIMEFRAME) ||
         preferredDataset(stockGroups[0]) ||
         datasets[0];
       setDatasetId(preferred.id);
     }
   }, [datasetId, datasets, stockGroups]);
+
+  useEffect(() => {
+    if (!analysisDefaultPending || mode !== 'single' || running || !datasets.length) {
+      return;
+    }
+    const group = selectedGroup ?? stockGroups[0];
+    const daily = datasetForTimeframe(group, DEFAULT_ANALYSIS_TIMEFRAME);
+    setAnalysisDefaultPending(false);
+    if (daily && daily.id !== datasetId) setDatasetId(daily.id);
+  }, [
+    analysisDefaultPending,
+    mode,
+    running,
+    datasets,
+    stockGroups,
+    selectedGroup,
+    datasetId,
+  ]);
 
   useEffect(() => {
     if (!stockGroups.length) return;
@@ -808,11 +854,15 @@ export function AIAnalysisPage() {
     const group = findStockGroup(stockGroups, symbol);
     const dataset =
       datasetForTimeframe(group, selectedTimeframe) || preferredDataset(group);
+    // 用户已主动选择股票/周期，不再应用「默认天」。
+    setAnalysisDefaultPending(false);
     if (dataset) setDatasetId(dataset.id);
   };
 
   const selectAnalysisTimeframe = (timeframe: string) => {
     const dataset = datasetForTimeframe(selectedGroup, timeframe);
+    // 用户已主动选择周期，不再应用「默认天」。
+    setAnalysisDefaultPending(false);
     if (dataset) setDatasetId(dataset.id);
   };
 
@@ -841,7 +891,7 @@ export function AIAnalysisPage() {
       <div className="mode-switch">
         <button
           className={mode === 'single' ? 'mode-card active' : 'mode-card'}
-          onClick={() => setMode('single')}
+          onClick={openSingleAnalysis}
         >
           <Sparkles size={18} />
           <span>
@@ -1027,6 +1077,7 @@ export function AIAnalysisPage() {
                 <thead>
                   <tr>
                     <th>标的</th>
+                    <th>标题</th>
                     <th>周期</th>
                     <th>状态</th>
                     <th>决策</th>
@@ -1039,13 +1090,13 @@ export function AIAnalysisPage() {
                 <tbody>
                   {historyQuery.isLoading ? (
                     <tr>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="empty">正在加载分析结果...</div>
                       </td>
                     </tr>
                   ) : historyQuery.isError ? (
                     <tr>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="empty">
                           分析结果加载失败：
                           {historyQuery.error instanceof Error
@@ -1056,7 +1107,7 @@ export function AIAnalysisPage() {
                     </tr>
                   ) : (historyQuery.data?.items.length ?? 0) === 0 ? (
                     <tr>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="empty">还没有已保存的分析结果。</div>
                       </td>
                     </tr>
@@ -1074,6 +1125,7 @@ export function AIAnalysisPage() {
                           <td>
                             <strong>{item.symbol}</strong>
                           </td>
+                          <td>{recordTitle(item)}</td>
                           <td>{item.timeframe}</td>
                           <td>
                             <span

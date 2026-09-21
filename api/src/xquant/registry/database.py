@@ -551,16 +551,18 @@ class Database:
         normalized_limit = _normalize_record_limit(limit)
         normalized_offset = _normalize_record_offset(offset)
         columns = """
-            SELECT id::text, record_id, dataset_id, symbol, timeframe, status, created_at,
-                   duration_ms, decision_action, confidence
-            FROM research.ai_analysis_record
+            SELECT r.id::text, r.record_id, r.dataset_id, r.symbol, r.timeframe, r.status,
+                   r.created_at, r.duration_ms, r.decision_action, r.confidence,
+                   d.title AS title
+            FROM research.ai_analysis_record r
+            LEFT JOIN research.dataset d ON d.id::text = r.dataset_id
         """
         if dataset_id is not None:
             rows = self.postgres.query(
                 columns
                 + """
-                WHERE dataset_id = :dataset_id
-                ORDER BY created_at DESC, id DESC
+                WHERE r.dataset_id = :dataset_id
+                ORDER BY r.created_at DESC, r.id DESC
                 LIMIT :limit OFFSET :offset
                 """,
                 {
@@ -576,16 +578,16 @@ class Database:
                 "offset": normalized_offset,
             }
             if symbol is not None:
-                clauses.append("symbol = :symbol")
+                clauses.append("r.symbol = :symbol")
                 params["symbol"] = symbol
             if timeframe is not None:
-                clauses.append("timeframe = :timeframe")
+                clauses.append("r.timeframe = :timeframe")
                 params["timeframe"] = timeframe
             rows = self.postgres.query(
                 columns
                 + f"""
                 WHERE {' AND '.join(clauses)}
-                ORDER BY created_at DESC, id DESC
+                ORDER BY r.created_at DESC, r.id DESC
                 LIMIT :limit OFFSET :offset
                 """,
                 params,
@@ -594,7 +596,7 @@ class Database:
             rows = self.postgres.query(
                 columns
                 + """
-                ORDER BY created_at DESC, id DESC
+                ORDER BY r.created_at DESC, r.id DESC
                 LIMIT :limit OFFSET :offset
                 """,
                 {"limit": normalized_limit, "offset": normalized_offset},
@@ -610,6 +612,7 @@ class Database:
             "duration_ms",
             "decision_action",
             "confidence",
+            "title",
         )
         return [{field: row.get(field) for field in summary_fields} for row in rows]
 

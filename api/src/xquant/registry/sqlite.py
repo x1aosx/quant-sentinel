@@ -495,11 +495,16 @@ class Database:
         if dataset_id is not None:
             rows = conn.execute(
                 """
-                SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
-                       duration_ms, decision_action, confidence
+                SELECT ai_analysis_records.id, ai_analysis_records.record_id,
+                       ai_analysis_records.dataset_id, ai_analysis_records.symbol,
+                       ai_analysis_records.timeframe, ai_analysis_records.status,
+                       ai_analysis_records.created_at, ai_analysis_records.duration_ms,
+                       ai_analysis_records.decision_action, ai_analysis_records.confidence,
+                       d.title AS title
                 FROM ai_analysis_records
-                WHERE dataset_id = ?
-                ORDER BY created_at DESC, rowid DESC
+                LEFT JOIN datasets d ON d.id = ai_analysis_records.dataset_id
+                WHERE ai_analysis_records.dataset_id = ?
+                ORDER BY ai_analysis_records.created_at DESC, ai_analysis_records.rowid DESC
                 LIMIT ? OFFSET ?
                 """,
                 (dataset_id, normalized_limit, normalized_offset),
@@ -508,19 +513,24 @@ class Database:
             clauses: list[str] = []
             params: list[Any] = []
             if symbol is not None:
-                clauses.append("symbol = ?")
+                clauses.append("ai_analysis_records.symbol = ?")
                 params.append(symbol)
             if timeframe is not None:
-                clauses.append("timeframe = ?")
+                clauses.append("ai_analysis_records.timeframe = ?")
                 params.append(timeframe)
             params.extend((normalized_limit, normalized_offset))
             rows = conn.execute(
                 f"""
-                SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
-                       duration_ms, decision_action, confidence
+                SELECT ai_analysis_records.id, ai_analysis_records.record_id,
+                       ai_analysis_records.dataset_id, ai_analysis_records.symbol,
+                       ai_analysis_records.timeframe, ai_analysis_records.status,
+                       ai_analysis_records.created_at, ai_analysis_records.duration_ms,
+                       ai_analysis_records.decision_action, ai_analysis_records.confidence,
+                       d.title AS title
                 FROM ai_analysis_records
+                LEFT JOIN datasets d ON d.id = ai_analysis_records.dataset_id
                 WHERE {' AND '.join(clauses)}
-                ORDER BY created_at DESC, rowid DESC
+                ORDER BY ai_analysis_records.created_at DESC, ai_analysis_records.rowid DESC
                 LIMIT ? OFFSET ?
                 """,
                 params,
@@ -528,10 +538,15 @@ class Database:
         else:
             rows = conn.execute(
                 """
-                SELECT id, record_id, dataset_id, symbol, timeframe, status, created_at,
-                       duration_ms, decision_action, confidence
+                SELECT ai_analysis_records.id, ai_analysis_records.record_id,
+                       ai_analysis_records.dataset_id, ai_analysis_records.symbol,
+                       ai_analysis_records.timeframe, ai_analysis_records.status,
+                       ai_analysis_records.created_at, ai_analysis_records.duration_ms,
+                       ai_analysis_records.decision_action, ai_analysis_records.confidence,
+                       d.title AS title
                 FROM ai_analysis_records
-                ORDER BY created_at DESC, rowid DESC
+                LEFT JOIN datasets d ON d.id = ai_analysis_records.dataset_id
+                ORDER BY ai_analysis_records.created_at DESC, ai_analysis_records.rowid DESC
                 LIMIT ? OFFSET ?
                 """,
                 (normalized_limit, normalized_offset),

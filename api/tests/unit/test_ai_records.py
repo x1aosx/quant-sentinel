@@ -276,6 +276,54 @@ def test_sqlite_migration_collapses_existing_duplicate_analysis_records(
         database.get_analysis_record("legacy-old-row")
 
 
+def test_sqlite_analysis_records_include_dataset_title(tmp_path: Path) -> None:
+    database = SqliteDatabase(tmp_path / "quant.db")
+    database.insert_dataset(
+        {
+            "id": "dataset-titled",
+            "symbol": "600519.SH",
+            "title": "贵州茅台",
+            "timeframe": "1d",
+            "bars": [],
+        }
+    )
+    titled = database.save_analysis_record(
+        _record("ai-titled", "2026-01-04T00:00:00+00:00", symbol="600519.SH"),
+        dataset_id="dataset-titled",
+    )
+    orphan = database.save_analysis_record(
+        _record("ai-orphan", "2026-01-04T00:00:01+00:00", symbol="000001.SZ"),
+        dataset_id="dataset-missing",
+    )
+    unattached = database.save_analysis_record(
+        _record("ai-unattached", "2026-01-04T00:00:02+00:00", symbol="000002.SZ"),
+        dataset_id=None,
+    )
+
+    titled_items = database.list_analysis_records(dataset_id="dataset-titled")
+    assert [item["id"] for item in titled_items] == [titled["id"]]
+    assert titled_items[0]["title"] == "贵州茅台"
+
+    orphan_items = database.list_analysis_records(dataset_id="dataset-missing")
+    assert [item["id"] for item in orphan_items] == [orphan["id"]]
+    assert orphan_items[0]["title"] is None
+
+    unattached_items = database.list_analysis_records(symbol="000002.SZ")
+    assert [item["id"] for item in unattached_items] == [unattached["id"]]
+    assert unattached_items[0]["title"] is None
+
+    assert database.list_analysis_records(symbol="600519.SH")[0]["title"] == "贵州茅台"
+    titles_by_id = {
+        item["id"]: item["title"] for item in database.list_analysis_records()
+    }
+    assert titles_by_id == {
+        titled["id"]: "贵州茅台",
+        orphan["id"]: None,
+        unattached["id"]: None,
+    }
+    assert database.count_analysis_records() == 3
+
+
 def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
     postgres = FakePostgresStore()
     database = Database(
@@ -301,7 +349,8 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
 
     assert saved["dataset_id"] == "dataset-pg"
     assert replaced["dataset_id"] == "dataset-pg-latest"
-    assert items == [replaced]
+    # FakePostgresStore 不执行真实 SQL，LEFT JOIN 取不到数据集标题，title 恒为 None。
+    assert items == [{**replaced, "title": None}]
     assert detail["record"] == replacement
     assert detail["dataset_id"] == "dataset-pg-latest"
     assert database.list_analysis_records(dataset_id="dataset-pg") == []
@@ -324,6 +373,10 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
     assert "ON CONFLICT (symbol, timeframe) DO UPDATE" in insert_statements[0]
     assert "WHERE EXCLUDED.created_at >= current_record.created_at" in insert_statements[0]
     assert query_statements
+    assert any(
+        "LEFT JOIN research.dataset" in statement for statement in query_statements
+    )
+    assert any("d.title AS title" in statement for statement in query_statements)
 
     with pytest.raises(KeyError):
         database.get_analysis_record("missing")

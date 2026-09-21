@@ -517,6 +517,7 @@ export interface AIRecordSummary {
   id: string;
   dataset_id?: string | null;
   symbol: string;
+  title?: string | null;
   timeframe: string;
   status: string;
   created_at?: string | null;
