@@ -30,8 +30,9 @@ import {
 import type { DatasetSummary } from '../../types';
 import type { TrainingRun } from '../../types/alphalab/training';
 import {
-  DEFAULT_ANALYSIS_TIMEFRAME,
+  filterDailyDatasets,
   formatTimeframeLabel,
+  isDailyDataset,
 } from '../../utils/datasetDisplay';
 import '../../styles/alphalab.css';
 
@@ -119,15 +120,12 @@ export function TrainingPage() {
   });
 
   const runs = runsQuery.data ?? [];
-  const datasets = datasetsQuery.data?.items ?? [];
+  const dailyDatasets = filterDailyDatasets(datasetsQuery.data?.items ?? []);
 
   useEffect(() => {
-    if (!datasets.length || form.datasetId) return;
+    if (!dailyDatasets.length || form.datasetId) return;
     const dailyDataset =
-      datasets.find(
-        (dataset) =>
-          dataset.timeframe.trim().toLowerCase() === DEFAULT_ANALYSIS_TIMEFRAME,
-      ) ?? datasets[0];
+      dailyDatasets.find(isDailyDataset) ?? dailyDatasets[0];
     setForm((current) => {
       if (current.datasetId) return current;
       return {
@@ -136,8 +134,8 @@ export function TrainingPage() {
         name: dailyDataset.title?.trim() || dailyDataset.symbol.trim(),
       };
     });
-  }, [datasets, form.datasetId]);
-  const selectedDataset = datasets.find(
+  }, [dailyDatasets, form.datasetId]);
+  const selectedDataset = dailyDatasets.find(
     (dataset) => dataset.id === form.datasetId,
   );
   const selectedRun =
@@ -190,7 +188,7 @@ export function TrainingPage() {
     event.preventDefault();
     setFormError('');
     setActionMessage('');
-    if (!datasets.length) {
+    if (!dailyDatasets.length) {
       setFormError('暂无可用于训练的数据集，请先在数据中心导入行情');
       return;
     }
@@ -305,7 +303,7 @@ export function TrainingPage() {
                 id="alpha-training-dataset"
                 value={form.datasetId}
                 onChange={(event) => {
-                  const dataset = datasets.find(
+                  const dataset = dailyDatasets.find(
                     (item) => item.id === event.target.value,
                   );
                   setForm((current) => ({
@@ -319,7 +317,7 @@ export function TrainingPage() {
                 disabled={
                   datasetsQuery.isLoading ||
                   datasetsQuery.isError ||
-                  datasets.length === 0
+                  dailyDatasets.length === 0
                 }
               >
                 <option value="">
@@ -327,11 +325,11 @@ export function TrainingPage() {
                     ? '正在加载数据集...'
                     : datasetsQuery.isError
                       ? '数据集加载失败'
-                      : datasets.length
+                      : dailyDatasets.length
                         ? '请选择数据集'
                         : '暂无可用数据集'}
                 </option>
-                {datasets.map((dataset) => (
+                {dailyDatasets.map((dataset) => (
                   <option key={dataset.id} value={dataset.id}>
                     {datasetOptionLabel(dataset)}
                   </option>
@@ -356,7 +354,7 @@ export function TrainingPage() {
               ) : null}
               {!datasetsQuery.isLoading &&
               !datasetsQuery.isError &&
-              datasets.length === 0 ? (
+              dailyDatasets.length === 0 ? (
                 <div className="error-text">
                   暂无可用于训练的数据集，请先在数据中心导入行情。
                 </div>

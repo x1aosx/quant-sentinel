@@ -28,6 +28,18 @@ function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase();
 }
 
+export function isDailyDataset(dataset: DatasetSummary): boolean {
+  return (
+    dataset.timeframe.trim().toLowerCase() === DEFAULT_ANALYSIS_TIMEFRAME
+  );
+}
+
+export function filterDailyDatasets(
+  datasets: DatasetSummary[],
+): DatasetSummary[] {
+  return datasets.filter(isDailyDataset);
+}
+
 function timeframeOrder(value: string): number {
   const index = REALTIME_TIMEFRAMES.indexOf(value as (typeof REALTIME_TIMEFRAMES)[number]);
   if (index >= 0) return index;
