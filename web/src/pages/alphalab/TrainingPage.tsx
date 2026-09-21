@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Ban,
@@ -29,7 +29,10 @@ import {
 } from '../../components/alphalab/format';
 import type { DatasetSummary } from '../../types';
 import type { TrainingRun } from '../../types/alphalab/training';
-import { formatTimeframeLabel } from '../../utils/datasetDisplay';
+import {
+  DEFAULT_ANALYSIS_TIMEFRAME,
+  formatTimeframeLabel,
+} from '../../utils/datasetDisplay';
 import '../../styles/alphalab.css';
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'QUEUED', 'RUNNING']);
@@ -117,6 +120,23 @@ export function TrainingPage() {
 
   const runs = runsQuery.data ?? [];
   const datasets = datasetsQuery.data?.items ?? [];
+
+  useEffect(() => {
+    if (!datasets.length || form.datasetId) return;
+    const dailyDataset =
+      datasets.find(
+        (dataset) =>
+          dataset.timeframe.trim().toLowerCase() === DEFAULT_ANALYSIS_TIMEFRAME,
+      ) ?? datasets[0];
+    setForm((current) => {
+      if (current.datasetId) return current;
+      return {
+        ...current,
+        datasetId: dailyDataset.id,
+        name: dailyDataset.title?.trim() || dailyDataset.symbol.trim(),
+      };
+    });
+  }, [datasets, form.datasetId]);
   const selectedDataset = datasets.find(
     (dataset) => dataset.id === form.datasetId,
   );
@@ -370,6 +390,9 @@ export function TrainingPage() {
                 placeholder="选择数据集后自动填充"
                 readOnly
               />
+              <div className="muted">
+                训练默认使用日周期（1d）数据集，分钟周期仅用于盘中多周期分析。
+              </div>
             </div>
             <div className="field">
               <label htmlFor="alpha-training-snapshot">数据快照</label>
