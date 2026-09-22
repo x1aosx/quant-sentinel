@@ -386,8 +386,15 @@ export async function streamAIAnalysis(
     signal,
   });
   if (!response.ok || !response.body) {
-    const body = await response.json().catch(() => null);
-    throw new Error(body?.detail ?? `流式分析请求失败（${response.status}）`);
+    const raw = await response.text().catch(() => '');
+    let detail = '';
+    try {
+      const parsed = JSON.parse(raw) as { detail?: unknown } | null;
+      if (typeof parsed?.detail === 'string') detail = parsed.detail;
+    } catch {
+      // Not JSON (e.g. a plain-text 500) — fall back to the body snippet below.
+    }
+    throw new Error(detail || raw.trim().slice(0, 300) || `流式分析请求失败（${response.status}）`);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

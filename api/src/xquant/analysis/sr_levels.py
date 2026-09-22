@@ -116,7 +116,10 @@ def _normalize_bars(bars: Sequence[Mapping[str, Any]]) -> list[dict[str, float]]
             high = _as_float(_field(bar, ("high", "h")), "high")
             low = _as_float(_field(bar, ("low", "l")), "low")
             close = _as_float(_field(bar, ("close", "c")), "close")
-            volume = _as_float(_field(bar, ("volume", "vol", "v")), "volume")
+            volume = _as_float(_field_or_default(bar, ("volume", "vol", "v"), 0.0), "volume")
+        except KeyError as exc:
+            detail = exc.args[0] if exc.args else "缺少字段"
+            raise ValueError(f"第 {index + 1} 根K线数值无效：{detail}") from exc
         except (TypeError, ValueError) as exc:
             raise ValueError(f"第 {index + 1} 根K线数值无效：{exc}") from exc
 
@@ -143,6 +146,17 @@ def _field(bar: Mapping[str, Any], names: tuple[str, ...]) -> Any:
         if name in lowered and lowered[name] is not None:
             return lowered[name]
     raise KeyError("缺少字段 " + "/".join(names))
+
+
+def _field_or_default(bar: Mapping[str, Any], names: tuple[str, ...], default: Any) -> Any:
+    """Return the first present field, or ``default`` when every alias is absent.
+
+    Missing volume degrades to 0.0, matching ``price_action._parse_bars``.
+    """
+    try:
+        return _field(bar, names)
+    except KeyError:
+        return default
 
 
 def _as_float(value: Any, field_name: str) -> float:

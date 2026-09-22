@@ -116,8 +116,12 @@ def analyze_ai(
         record = run_two_stage(snapshot, ai_settings)
         _persist_record(db, record, dataset_id=str(dataset["summary"]["id"]))
         return record
+    except HTTPException:
+        raise
     except (TypeError, ValueError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/ai/analyze/stream")
@@ -142,8 +146,13 @@ def analyze_ai_stream(
             bars=dataset["bars"],
             settings=ai_settings,
         )
+    except HTTPException:
+        raise
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        # The response has not started yet, so report the real cause as JSON.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     def event_stream():
         try:
