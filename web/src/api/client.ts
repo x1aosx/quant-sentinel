@@ -15,6 +15,7 @@ import type {
   MarketEventListResponse,
   MonitorStatus,
   MorningBriefResponse,
+  ProviderTestResult,
   ScheduleDefinition,
   SchedulerTrigger,
   StockAnalysisAISummary,
@@ -255,6 +256,11 @@ export const api = {
     apiRequest<{ status: string; config: SystemConfig }>('/system/config/reset', {
       method: 'POST',
     }).then((result) => result.config),
+  testProvider: (payload: Record<string, unknown> = {}) =>
+    apiRequest<ProviderTestResult>('/system/config/test-provider', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   testFeishu: (payload: Record<string, unknown> = {}) =>
     apiRequest<{ sent: boolean; reason?: string; response?: unknown }>(
       '/system/config/test-feishu',

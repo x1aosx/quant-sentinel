@@ -478,6 +478,36 @@ def _post_chat_completion(
     raise ValueError("模型未返回内容")
 
 
+PROVIDER_TEST_SYSTEM_PROMPT = "你是连接测试助手，只回复 pong，不要输出其他内容。"
+PROVIDER_TEST_PROMPT = "ping"
+
+
+def test_provider_connection(
+    provider: AIProviderSettings,
+    *,
+    prompt: str | None = None,
+) -> dict[str, Any]:
+    """Send one minimal chat request to verify provider connectivity."""
+
+    messages = [
+        {"role": "system", "content": PROVIDER_TEST_SYSTEM_PROMPT},
+        {"role": "user", "content": str(prompt or "").strip() or PROVIDER_TEST_PROMPT},
+    ]
+    started = time.perf_counter()
+    reply = _post_chat_completion(provider, messages)
+    return {
+        "ok": True,
+        "model": str(reply.get("model") or provider.model),
+        "requested_model": provider.model,
+        "base_url": provider.base_url,
+        "latency_ms": reply.get("latency_ms")
+        or round((time.perf_counter() - started) * 1000, 2),
+        "reply": str(reply.get("content") or "").strip()[:500],
+        "usage": dict(reply.get("usage") or {}),
+        "request_id": str(reply.get("id") or ""),
+    }
+
+
 def call_chat_completion(
     provider: AIProviderSettings,
     messages: list[dict[str, str]],

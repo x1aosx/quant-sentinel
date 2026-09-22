@@ -1578,6 +1578,17 @@ textarea {
   line-height: 1.5;
 }
 
+.provider-test-row {
+  margin-top: 14px;
+}
+
+.provider-test-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .monitor-status-list {
   display: flex;
   flex-direction: column;

@@ -14,6 +14,7 @@ from .service import (
     normalize_ai_settings,
     run_two_stage,
     stream_chat_completion,
+    test_provider_connection,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "normalize_ai_settings",
     "run_two_stage",
     "stream_chat_completion",
+    "test_provider_connection",
 ]

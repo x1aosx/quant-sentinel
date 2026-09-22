@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+from xquant.ai.service import normalize_ai_settings, test_provider_connection
 from xquant.notifications.feishu import send_feishu_message
 from xquant.system_config import SystemConfigStore
 
@@ -36,6 +38,25 @@ def reset_config(
 ) -> dict[str, Any]:
     store.reset()
     return {"status": "ok", "config": store.public_payload()}
+
+
+@router.post("/config/test-provider")
+def test_provider(
+    store: Annotated[SystemConfigStore, Depends(get_system_config)],
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify the configured model endpoint with one minimal chat request."""
+
+    body = payload or {}
+    try:
+        settings = normalize_ai_settings(store.merge_provider_payload(body))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        result = test_provider_connection(settings.provider, prompt=body.get("prompt"))
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"大模型连接测试失败：{exc}") from exc
+    return {"status": "ok", **result}
 
 
 @router.post("/config/test-feishu")

@@ -566,6 +566,18 @@ export interface ProviderConfig {
   proxy_configured?: boolean;
 }
 
+export interface ProviderTestResult {
+  status: string;
+  ok: boolean;
+  model: string;
+  requested_model: string;
+  base_url: string;
+  latency_ms: number;
+  reply: string;
+  usage: Record<string, number>;
+  request_id: string;
+}
+
 export interface FeishuConfig {
   enabled: boolean;
   webhook_url: string;

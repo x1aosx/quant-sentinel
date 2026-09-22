@@ -7,6 +7,7 @@ import {
   Download,
   FileDown,
   Newspaper,
+  PlugZap,
   Plus,
   RefreshCcw,
   Save,
@@ -23,6 +24,7 @@ import type {
   IntelligenceFeedConfig,
   MonitorSchedule,
   MonitorTarget,
+  ProviderTestResult,
   SystemConfig,
 } from '../types';
 import {
@@ -90,6 +92,7 @@ export function SystemConfigPage() {
   const datasetQuery = useQuery({ queryKey: ['datasets'], queryFn: api.listDatasets });
   const [form, setForm] = useState<SystemConfig | null>(null);
   const [watchlistDatasetId, setWatchlistDatasetId] = useState('');
+  const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const sourceFileInputRef = useRef<HTMLInputElement>(null);
@@ -126,6 +129,22 @@ export function SystemConfigPage() {
     },
   });
 
+  const testProvider = useMutation({
+    mutationFn: () => api.testProvider({ provider: form?.provider ?? {} }),
+    onSuccess: (result) => {
+      setProviderTest(result);
+      setNotice(
+        `大模型连接正常：${result.model} · ${Math.round(result.latency_ms)} ms · 返回「${result.reply || '空响应'}」`,
+      );
+      setError('');
+    },
+    onError: (reason: Error) => {
+      setProviderTest(null);
+      setNotice('');
+      setError(reason.message);
+    },
+  });
+
   const testFeishu = useMutation({
     mutationFn: () => api.testFeishu(),
     onSuccess: (result) =>
@@ -150,8 +169,10 @@ export function SystemConfigPage() {
     );
   }
 
-  const updateProvider = (patch: Partial<SystemConfig['provider']>) =>
+  const updateProvider = (patch: Partial<SystemConfig['provider']>) => {
+    setProviderTest(null);
     setForm({ ...form, provider: { ...form.provider, ...patch } });
+  };
   const updateAnalysis = (patch: Partial<SystemConfig['analysis']>) =>
     setForm({ ...form, analysis: { ...form.analysis, ...patch } });
   const updateSchedule = (patch: Partial<MonitorSchedule>) =>
@@ -341,6 +362,30 @@ export function SystemConfigPage() {
                 启用思考模式
               </label>
             </div>
+          </div>
+          <div className="row provider-test-row">
+            <button
+              className="button"
+              type="button"
+              onClick={() => testProvider.mutate()}
+              disabled={testProvider.isPending}
+            >
+              <PlugZap size={14} />
+              {testProvider.isPending ? '测试中...' : '测试大模型连接'}
+            </button>
+            {providerTest ? (
+              <span className="provider-test-result">
+                <span className="badge badge-ok">连接正常</span>
+                <span className="muted">
+                  {providerTest.model} · {Math.round(providerTest.latency_ms)} ms · 返回「
+                  {providerTest.reply || '空响应'}」
+                </span>
+              </span>
+            ) : (
+              <span className="muted">
+                使用当前表单中的模型、Base URL、API Key 与代理发送一次最小请求，未保存的修改也会参与测试。
+              </span>
+            )}
           </div>
         </div>
 
