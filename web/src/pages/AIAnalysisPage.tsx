@@ -14,7 +14,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
-  Download,
   Eye,
   Gauge,
   History,
@@ -32,7 +31,6 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import { api, streamAIAnalysis } from '../api/client';
-import { TradingViewExchangeSelect } from '../components/TradingViewExchangeSelect';
 import { DecisionVisualization } from '../components/ai/DecisionVisualization';
 import { KlineChart } from '../components/KlineChart';
 import type {
@@ -283,12 +281,6 @@ export function AIAnalysisPage() {
     question,
     lastBatch,
   } = session;
-  const [importSymbol, setImportSymbol] = useState('GC=F');
-  const [importTimeframe, setImportTimeframe] = useState('1d');
-  const [importSource, setImportSource] = useState<
-    'yfinance' | 'akshare' | 'tradingview' | 'mt5'
-  >('yfinance');
-  const [importExchange, setImportExchange] = useState('');
   const [watchlist, setWatchlist] = useState<MonitorTarget[]>([]);
   const [watchlistSymbol, setWatchlistSymbol] = useState('');
   const [watchlistTimeframe, setWatchlistTimeframe] = useState(
@@ -516,24 +508,6 @@ export function AIAnalysisPage() {
     const timer = window.setTimeout(() => persistWatchlist(watchlist), 400);
     return () => window.clearTimeout(timer);
   }, [persistWatchlist, persistWatchlistPending, scheduleReady, watchlist]);
-
-  const importRemote = useMutation({
-    mutationFn: () =>
-      api.importRemoteDataset({
-        source: importSource,
-        symbol: importSymbol,
-        timeframe: importTimeframe,
-        lookback: 500,
-        exchange: importSource === 'tradingview' ? importExchange : undefined,
-      }),
-    onSuccess: (created) => {
-      setDatasetId(created.id);
-      setNotice(`行情已导入：${created.symbol} ${created.timeframe}`);
-      setError('');
-      void queryClient.invalidateQueries({ queryKey: ['datasets'] });
-    },
-    onError: (reason: Error) => setError(reason.message),
-  });
 
   const runAnalysis = async ({ resume = false }: { resume?: boolean } = {}) => {
     if (!datasetId) return;
@@ -913,73 +887,6 @@ export function AIAnalysisPage() {
 
       {mode === 'single' ? (
         <div className="stack">
-          <div className="grid grid-2">
-          <div className="panel">
-            <div className="section-title">
-              <Download size={15} />
-              行情准备
-            </div>
-            <div className="form-grid">
-              <div className="field">
-                <label htmlFor="ai-source">数据源</label>
-                <select
-                  id="ai-source"
-                  value={importSource}
-                  onChange={(event) =>
-                    setImportSource(
-                      event.target.value as 'yfinance' | 'akshare' | 'tradingview' | 'mt5',
-                    )
-                  }
-                >
-                  <option value="yfinance">YFinance</option>
-                  <option value="akshare">AkShare / A股</option>
-                  <option value="tradingview">TradingView</option>
-                  <option value="mt5">MT5</option>
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="ai-symbol">标的代码</label>
-                <input
-                  id="ai-symbol"
-                  value={importSymbol}
-                  onChange={(event) => setImportSymbol(event.target.value)}
-                  placeholder="GC=F、EURUSD=X 或 600519"
-                />
-              </div>
-              {importSource === 'tradingview' ? (
-                <div className="field">
-                  <label htmlFor="ai-exchange">交易所</label>
-                  <TradingViewExchangeSelect
-                    id="ai-exchange"
-                    value={importExchange}
-                    onChange={setImportExchange}
-                  />
-                </div>
-              ) : null}
-              <div className="field">
-                <label htmlFor="ai-timeframe">周期</label>
-                <select
-                  id="ai-timeframe"
-                  value={importTimeframe}
-                  onChange={(event) => setImportTimeframe(event.target.value)}
-                >
-                  {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map((timeframe) => (
-                    <option key={timeframe} value={timeframe}>
-                      {timeframe}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="row" style={{ marginTop: 14 }}>
-              <button className="button" onClick={() => importRemote.mutate()} disabled={importRemote.isPending}>
-                <Download size={14} />
-                {importRemote.isPending ? '下载中...' : '下载行情'}
-              </button>
-              <span className="muted">导入 500 根公开行情并更新该股票周期数据。</span>
-            </div>
-          </div>
-
           <div className="panel">
             <div className="section-title">
               <WandSparkles size={15} />
@@ -1036,7 +943,6 @@ export function AIAnalysisPage() {
             <p className="muted" style={{ marginBottom: 0 }}>
               模型、代理与飞书凭据在系统配置页统一维护。
             </p>
-          </div>
           </div>
           <div className="panel">
             <div className="section-title">
