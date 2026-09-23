@@ -1,4 +1,4 @@
-from .influxdb import InfluxDBStore
+from .influxdb import InfluxDBQueryError, InfluxDBStore
 from .postgres import PostgresStore
 from .redis_store import RedisStore
 from .settings import (
@@ -10,6 +10,7 @@ from .settings import (
 )
 
 __all__ = [
+    "InfluxDBQueryError",
     "InfluxDBStore",
     "InfluxSettings",
     "PostgresSettings",

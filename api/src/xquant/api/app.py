@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from xquant.ai.coordinator import MonitorManager
 from xquant.alpha_lab.config import AlphaLabSettings
@@ -14,7 +15,7 @@ from xquant.notifications.feishu import send_feishu_message
 from xquant.registry import Database
 from xquant.scheduler.application import TaskRegistry
 from xquant.scheduler.runtime import build_scheduler_runtime
-from xquant.storage import StorageSettings
+from xquant.storage import InfluxDBQueryError, StorageSettings
 from xquant.system_config import SystemConfigStore
 from xquant.task_bootstrap import register_all_tasks
 
@@ -93,6 +94,19 @@ def create_app(
                 close()
 
     app = FastAPI(title="X-Quant API", version="0.3.0", lifespan=lifespan)
+
+    @app.exception_handler(InfluxDBQueryError)
+    async def _handle_influx_unavailable(
+        _request: Request, exc: InfluxDBQueryError
+    ) -> JSONResponse:
+        # 行情存储故障属于上游依赖不可用，返回可读的 503 而不是裸 500。
+        detail = "行情存储（InfluxDB）不可用"
+        if exc.status_code is not None:
+            detail += f"，上游返回 HTTP {exc.status_code}"
+        if exc.detail:
+            detail += f"：{exc.detail}"
+        return JSONResponse(status_code=503, content={"detail": detail})
+
     app.state.db = db
     app.state.settings = settings
     app.state.system_config = system_config

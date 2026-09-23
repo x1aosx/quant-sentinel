@@ -9,6 +9,44 @@ import httpx
 
 from .settings import InfluxSettings
 
+# 上游错误正文只保留前若干字符，避免把整个响应体塞进接口详情。
+_MAX_ERROR_DETAIL_CHARS = 500
+
+
+class InfluxDBQueryError(RuntimeError):
+    """InfluxDB 的 HTTP 接口返回错误或不可达时抛出。
+
+    存储层不再把 ``httpx`` 的异常原样抛给调用方，上层可以据此返回
+    「依赖不可用」而不是一个无法解释的裸 500。
+    """
+
+    def __init__(
+        self,
+        operation: str,
+        detail: str,
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        self.operation = operation
+        self.detail = detail
+        self.status_code = status_code
+        suffix = f" (HTTP {status_code})" if status_code is not None else ""
+        message = f"InfluxDB {operation} failed{suffix}"
+        super().__init__(f"{message}: {detail}" if detail else message)
+
+
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        text = response.text
+    except (httpx.ResponseNotRead, UnicodeDecodeError):
+        # 读取上游正文失败不应掩盖真正的故障，退化为空详情。
+        return ""
+    return " ".join(text.split())[:_MAX_ERROR_DETAIL_CHARS]
+
+
+def _request_error(operation: str, exc: httpx.RequestError) -> InfluxDBQueryError:
+    return InfluxDBQueryError(operation, f"{type(exc).__name__}: {exc}")
+
 
 class InfluxDBStore:
     def __init__(self, settings: InfluxSettings, client: httpx.Client | None = None) -> None:
@@ -26,35 +64,66 @@ class InfluxDBStore:
     def write_line_protocol(self, lines: list[str]) -> int:
         if not lines:
             return 0
-        response = self._client.post(
-            self.settings.write_path,
-            params={"db": self.settings.database, "precision": "ns", "accept_partial": "false"},
-            content="\n".join(lines) + "\n",
-            headers={"Content-Type": "text/plain; charset=utf-8"},
-        )
-        response.raise_for_status()
+        try:
+            response = self._client.post(
+                self.settings.write_path,
+                params={
+                    "db": self.settings.database,
+                    "precision": "ns",
+                    "accept_partial": "false",
+                },
+                content="\n".join(lines) + "\n",
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise InfluxDBQueryError(
+                "write",
+                _error_detail(exc.response),
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise _request_error("write", exc) from exc
         return len(lines)
 
     def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        response = self._client.post(
-            self.settings.query_path,
-            json={
-                "db": self.settings.database,
-                "q": sql,
-                "params": params or {},
-                "format": "json",
-            },
-            headers={"Accept": "application/json"},
-        )
-        response.raise_for_status()
+        try:
+            response = self._client.post(
+                self.settings.query_path,
+                json={
+                    "db": self.settings.database,
+                    "q": sql,
+                    "params": params or {},
+                    "format": "json",
+                },
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise InfluxDBQueryError(
+                "query",
+                _error_detail(exc.response),
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise _request_error("query", exc) from exc
         payload = response.json()
         if not isinstance(payload, list):
             raise TypeError("InfluxDB query response must be a JSON array")
         return [dict(row) for row in payload]
 
     def health(self) -> dict[str, str]:
-        response = self._client.get("/health")
-        response.raise_for_status()
+        try:
+            response = self._client.get("/health")
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise InfluxDBQueryError(
+                "health",
+                _error_detail(exc.response),
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise _request_error("health", exc) from exc
         return {"status": "ok"}
 
     def close(self) -> None:

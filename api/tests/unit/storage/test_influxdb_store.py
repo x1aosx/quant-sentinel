@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from xquant.storage.influxdb import InfluxDBStore
+import httpx
+import pytest
+from pydantic import SecretStr
+
+from xquant.storage.influxdb import InfluxDBQueryError, InfluxDBStore
 from xquant.storage.settings import InfluxSettings
 
 
@@ -55,7 +59,7 @@ def test_influxdb_3_uses_write_lp_and_query_sql_paths() -> None:
         InfluxSettings(
             url="http://influx:8181",
             database="quant-sentinel",
-            token="secret",
+            token=SecretStr("secret"),
         ),
         client=FakeClient(),  # type: ignore[arg-type]
     )
@@ -69,3 +73,63 @@ def test_influxdb_3_uses_write_lp_and_query_sql_paths() -> None:
     assert calls[1]["path"] == "/api/v3/query_sql"
     assert calls[1]["json"]["format"] == "json"
     assert calls[1]["headers"] == {"Accept": "application/json"}
+
+
+def _status_error(status_code: int, body: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://influx:8181/api/v3/query_sql")
+    response = httpx.Response(status_code, request=request, text=body)
+    return httpx.HTTPStatusError("upstream error", request=request, response=response)
+
+
+class _FailingClient:
+    """抛出指定异常的 httpx.Client 替身。"""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def post(self, _path: str, **_kwargs: Any) -> Any:
+        raise self._error
+
+    def close(self) -> None:
+        return None
+
+
+def _store(error: Exception) -> InfluxDBStore:
+    return InfluxDBStore(
+        InfluxSettings(
+            url="http://influx:8181", database="quant-sentinel", token=SecretStr("secret")
+        ),
+        client=_FailingClient(error),  # type: ignore[arg-type]
+    )
+
+
+def test_query_turns_upstream_500_into_readable_error() -> None:
+    upstream = _status_error(
+        500,
+        "External error: Query would scan 432 Parquet files, exceeding the file limit.",
+    )
+
+    with pytest.raises(InfluxDBQueryError) as excinfo:
+        _store(upstream).query("SELECT 1", {"dataset_id": "dataset-1"})
+
+    assert excinfo.value.status_code == 500
+    assert "432 Parquet files" in excinfo.value.detail
+    assert str(excinfo.value).startswith("InfluxDB query failed (HTTP 500):")
+
+
+def test_write_turns_upstream_500_into_readable_error() -> None:
+    with pytest.raises(InfluxDBQueryError) as excinfo:
+        _store(_status_error(500, "write rejected")).write_line_protocol(["market_bar value=1i"])
+
+    assert excinfo.value.status_code == 500
+    assert excinfo.value.detail == "write rejected"
+    assert str(excinfo.value).startswith("InfluxDB write failed (HTTP 500):")
+
+
+def test_unreachable_influxdb_reports_without_status_code() -> None:
+    with pytest.raises(InfluxDBQueryError) as excinfo:
+        _store(httpx.ConnectError("connection refused")).query("SELECT 1")
+
+    assert excinfo.value.status_code is None
+    assert "ConnectError" in excinfo.value.detail
+    assert "connection refused" in excinfo.value.detail
