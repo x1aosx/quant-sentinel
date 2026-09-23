@@ -296,6 +296,9 @@ export function AIAnalysisPage() {
   );
   const [scheduleReady, setScheduleReady] = useState(false);
   const [loadingRecordId, setLoadingRecordId] = useState('');
+  const [deletingRecordId, setDeletingRecordId] = useState('');
+  // 当前展示的结果若来自「分析结果」列表，记录其列表条目 id，便于删除后同步清空视图。
+  const [loadedHistoryRecordId, setLoadedHistoryRecordId] = useState('');
   const [analysisDefaultPending, setAnalysisDefaultPending] = useState(true);
   const watchlistSnapshot = useRef('');
   const watchlistHydrated = useRef(false);
@@ -313,8 +316,10 @@ export function AIAnalysisPage() {
   const setView = (value: ViewKey) => updateAIAnalysisSession({ view: value });
   const setDatasetId = (value: string) =>
     updateAIAnalysisSession({ datasetId: value });
-  const setRecord = (value: AIAnalysisRecord | null) =>
+  const setRecord = (value: AIAnalysisRecord | null, historyRecordId = '') => {
+    setLoadedHistoryRecordId(historyRecordId);
     updateAIAnalysisSession({ record: value });
+  };
   const setStreamLog = (value: string | ((current: string) => string)) =>
     updateAIAnalysisSession((current) => ({
       streamLog: typeof value === 'function' ? value(current.streamLog) : value,
@@ -794,7 +799,7 @@ export function AIAnalysisPage() {
     setError('');
     try {
       const loaded = await api.getAIRecord(item.id);
-      setRecord(loaded);
+      setRecord(loaded, item.id);
       if (item.dataset_id) setDatasetId(item.dataset_id);
       setMode('single');
       setView('decision');
@@ -804,6 +809,32 @@ export function AIAnalysisPage() {
     } finally {
       setLoadingRecordId('');
     }
+  };
+
+  const deleteRecord = useMutation({
+    mutationFn: (item: AIRecordSummary) => api.deleteAIRecord(item.id),
+    onSuccess: (_, item) => {
+      if (loadedHistoryRecordId === item.id) setRecord(null);
+      setNotice(
+        `已删除分析结果：${item.symbol} ${formatTimeframeLabel(item.timeframe)}`,
+      );
+      setError('');
+      void queryClient.invalidateQueries({ queryKey: ['ai-records'] });
+    },
+    onError: (reason: Error) => {
+      setNotice('');
+      setError(`删除分析结果失败：${reason.message}`);
+    },
+    onSettled: () => setDeletingRecordId(''),
+  });
+
+  const handleDeleteRecord = (item: AIRecordSummary) => {
+    setError('');
+    setNotice('');
+    const target = `${item.symbol} ${formatTimeframeLabel(item.timeframe)}`;
+    if (!window.confirm(`确定删除“${target}”的分析结果吗？此操作无法撤销。`)) return;
+    setDeletingRecordId(item.id);
+    deleteRecord.mutate(item);
   };
 
   const chooseMonitorRecord = (
@@ -1060,17 +1091,30 @@ export function AIAnalysisPage() {
                           </td>
                           <td>{formatDateTime(item.created_at)}</td>
                           <td>
-                            <button
-                              className="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void loadHistoryRecord(item);
-                              }}
-                              disabled={loadingRecordId === item.id}
-                            >
-                              <Eye size={14} />
-                              {loadingRecordId === item.id ? '载入中...' : '载入'}
-                            </button>
+                            <div className="dataset-actions">
+                              <button
+                                className="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void loadHistoryRecord(item);
+                                }}
+                                disabled={loadingRecordId === item.id}
+                              >
+                                <Eye size={14} />
+                                {loadingRecordId === item.id ? '载入中...' : '载入'}
+                              </button>
+                              <button
+                                className="button button-danger"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDeleteRecord(item);
+                                }}
+                                disabled={deletingRecordId === item.id}
+                              >
+                                <Trash2 size={14} />
+                                {deletingRecordId === item.id ? '删除中...' : '删除'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

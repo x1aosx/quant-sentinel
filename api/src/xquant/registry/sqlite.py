@@ -618,6 +618,19 @@ class Database:
             "record": json.loads(row["record_json"]),
         }
 
+    def delete_analysis_record(self, record_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        cursor = conn.execute(
+            "DELETE FROM ai_analysis_records WHERE id = ?",
+            (record_id,),
+        )
+        if cursor.rowcount == 0:
+            conn.close()
+            raise KeyError(f"analysis record not found: {record_id}")
+        conn.commit()
+        conn.close()
+        return {"deleted": True, "id": record_id}
+
     def get_cached_json(self, key: str) -> Any | None:
         cache_key = (str(self.path.resolve()), key)
         now = time.monotonic()

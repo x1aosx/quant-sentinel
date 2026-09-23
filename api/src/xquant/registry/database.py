@@ -681,6 +681,30 @@ class Database:
             "record": payload,
         }
 
+    def delete_analysis_record(self, record_id: str) -> dict[str, Any]:
+        try:
+            UUID(record_id)
+        except ValueError as exc:
+            raise KeyError(f"analysis record not found: {record_id}") from exc
+        row = self.postgres.query_one(
+            """
+            SELECT id::text
+            FROM research.ai_analysis_record
+            WHERE id = CAST(:record_id AS uuid)
+            """,
+            {"record_id": record_id},
+        )
+        if row is None:
+            raise KeyError(f"analysis record not found: {record_id}")
+        self.postgres.execute(
+            """
+            DELETE FROM research.ai_analysis_record
+            WHERE id = CAST(:record_id AS uuid)
+            """,
+            {"record_id": record_id},
+        )
+        return {"deleted": True, "id": record_id}
+
     def storage_health(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
         checks = {

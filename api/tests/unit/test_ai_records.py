@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
+from xquant.api.app import create_app
 from xquant.registry.database import Database
 from xquant.registry.sqlite import Database as SqliteDatabase
 from xquant.storage import StorageSettings
@@ -58,6 +60,9 @@ class FakePostgresStore:
     ) -> None:
         values = dict(params or {})
         self.statements.append((statement, values))
+        if "DELETE FROM research.ai_analysis_record" in statement:
+            self.rows.pop(str(values.get("record_id") or ""), None)
+            return
         if "INSERT INTO research.ai_analysis_record" not in statement:
             return
         symbol = values.get("symbol")
@@ -380,6 +385,80 @@ def test_postgres_analysis_record_sql_path_with_fake_store() -> None:
 
     with pytest.raises(KeyError):
         database.get_analysis_record("missing")
+
+
+def test_sqlite_delete_analysis_record_removes_only_target(tmp_path: Path) -> None:
+    database = SqliteDatabase(tmp_path / "quant.db")
+    target = database.save_analysis_record(
+        _record("ai-delete", "2026-01-04T00:00:00+00:00"),
+        dataset_id="dataset-a",
+    )
+    kept = database.save_analysis_record(
+        _record("ai-keep", "2026-01-04T00:00:01+00:00", symbol="OTHER", timeframe="15m"),
+        dataset_id="dataset-b",
+    )
+
+    assert database.delete_analysis_record(target["id"]) == {
+        "deleted": True,
+        "id": target["id"],
+    }
+    assert [item["id"] for item in database.list_analysis_records()] == [kept["id"]]
+    assert database.count_analysis_records() == 1
+    with pytest.raises(KeyError):
+        database.get_analysis_record(target["id"])
+    with pytest.raises(KeyError):
+        database.delete_analysis_record(target["id"])
+    with pytest.raises(KeyError):
+        database.delete_analysis_record("missing")
+
+
+def test_postgres_delete_analysis_record_sql_path_with_fake_store() -> None:
+    postgres = FakePostgresStore()
+    database = Database(
+        settings=StorageSettings(storage_backend="postgres", auto_migrate=False),
+        postgres=postgres,  # type: ignore[arg-type]
+        redis_store=None,
+        influx=None,  # type: ignore[arg-type]
+    )
+    saved = database.save_analysis_record(
+        _record("ai-postgres-delete", "2026-01-04T00:00:00+00:00"),
+        dataset_id="dataset-pg",
+    )
+
+    assert database.delete_analysis_record(saved["id"]) == {
+        "deleted": True,
+        "id": saved["id"],
+    }
+    delete_statements = [
+        (statement, params)
+        for statement, params in postgres.statements
+        if "DELETE FROM research.ai_analysis_record" in statement
+        and "CAST(:record_id AS uuid)" in statement
+    ]
+    assert delete_statements
+    assert "CAST(:record_id AS uuid)" in delete_statements[0][0]
+    assert delete_statements[0][1] == {"record_id": saved["id"]}
+    assert database.list_analysis_records() == []
+    with pytest.raises(KeyError):
+        database.delete_analysis_record(saved["id"])
+    with pytest.raises(KeyError):
+        database.delete_analysis_record("not-a-uuid")
+
+
+def test_delete_analysis_record_endpoint_removes_record(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "xquant.db")
+    with TestClient(app) as client:
+        database = app.state.db
+        saved = database.save_analysis_record(_record("ai-endpoint", "2026-01-04T00:00:00+00:00"))
+        assert client.get("/api/v1/ai/records").json()["total"] == 1
+
+        deleted = client.delete(f"/api/v1/ai/records/{saved['id']}")
+
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": True, "id": saved["id"]}
+        assert client.get("/api/v1/ai/records").json()["total"] == 0
+        assert client.get(f"/api/v1/ai/records/{saved['id']}").status_code == 404
+        assert client.delete(f"/api/v1/ai/records/{saved['id']}").status_code == 404
 
 
 def test_analysis_records_replace_non_finite_floats_with_none(tmp_path: Path) -> None:

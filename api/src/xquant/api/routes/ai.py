@@ -317,6 +317,17 @@ def list_analysis_records(
     }
 
 
+@router.delete("/ai/records/{record_id}")
+def delete_analysis_record(
+    record_id: str,
+    db: Annotated[Database, Depends(get_database)],
+) -> dict[str, Any]:
+    try:
+        return db.delete_analysis_record(record_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="分析记录不存在") from exc
+
+
 @router.get("/ai/records/{record_id}")
 def get_analysis_record(
     record_id: str,

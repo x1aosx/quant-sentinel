@@ -233,6 +233,11 @@ export const api = {
       persisted_at: payload.record.persisted_at ?? payload.created_at ?? undefined,
     };
   },
+  deleteAIRecord: (recordId: string) =>
+    apiRequest<{ deleted: boolean; id: string }>(
+      `/ai/records/${encodeURIComponent(recordId)}`,
+      { method: 'DELETE' },
+    ),
   followupAI: (payload: Record<string, unknown>) =>
     apiRequest<{ status: string; answer: string }>('/ai/followup', {
       method: 'POST',
