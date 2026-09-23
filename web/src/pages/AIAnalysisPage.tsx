@@ -62,6 +62,7 @@ import {
   groupDatasetsByStock,
   preferredDataset,
 } from '../utils/datasetDisplay';
+import { STREAM_LOG_LABELS, appendStreamLogEvent } from '../utils/aiStreamLog';
 import {
   beginAIAnalysisRequest,
   finishAIAnalysisRequest,
@@ -298,6 +299,8 @@ export function AIAnalysisPage() {
   const [analysisDefaultPending, setAnalysisDefaultPending] = useState(true);
   const watchlistSnapshot = useRef('');
   const watchlistHydrated = useRef(false);
+  // 记录上一条事件流消息的类型，用来判断是否继续续写同一段流式输出。
+  const streamEventType = useRef<string | null>(null);
 
   const setMode = (value: AIAnalysisMode) =>
     updateAIAnalysisSession({ mode: value });
@@ -514,6 +517,7 @@ export function AIAnalysisPage() {
     const controller = beginAIAnalysisRequest();
     if (!controller) return;
     setRunning(true);
+    streamEventType.current = null;
     if (resume) {
       setStreamLog((current) => `${current}[系统] 页面刷新后正在恢复实时分析...\n`);
       setNotice('正在恢复实时分析');
@@ -536,21 +540,12 @@ export function AIAnalysisPage() {
               (current) =>
                 `${current}快照 ${event.symbol} ${event.timeframe} ${event.bar_count} 根\n`,
             );
-          } else if (
-            ['log', 'stage1', 'stage1_reasoning', 'stage2', 'stage2_reasoning'].includes(
-              event.type,
-            )
-          ) {
-            const labels: Record<string, string> = {
-              log: '系统',
-              stage1: '阶段一正文',
-              stage1_reasoning: '阶段一推理',
-              stage2: '阶段二正文',
-              stage2_reasoning: '阶段二推理',
-            };
-            setStreamLog(
-              (current) =>
-                `${current}[${labels[event.type] ?? event.type}] ${event.text ?? ''}`,
+          } else if (STREAM_LOG_LABELS[event.type] !== undefined) {
+            const text = String(event.text ?? '');
+            const continues = streamEventType.current === event.type;
+            streamEventType.current = event.type;
+            setStreamLog((current) =>
+              appendStreamLogEvent(current, event.type, text, continues),
             );
           } else if (event.type === 'error') {
             const message = event.message ?? '分析失败';
