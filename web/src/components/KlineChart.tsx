@@ -10,10 +10,10 @@ import {
   type ISeriesApi,
   type MouseEventParams,
   type Time,
-  type UTCTimestamp,
 } from 'lightweight-charts';
 import { Palette, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
 import type { DatasetBar, SrLevel } from '../types';
+import { buildChartTimes, parseSessionTime, sessionTimeToChartTime } from '../utils/chartTime';
 
 interface KlineChartProps {
   candles: DatasetBar[];
@@ -76,16 +76,6 @@ function useChinaColors() {
   return [enabled, update] as const;
 }
 
-function parseChartTime(sessionId: string, index: number): Time {
-  const value = sessionId.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-
-  const timestamp = Date.parse(value);
-  if (Number.isFinite(timestamp)) return Math.floor(timestamp / 1000) as UTCTimestamp;
-
-  return (Math.floor(Date.UTC(1970, 0, 1) / 1000) + index) as UTCTimestamp;
-}
-
 function timeKey(time: Time | undefined): string {
   if (typeof time === 'number') return `timestamp:${time}`;
   if (typeof time === 'string') return `date:${time}`;
@@ -94,11 +84,10 @@ function timeKey(time: Time | undefined): string {
 }
 
 function formatSession(sessionId: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(sessionId)) return sessionId;
-
-  const timestamp = Date.parse(sessionId);
-  if (!Number.isFinite(timestamp)) return sessionId;
-  return new Date(timestamp).toLocaleString('zh-CN', {
+  const parsed = parseSessionTime(sessionId);
+  if (!parsed) return sessionId;
+  if (parsed.kind === 'date') return sessionTimeToChartTime(parsed) as string;
+  return new Date(parsed.seconds * 1000).toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -140,15 +129,18 @@ export function KlineChart({ candles, levels = [], height = 420 }: KlineChartPro
   const precision = useMemo(() => inferPricePrecision(candles), [candles]);
   const palette = chinaColors ? CHINA_COLORS : INTERNATIONAL_COLORS;
   const chartData = useMemo<ChartCandle[]>(
-    () =>
-      candles.map((bar, index) => ({
-        time: parseChartTime(bar.session_id, index),
+    () => {
+      // 时间类型必须在数据集级别统一，否则 lightweight-charts 会在 setData 时抛错。
+      const times = buildChartTimes(candles.map((bar) => bar.session_id));
+      return candles.map((bar, index) => ({
+        time: times[index],
         session_id: bar.session_id,
         open: bar.open,
         high: bar.high,
         low: bar.low,
         close: bar.close,
-      })),
+      }));
+    },
     [candles],
   );
 
