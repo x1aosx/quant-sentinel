@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -284,11 +285,30 @@ class _SyncInflux:
         _sql: str,
         params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        dataset_id = str((params or {})["dataset_id"])
+        return self._rows(str((params or {})["dataset_id"]))
+
+    def query_time_windows(
+        self,
+        _sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        lower: datetime,
+        upper: datetime,
+    ) -> list[dict[str, Any]]:
+        return self._rows(str((params or {})["dataset_id"]), lower, upper)
+
+    def _rows(
+        self,
+        dataset_id: str,
+        lower: datetime | None = None,
+        upper: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         rows = [
             dict(point["fields"])
             for point in self.points.values()
             if point["tags"]["dataset_id"] == dataset_id
+            and (lower is None or point["time"] >= lower)
+            and (upper is None or point["time"] <= upper)
         ]
         return sorted(
             rows,

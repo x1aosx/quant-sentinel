@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -11,6 +11,31 @@ from .settings import InfluxSettings
 
 # 上游错误正文只保留前若干字符，避免把整个响应体塞进接口详情。
 _MAX_ERROR_DETAIL_CHARS = 500
+
+# InfluxDB 3 Core 用 ``--query-file-limit`` 限制单条查询能打开的 parquet 文件数，
+# 超限时直接以 HTTP 500 失败。命中该错误可以收窄时间范围重试。
+_FILE_LIMIT_MARKERS = ("file limit", "query-file-limit")
+
+# InfluxDB 3 SQL 的时间边界写法：RFC3339 UTC 字符串。
+_TIME_PARAM_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# 时间二分重试的上限：最多 2**8 个窗口，且单个窗口不小于 1 小时。
+# 只有失败的窗口会继续拆分，所以常见情况下只会多出一两次查询；
+# 深度上限只用于兜底（例如文件高度集中在近期，需要收得很窄）。
+DEFAULT_MAX_TIME_SPLIT_DEPTH = 8
+DEFAULT_MIN_TIME_WINDOW = timedelta(hours=1)
+
+
+def is_file_limit_error(exc: BaseException) -> bool:
+    """判断异常是否为 InfluxDB 3 Core 的 parquet 文件数超限。"""
+    detail = str(getattr(exc, "detail", "") or exc).lower()
+    return any(marker in detail for marker in _FILE_LIMIT_MARKERS)
+
+
+def _format_time_param(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).strftime(_TIME_PARAM_FORMAT)
 
 
 class InfluxDBQueryError(RuntimeError):
@@ -111,6 +136,89 @@ class InfluxDBStore:
         if not isinstance(payload, list):
             raise TypeError("InfluxDB query response must be a JSON array")
         return [dict(row) for row in payload]
+
+    def query_time_windows(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        lower: datetime,
+        upper: datetime,
+        max_depth: int = DEFAULT_MAX_TIME_SPLIT_DEPTH,
+        min_window: timedelta = DEFAULT_MIN_TIME_WINDOW,
+    ) -> list[dict[str, Any]]:
+        """带时间边界的查询；撞上 parquet 文件数上限时自动二分时间范围重试。
+
+        ``sql`` 通过 ``$time_lower`` / ``$time_upper`` 引用时间边界。InfluxDB 3
+        依据时间谓词裁剪 parquet 文件，所以把一次全表扫描拆成若干时间窗后，每个
+        窗口实际打开的文件数会明显下降，从而绕开 ``--query-file-limit``。
+
+        相邻窗口在边界上都是闭区间，边界处的行可能被返回两次，由调用方按
+        session_id 去重（``dedupe_sorted_bars``）。宁可重复也不丢数据。
+        """
+        return self._query_time_windows(
+            sql,
+            dict(params or {}),
+            lower,
+            upper,
+            depth=0,
+            max_depth=max_depth,
+            min_window=min_window,
+        )
+
+    def _query_time_windows(
+        self,
+        sql: str,
+        base_params: dict[str, Any],
+        lower: datetime,
+        upper: datetime,
+        *,
+        depth: int,
+        max_depth: int,
+        min_window: timedelta,
+    ) -> list[dict[str, Any]]:
+        window_params = {
+            **base_params,
+            "time_lower": _format_time_param(lower),
+            "time_upper": _format_time_param(upper),
+        }
+        try:
+            return self.query(sql, window_params)
+        except InfluxDBQueryError as exc:
+            if not is_file_limit_error(exc):
+                raise
+            span = upper - lower
+            if depth >= max_depth or span <= min_window:
+                raise InfluxDBQueryError(
+                    "query",
+                    (
+                        f"{exc.detail}；时间范围已收窄到 "
+                        f"{_format_time_param(lower)} ~ {_format_time_param(upper)} "
+                        "仍然超过文件数上限，请在 InfluxDB 侧提高 --query-file-limit"
+                    ),
+                    status_code=exc.status_code,
+                ) from exc
+            middle = lower + span / 2
+            return [
+                *self._query_time_windows(
+                    sql,
+                    base_params,
+                    lower,
+                    middle,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    min_window=min_window,
+                ),
+                *self._query_time_windows(
+                    sql,
+                    base_params,
+                    middle,
+                    upper,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    min_window=min_window,
+                ),
+            ]
 
     def health(self) -> dict[str, str]:
         try:

@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import time
 import zlib
-from datetime import UTC, datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Self
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -341,7 +342,7 @@ class Database:
         created_at = _parse_time(existing.get("created_at")) if existing else None
         now = datetime.now(UTC)
         created_at = created_at or now
-        existing_bars = self._fetch_dataset_bars(dataset_id) if existing else []
+        existing_bars = self._fetch_dataset_bars(dataset_id, existing) if existing else []
         existing_by_session = {
             bar["session_id"]: bar for bar in _dedupe_bars(existing_bars).values()
         }
@@ -456,7 +457,7 @@ class Database:
         self._resolve_missing_dataset_titles([metadata])
         bars = self._cache_get_or_set(
             f"dataset:{metadata['id']}:bars",
-            lambda: self._fetch_dataset_bars(metadata["id"]),
+            lambda: self._fetch_dataset_bars(metadata["id"], metadata),
             ttl_seconds=120,
         )
         bars = dedupe_sorted_bars(bars)
@@ -892,16 +893,24 @@ class Database:
             except SQLAlchemyError:
                 continue
 
-    def _fetch_dataset_bars(self, dataset_id: str) -> list[dict[str, Any]]:
-        rows = self.influx.query(
-            """
-            SELECT session_id, source_seq, open, high, low, close, volume
-            FROM market_bar
-            WHERE dataset_id = $dataset_id
-            ORDER BY time ASC, source_seq ASC
-            """,
-            {"dataset_id": dataset_id},
-        )
+    def _fetch_dataset_bars(
+        self,
+        dataset_id: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        bounds = _dataset_time_bounds(metadata)
+        if bounds is None:
+            rows = self.influx.query(
+                _UNBOUNDED_BAR_QUERY_SQL,
+                {"dataset_id": dataset_id},
+            )
+        else:
+            rows = self.influx.query_time_windows(
+                _BAR_TIME_WINDOW_QUERY_SQL,
+                {"dataset_id": dataset_id},
+                lower=bounds[0],
+                upper=bounds[1],
+            )
         bars: list[dict[str, Any]] = []
         for row in rows:
             bars.append(
@@ -924,6 +933,52 @@ class Database:
         for bar in bars:
             bar.pop("_source_seq", None)
         return dedupe_sorted_bars(bars)
+
+
+# 行情 bar 的查询必须带时间谓词：InfluxDB 3 才能按时间裁剪 parquet 文件。
+_BAR_TIME_WINDOW_QUERY_SQL = """
+SELECT session_id, source_seq, open, high, low, close, volume
+FROM market_bar
+WHERE dataset_id = $dataset_id
+  AND time >= $time_lower
+  AND time <= $time_upper
+ORDER BY time ASC, source_seq ASC
+"""
+
+# 元数据推不出时间范围时的退化查询，行为与旧版一致。
+_UNBOUNDED_BAR_QUERY_SQL = """
+SELECT session_id, source_seq, open, high, low, close, volume
+FROM market_bar
+WHERE dataset_id = $dataset_id
+ORDER BY time ASC, source_seq ASC
+"""
+
+# 时间范围两侧的余量，容忍 session_id 与 created_at 兜底时间之间的偏差。
+_BAR_TIME_SLACK = timedelta(days=1)
+
+
+def _dataset_time_bounds(
+    metadata: Mapping[str, Any] | None,
+) -> tuple[datetime, datetime] | None:
+    """从数据集元数据推导 bar 的时间范围，供 InfluxDB 裁剪 parquet 文件。
+
+    带时间谓词的查询才能让 InfluxDB 3 按文件的时间范围做裁剪，否则整张
+    ``market_bar`` 表都要扫，很容易撞上 ``--query-file-limit``。
+
+    session_id 能解析时取首末 session 时间；解析不了的 bar 在写入时会落到
+    ``created_at`` 附近，因此把 created_at / last_synced_at 一并纳入候选值，
+    保证推导出的范围不会漏掉任何已写入的 bar。
+    """
+    if not metadata:
+        return None
+    candidates = [
+        parsed
+        for key in ("first_session", "last_session", "created_at", "last_synced_at")
+        if (parsed := _parse_time(metadata.get(key))) is not None
+    ]
+    if not candidates:
+        return None
+    return min(candidates) - _BAR_TIME_SLACK, max(candidates) + _BAR_TIME_SLACK
 
 
 def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
