@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -222,8 +223,14 @@ def build_stage2_prompt(
         "next_cycle_prediction、next_bar_prediction。decision 内包含 action、confidence、"
         "entry、stop、target、rr、reasoning、invalidation、watch_points、risk_flags。"
         "decision_trace 每项包含 phase、label、question、answer、status、reasoning。"
-        "未来预测只作旁注，不能改变 decision。"
-        "next_bar_prediction 包含 direction、probabilities、confidence、reasoning。"
+        "未来预测只作旁注，不能改变 decision。字段形状固定："
+        "future_trend={label(中文短语), direction(up|down|neutral), confidence(0-100 数字), "
+        "reasoning, probabilities(可选，名称到百分比的映射)}；"
+        "next_cycle_prediction={cycle(中文短语), confidence(0-100 数字), reasoning, "
+        "probabilities(可选，名称到百分比的映射)}；"
+        "next_bar_prediction={direction(up|down|neutral), confidence(0-100 数字), reasoning, "
+        "probabilities({up,down,neutral} 三项百分比且合计 100)}。"
+        "所有概率统一用 0-100 的数字，禁止用 0-1 小数；predictions 必须是对象，禁止用数组代替。"
     )
     user = (
         "阶段一诊断：\n"
@@ -636,6 +643,352 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
+_DIRECTION_SYNONYMS = {
+    "up": "up",
+    "bull": "up",
+    "bullish": "up",
+    "long": "up",
+    "rise": "up",
+    "rising": "up",
+    "上涨": "up",
+    "看涨": "up",
+    "偏多": "up",
+    "多头": "up",
+    "上行": "up",
+    "反弹": "up",
+    "down": "down",
+    "bear": "down",
+    "bearish": "down",
+    "short": "down",
+    "fall": "down",
+    "falling": "down",
+    "下跌": "down",
+    "看跌": "down",
+    "偏空": "down",
+    "空头": "down",
+    "下行": "down",
+    "回落": "down",
+    "neutral": "neutral",
+    "flat": "neutral",
+    "sideways": "neutral",
+    "range": "neutral",
+    "consolidation": "neutral",
+    "震荡": "neutral",
+    "横盘": "neutral",
+    "中性": "neutral",
+    "观望": "neutral",
+}
+
+_CONFIDENCE_WORDS = {
+    "very high": 90.0,
+    "very_high": 90.0,
+    "很高": 90.0,
+    "极高": 90.0,
+    "high": 80.0,
+    "较高": 80.0,
+    "高": 80.0,
+    "medium": 60.0,
+    "moderate": 60.0,
+    "中等": 60.0,
+    "一般": 60.0,
+    "中": 60.0,
+    "low": 35.0,
+    "较低": 35.0,
+    "低": 35.0,
+    "very low": 20.0,
+    "very_low": 20.0,
+    "很低": 20.0,
+    "极低": 20.0,
+}
+
+
+def _scalar_text(value: Any) -> str:
+    """Return a trimmed scalar as text; containers, booleans and nulls become empty."""
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, (str, int, float)):
+        text = str(value).strip()
+        if text and text.lower() not in {"none", "null", "nan"}:
+            return text
+    return ""
+
+
+def _text(mapping: Mapping[str, Any], *keys: str) -> str:
+    """Return the first scalar text value among the given keys."""
+    for key in keys:
+        text = _scalar_text(mapping.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _to_number(value: Any) -> float | None:
+    """Parse a model-supplied number, tolerating percent strings and word scales."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip().rstrip("%").strip()
+        if not text:
+            return None
+        word = _CONFIDENCE_WORDS.get(text.lower())
+        if word is not None:
+            return word
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if math.isfinite(number):
+            return number
+    return None
+
+
+def _as_percent(value: Any) -> float | None:
+    """Models often answer with 0~1 fractions; expose everything as 0~100."""
+    number = _to_number(value)
+    if number is None:
+        return None
+    if 0 < number <= 1:
+        return number * 100
+    return number
+
+
+def normalize_probabilities(value: Any) -> dict[str, float]:
+    """Normalize a model probability payload into ``label -> percent`` pairs.
+
+    Accepts both ``{"up": 0.6}`` and ``[{"name": "up", "probability": 0.6}]``
+    shapes, and rescales 0~1 fractions to percentages.
+    """
+    items: list[tuple[str, float]] = []
+    if isinstance(value, Mapping):
+        for key, raw in value.items():
+            number = _to_number(raw)
+            if number is None:
+                continue
+            items.append((str(key), number))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for index, entry in enumerate(value):
+            if isinstance(entry, Mapping):
+                label = _text(
+                    entry,
+                    "label",
+                    "name",
+                    "scenario",
+                    "key",
+                    "title",
+                    "outcome",
+                    "case",
+                    "direction",
+                )
+                number = _to_number(
+                    _first(
+                        entry,
+                        "probability",
+                        "prob",
+                        "p",
+                        "value",
+                        "weight",
+                        "likelihood",
+                        "chance",
+                    )
+                )
+            else:
+                label = ""
+                number = _to_number(entry)
+            if number is None:
+                continue
+            items.append((label or f"情景 {index + 1}", number))
+    if not items:
+        return {}
+    total = sum(number for _, number in items)
+    if all(0 <= number <= 1 for _, number in items) and 0 < total <= 1.05:
+        items = [(label, number * 100) for label, number in items]
+    return {label: round(number, 2) for label, number in items}
+
+
+def _first_probabilities(data: Mapping[str, Any], keys: Sequence[str]) -> dict[str, float]:
+    """Return the first key that yields a non-empty probability payload."""
+    for key in keys:
+        if key not in data:
+            continue
+        normalized = normalize_probabilities(data.get(key))
+        if normalized:
+            return normalized
+    return {}
+
+
+def _normalize_direction(value: Any) -> str:
+    text = _scalar_text(value)
+    if not text:
+        return ""
+    return _DIRECTION_SYNONYMS.get(text.lower(), text)
+
+
+def _normalize_future_trend(raw: Any, fallback_label: str = "") -> dict[str, Any]:
+    if isinstance(raw, Mapping):
+        data = dict(raw)
+    elif raw is None or raw == "":
+        data = {}
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        data = {"scenarios": list(raw)}
+    else:
+        data = {"label": raw}
+    label = _text(
+        data,
+        "label",
+        "direction",
+        "trend",
+        "bias",
+        "outlook",
+        "expectation",
+        "view",
+        "conclusion",
+        "prediction",
+        "summary",
+        "description",
+    )
+    direction = _normalize_direction(_first(data, "direction", "trend", "bias", default=""))
+    confidence = _as_percent(
+        _first(data, "confidence", "probability", "prob", "conviction")
+    )
+    probabilities = _first_probabilities(
+        data,
+        ("probabilities", "scenarios", "outcomes", "cases", "distribution", "paths"),
+    )
+    reasoning = _text(
+        data,
+        "reasoning",
+        "detail",
+        "details",
+        "notes",
+        "note",
+        "analysis",
+        "explanation",
+        "comment",
+    )
+    normalized = dict(data)
+    normalized["label"] = label or fallback_label or "观察"
+    if direction:
+        normalized["direction"] = direction
+    normalized["confidence"] = round(confidence, 2) if confidence is not None else 0
+    normalized["reasoning"] = reasoning
+    if probabilities:
+        normalized["probabilities"] = probabilities
+    return normalized
+
+
+def _normalize_next_cycle(raw: Any, fallback_label: str = "") -> dict[str, Any]:
+    if isinstance(raw, Mapping):
+        data = dict(raw)
+    elif raw is None or raw == "":
+        data = {}
+    else:
+        data = {"cycle": raw}
+    cycle = _text(
+        data,
+        "cycle",
+        "label",
+        "prediction",
+        "name",
+        "scenario",
+        "expected_cycle",
+        "expected",
+        "next_cycle",
+        "phase",
+        "state",
+        "summary",
+        "description",
+    )
+    confidence = _as_percent(_first(data, "confidence", "probability", "prob"))
+    probabilities = _first_probabilities(
+        data,
+        ("probabilities", "scenarios", "outcomes", "cases", "distribution"),
+    )
+    reasoning = _text(
+        data,
+        "reasoning",
+        "detail",
+        "details",
+        "notes",
+        "note",
+        "analysis",
+        "explanation",
+        "comment",
+    )
+    normalized = dict(data)
+    normalized["cycle"] = cycle or fallback_label or "unknown"
+    normalized["confidence"] = round(confidence, 2) if confidence is not None else 0
+    normalized["reasoning"] = reasoning
+    if probabilities:
+        normalized["probabilities"] = probabilities
+    return normalized
+
+
+def _normalize_next_bar(raw: Any, fallback_direction: str = "neutral") -> dict[str, Any]:
+    if isinstance(raw, Mapping):
+        data = dict(raw)
+    elif raw is None or raw == "":
+        data = {}
+    else:
+        data = {"direction": raw}
+    direction = _normalize_direction(
+        _first(
+            data,
+            "direction",
+            "bias",
+            "label",
+            "expected",
+            "move",
+            "prediction",
+            "outlook",
+            "trend",
+            default="",
+        )
+    )
+    confidence = _as_percent(_first(data, "confidence", "probability", "prob"))
+    probabilities = _first_probabilities(
+        data,
+        ("probabilities", "scenarios", "outcomes", "cases", "distribution"),
+    )
+    reasoning = _text(
+        data,
+        "reasoning",
+        "detail",
+        "details",
+        "notes",
+        "note",
+        "analysis",
+        "explanation",
+        "comment",
+    )
+    normalized = dict(data)
+    normalized["direction"] = direction or fallback_direction
+    normalized["confidence"] = round(confidence, 2) if confidence is not None else 0
+    normalized["reasoning"] = reasoning
+    if probabilities:
+        normalized["probabilities"] = probabilities
+    return normalized
+
+
+def _apply_next_bar_setting(
+    stage2: dict[str, Any],
+    settings: AISettings,
+) -> dict[str, Any]:
+    """Honour the next-bar switch on every path, including local research mode."""
+    if not settings.enable_next_bar_prediction:
+        stage2["next_bar_prediction"] = {
+            "direction": "disabled",
+            "probabilities": {},
+            "confidence": 0,
+            "reasoning": "本轮未启用下根K线预期。",
+        }
+    return stage2
+
+
 def normalize_diagnosis(raw: Mapping[str, Any] | None, fallback: Mapping[str, Any]) -> dict[str, Any]:
     data = dict(raw or {})
     trend = data.get("current_trend")
@@ -731,22 +1084,27 @@ def normalize_stage2(
         ),
         "risk_flags": _as_list(decision_data.get("risk_flags") or decision_data.get("risks")),
     }
-    future = data.get("future_trend")
-    if not isinstance(future, Mapping):
-        future = {"label": future or "观察", "confidence": 0}
-    next_cycle = data.get("next_cycle_prediction")
-    if not isinstance(next_cycle, Mapping):
-        next_cycle = {"cycle": next_cycle or diagnosis.get("next_cycle", "unknown")}
-    next_bar = data.get("next_bar_prediction")
-    if next_bar is None:
-        next_bar = data.get("next_bar")
-    if not isinstance(next_bar, Mapping):
-        next_bar = {
-            "direction": next_bar or "neutral",
-            "probabilities": {},
-            "confidence": 0,
-            "reasoning": "",
-        }
+    future_raw = _first(data, "future_trend", "future", "future_outlook")
+    if future_raw in (None, ""):
+        future_raw = _first(decision_data, "future_trend", "future", "future_outlook")
+    next_cycle_raw = _first(
+        data, "next_cycle_prediction", "next_cycle", "cycle_prediction"
+    )
+    if next_cycle_raw in (None, ""):
+        next_cycle_raw = _first(
+            decision_data, "next_cycle_prediction", "next_cycle", "cycle_prediction"
+        )
+    next_bar_raw = _first(data, "next_bar_prediction", "next_bar", "next_candle_prediction")
+    if next_bar_raw in (None, ""):
+        next_bar_raw = _first(
+            decision_data, "next_bar_prediction", "next_bar", "next_candle_prediction"
+        )
+    future = _normalize_future_trend(future_raw)
+    next_cycle = _normalize_next_cycle(
+        next_cycle_raw,
+        fallback_label=_scalar_text(diagnosis.get("next_cycle")),
+    )
+    next_bar = _normalize_next_bar(next_bar_raw)
     return {
         "decision": normalized_decision,
         "diagnosis_summary": _first(
@@ -756,9 +1114,9 @@ def normalize_stage2(
         ),
         "decision_trace": _as_list(data.get("decision_trace")),
         "terminal": data.get("terminal") if isinstance(data.get("terminal"), Mapping) else {},
-        "future_trend": dict(future),
-        "next_cycle_prediction": dict(next_cycle),
-        "next_bar_prediction": dict(next_bar),
+        "future_trend": future,
+        "next_cycle_prediction": next_cycle,
+        "next_bar_prediction": next_bar,
         "raw": data,
     }
 
@@ -787,6 +1145,20 @@ def _local_diagnosis(snapshot: Mapping[str, Any], local_pa: Mapping[str, Any]) -
 def _local_stage2(local_pa: Mapping[str, Any], diagnosis: Mapping[str, Any]) -> dict[str, Any]:
     decision = dict(local_pa.get("decision", {}))
     decision["reasoning"] = decision.get("reasoning") or "本地确定性规则给出的保守研究结果。"
+    market = local_pa.get("market_context")
+    market = market if isinstance(market, Mapping) else {}
+    direction = _normalize_direction(market.get("direction")) or "neutral"
+    cycle = (
+        _scalar_text(diagnosis.get("next_cycle"))
+        or _scalar_text(market.get("cycle_position"))
+        or "unknown"
+    )
+    trend_label = {
+        "up": "本地规则：结构偏多",
+        "down": "本地规则：结构偏空",
+        "neutral": "本地规则：区间震荡",
+    }.get(direction, f"本地规则：{direction}")
+    confidence = _as_percent(decision.get("confidence"))
     return {
         "decision": decision,
         "diagnosis_summary": diagnosis.get("diagnosis_summary", ""),
@@ -812,13 +1184,24 @@ def _local_stage2(local_pa: Mapping[str, Any], diagnosis: Mapping[str, Any]) -> 
             "outcome": decision.get("action", "WAIT"),
             "reasoning": decision.get("reasoning", ""),
         },
-        "future_trend": {"label": "本地研究模式未生成外部预测", "confidence": 0},
-        "next_cycle_prediction": {"cycle": diagnosis.get("next_cycle", "unknown")},
-        "next_bar_prediction": {
-            "direction": "neutral",
-            "probabilities": {"up": 0, "down": 0, "neutral": 100},
+        "future_trend": {
+            "label": trend_label,
+            "direction": direction,
+            "confidence": round(confidence, 2) if confidence is not None else 0,
+            "reasoning": (
+                "本地确定性规则依据趋势方向、周期位置与结构给出预期，未调用外部模型。"
+            ),
+        },
+        "next_cycle_prediction": {
+            "cycle": cycle,
             "confidence": 0,
-            "reasoning": "未调用外部模型。",
+            "reasoning": "本地规则沿用当前周期位置推断，未调用外部模型。",
+        },
+        "next_bar_prediction": {
+            "direction": direction,
+            "probabilities": {},
+            "confidence": 0,
+            "reasoning": "本地规则不生成下根K线概率分布。",
         },
     }
 
@@ -1107,7 +1490,7 @@ def run_two_stage(snapshot: Mapping[str, Any], settings: AISettings) -> dict[str
     )
     if not settings.provider.api_key:
         diagnosis = _local_diagnosis(snapshot, local_pa)
-        stage2 = _local_stage2(local_pa, diagnosis)
+        stage2 = _apply_next_bar_setting(_local_stage2(local_pa, diagnosis), settings)
         placeholder_reply = {
             "content": json.dumps(stage2, ensure_ascii=False),
             "reasoning_content": "",
@@ -1135,14 +1518,7 @@ def run_two_stage(snapshot: Mapping[str, Any], settings: AISettings) -> dict[str
         record["raw_prompt"]["stage2"] = stage2_messages
         stage2_reply = _post_chat_completion(settings.provider, stage2_messages)
         stage2_raw = extract_json_object(str(stage2_reply.get("content") or "")) or {}
-        stage2 = normalize_stage2(stage2_raw, diagnosis)
-        if not settings.enable_next_bar_prediction:
-            stage2["next_bar_prediction"] = {
-                "direction": "disabled",
-                "probabilities": {},
-                "confidence": 0,
-                "reasoning": "本轮未启用下根K线预期。",
-            }
+        stage2 = _apply_next_bar_setting(normalize_stage2(stage2_raw, diagnosis), settings)
         record["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
         return _finalize_record(
             record,
@@ -1183,14 +1559,7 @@ def _record_from_stream(
     diagnosis = normalize_diagnosis(stage1_raw, snapshot)
     stage2_messages = build_stage2_prompt(snapshot, diagnosis)
     stage2_raw = extract_json_object(str(stage2_reply.get("content") or "")) or {}
-    stage2 = normalize_stage2(stage2_raw, diagnosis)
-    if not settings.enable_next_bar_prediction:
-        stage2["next_bar_prediction"] = {
-            "direction": "disabled",
-            "probabilities": {},
-            "confidence": 0,
-            "reasoning": "本轮未启用下根K线预期。",
-        }
+    stage2 = _apply_next_bar_setting(normalize_stage2(stage2_raw, diagnosis), settings)
     record["stage2_messages"] = stage2_messages
     record["raw_prompt"]["stage2"] = stage2_messages
     return _finalize_record(

@@ -54,7 +54,8 @@ class AnalysisSettings(BaseModel):
 
     analysis_bar_count: int = Field(default=100, ge=2, le=5000)
     decision_stance: DecisionStance = "balanced"
-    enable_next_bar_prediction: bool = False
+    # 与 AISettings/AnalysisSnapshot 以及前端表单默认值保持一致，默认生成下根K线预期。
+    enable_next_bar_prediction: bool = True
     keep_analysis: bool = False
     incremental_max_new_bars: int = Field(default=10, ge=0, le=500)
     monitor_interval_seconds: int = Field(default=60, ge=1, le=86400)

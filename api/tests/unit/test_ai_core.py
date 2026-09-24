@@ -12,6 +12,8 @@ from xquant.ai.service import (
     call_chat_completion,
     mask_provider,
     normalize_ai_settings,
+    normalize_probabilities,
+    normalize_stage2,
     run_two_stage,
     stream_two_stage,
 )
@@ -548,3 +550,93 @@ def test_yahoo_fetch_encodes_symbol_and_normalizes_bars(monkeypatch) -> None:
     assert requests[0][1]["range"] == "2y"
     # Yahoo marks the latest intraday bar unclosed; normalization removes it.
     assert len(result["bars"]) == 79
+
+
+def test_normalize_probabilities_accepts_fractions_and_lists() -> None:
+    # 模型常用 0~1 小数、数组、百分比字符串等不同写法，统一成百分比。
+    assert normalize_probabilities(
+        {
+            "pullback_to_support_channel_bound": 0.5,
+            "deeper_breakdown_below_13.20": 0.25,
+            "direct_reclaim_47.50": 0.25,
+        }
+    ) == {
+        "pullback_to_support_channel_bound": 50.0,
+        "deeper_breakdown_below_13.20": 25.0,
+        "direct_reclaim_47.50": 25.0,
+    }
+    assert normalize_probabilities({"up": 30, "down": 50, "neutral": 20}) == {
+        "up": 30.0,
+        "down": 50.0,
+        "neutral": 20.0,
+    }
+    assert normalize_probabilities(
+        [{"name": "突破", "probability": 60}, {"name": "回落", "probability": "40%"}]
+    ) == {"突破": 60.0, "回落": 40.0}
+    assert normalize_probabilities({}) == {}
+    assert normalize_probabilities("not-a-probability") == {}
+
+
+def test_normalize_stage2_reads_model_alias_fields() -> None:
+    # 回归：模型把未来走势写在非标准键上、概率用 0~1 小数时，界面不再全是 “--”。
+    stage2 = normalize_stage2(
+        {
+            "decision": {"action": "WAIT", "confidence": 55},
+            "future_trend": {"summary": "回踩支撑后震荡", "trend": "偏空", "confidence": 0.6},
+            "next_cycle_prediction": {
+                "probabilities": {
+                    "pullback_to_support_channel_bound": 0.5,
+                    "deeper_breakdown_below_13.20": 0.25,
+                    "direct_reclaim_47.50": 0.25,
+                }
+            },
+            "next_bar_prediction": {"direction": "下跌", "confidence": "high"},
+        },
+        {"next_cycle": "channel"},
+    )
+    assert stage2["future_trend"]["label"] == "偏空"
+    assert stage2["future_trend"]["direction"] == "down"
+    assert stage2["future_trend"]["confidence"] == 60
+    assert stage2["next_cycle_prediction"]["cycle"] == "channel"
+    assert stage2["next_cycle_prediction"]["probabilities"]["direct_reclaim_47.50"] == 25
+    assert stage2["next_bar_prediction"]["direction"] == "down"
+    assert stage2["next_bar_prediction"]["confidence"] == 80
+
+
+def test_normalize_stage2_falls_back_to_nested_predictions() -> None:
+    stage2 = normalize_stage2(
+        {
+            "decision": {
+                "action": "LONG",
+                "future_trend": {"label": "偏多", "confidence": 70},
+                "next_bar_prediction": {"direction": "bullish"},
+            }
+        },
+        {"next_cycle": "trending"},
+    )
+    assert stage2["future_trend"]["label"] == "偏多"
+    assert stage2["next_bar_prediction"]["direction"] == "up"
+    assert stage2["next_cycle_prediction"]["cycle"] == "trending"
+
+
+def test_local_mode_builds_rule_based_predictions() -> None:
+    settings = normalize_ai_settings({"analysis_bar_count": 120, "enable_next_bar_prediction": True})
+    snapshot = build_snapshot(
+        dataset_id="d1",
+        symbol="DEMO.RESEARCH",
+        timeframe="1d",
+        bars=_bars(),
+        settings=settings,
+    )
+    record = run_two_stage(snapshot, settings)
+    assert record["status"] == "ok"
+    assert record["future_trend"]["label"].startswith("本地规则")
+    assert record["future_trend"]["direction"] in {"up", "down", "neutral"}
+    assert record["next_cycle_prediction"]["cycle"] != ""
+    assert record["next_bar_prediction"]["direction"] != "disabled"
+
+    disabled = run_two_stage(
+        snapshot,
+        normalize_ai_settings({"analysis_bar_count": 120, "enable_next_bar_prediction": False}),
+    )
+    assert disabled["next_bar_prediction"]["direction"] == "disabled"

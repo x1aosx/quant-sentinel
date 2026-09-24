@@ -48,6 +48,7 @@ import {
   confidenceOf,
   decisionOf,
   diagnosisOf,
+  firstText,
   formatValue,
   probabilityRows,
   responseText,
@@ -731,6 +732,41 @@ export function AIAnalysisPage() {
   const nextCycleProbabilities = useMemo(
     () => probabilityRows(nextCycle.probabilities),
     [nextCycle.probabilities],
+  );
+  const futureTrendProbabilities = useMemo(
+    () => probabilityRows(futureTrend.probabilities),
+    [futureTrend.probabilities],
+  );
+  // 模型返回的字段名不完全统一：按别名兜底，避免整块显示成“--”。
+  const futureTrendLabel = firstText(
+    futureTrend.label,
+    futureTrend.direction,
+    futureTrend.trend,
+    futureTrend.summary,
+    futureTrend.bias,
+    futureTrend.outlook,
+  );
+  const nextCycleLabel = firstText(
+    nextCycle.cycle,
+    nextCycle.label,
+    nextCycle.prediction,
+    nextCycle.name,
+    nextCycle.scenario,
+  );
+  const nextBarLabel = firstText(nextBar.direction, nextBar.label, nextBar.bias);
+  const nextBarDisabled = nextBarLabel === 'disabled';
+  const probabilityDistribution = nextBarProbabilities.length
+    ? { title: '下一根 K 线概率', rows: nextBarProbabilities }
+    : nextCycleProbabilities.length
+      ? { title: '下一周期概率', rows: nextCycleProbabilities }
+      : { title: '未来走势概率', rows: futureTrendProbabilities };
+  const predictionReasoning = firstText(
+    futureTrend.reasoning,
+    nextCycle.reasoning,
+    nextBarDisabled ? '' : nextBar.reasoning,
+  );
+  const hasPrediction = Boolean(
+    futureTrendLabel || nextCycleLabel || nextBarLabel || probabilityDistribution.rows.length,
   );
 
   const updateTarget = (index: number, patch: Partial<MonitorTarget>) => {
@@ -1921,34 +1957,52 @@ export function AIAnalysisPage() {
           <div className="grid grid-2" style={{ marginTop: 16 }}>
             <div className="panel">
               <div className="section-title">未来走势</div>
-              <div className="feature-list">
-                <div className="feature-item">
-                  <div className="label">方向</div>
-                  <div className="value">{futureTrend.label ?? futureTrend.direction ?? '--'}</div>
+              {hasPrediction ? (
+                <>
+                  <div className="feature-list">
+                    <div className="feature-item">
+                      <div className="label">方向</div>
+                      <div className="value">{futureTrendLabel || '--'}</div>
+                    </div>
+                    <div className="feature-item">
+                      <div className="label">置信度</div>
+                      <div className="value">{formatValue(futureTrend.confidence)}</div>
+                    </div>
+                    <div className="feature-item">
+                      <div className="label">下一周期</div>
+                      <div className="value">{nextCycleLabel || '--'}</div>
+                    </div>
+                    <div className="feature-item">
+                      <div className="label">下一根 K 线</div>
+                      <div className="value">
+                        {nextBarDisabled ? '未启用' : nextBarLabel || '--'}
+                      </div>
+                    </div>
+                  </div>
+                  <p>{predictionReasoning || '未提供预测说明。'}</p>
+                  {nextBarDisabled ? (
+                    <p className="muted">
+                      {'下一根 K 线预期未启用：到「系统配置 → AI 分析」勾选「默认预测下一根 K 线」并保存后重新分析即可查看。'}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <div className="empty">
+                  本次分析记录没有预测数据，可到「原始」标签确认模型的阶段二返回。
                 </div>
-                <div className="feature-item">
-                  <div className="label">置信度</div>
-                  <div className="value">{formatValue(futureTrend.confidence)}</div>
-                </div>
-                <div className="feature-item">
-                  <div className="label">下一周期</div>
-                  <div className="value">{nextCycle.cycle ?? nextCycle.label ?? '--'}</div>
-                </div>
-                <div className="feature-item">
-                  <div className="label">下一根 K 线</div>
-                  <div className="value">{nextBar.direction ?? nextBar.label ?? '--'}</div>
-                </div>
-              </div>
-              <p>{futureTrend.reasoning ?? nextBar.reasoning ?? '未提供预测说明。'}</p>
+              )}
             </div>
             <div className="panel">
               <div className="section-title">概率分布</div>
-              {nextBarProbabilities.length === 0 && nextCycleProbabilities.length === 0 ? (
+              {probabilityDistribution.rows.length === 0 ? (
                 <div className="empty">当前记录没有概率分布。</div>
               ) : (
-                <div className="probability-list">
-                  {(nextBarProbabilities.length ? nextBarProbabilities : nextCycleProbabilities).map(
-                    (item) => (
+                <>
+                  <div className="muted" style={{ marginBottom: 8 }}>
+                    {probabilityDistribution.title}
+                  </div>
+                  <div className="probability-list">
+                    {probabilityDistribution.rows.map((item) => (
                       <div key={item.label} className="probability-row">
                         <span>{item.label}</span>
                         <div className="progress">
@@ -1959,9 +2013,9 @@ export function AIAnalysisPage() {
                         </div>
                         <strong>{item.probability}%</strong>
                       </div>
-                    ),
-                  )}
-                </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>

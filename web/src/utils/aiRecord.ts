@@ -34,10 +34,65 @@ export function formatValue(value: unknown, fallback = '--'): string {
 }
 
 export function probabilityRows(value: unknown): Array<{ label: string; probability: number }> {
-  if (!value || typeof value !== 'object') return [];
-  return Object.entries(value as Record<string, unknown>)
-    .map(([label, probability]) => ({ label, probability: Number(probability) || 0 }))
+  const entries: Array<{ label: string; probability: number }> = [];
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      if (entry && typeof entry === 'object') {
+        const item = entry as Record<string, unknown>;
+        const label = firstText(
+          item.label,
+          item.name,
+          item.scenario,
+          item.key,
+          item.title,
+          item.direction,
+        );
+        const probability = toNumber(
+          item.probability ?? item.prob ?? item.value ?? item.weight ?? item.p,
+        );
+        if (probability === null) return;
+        entries.push({ label: label || `情景 ${index + 1}`, probability });
+        return;
+      }
+      const probability = toNumber(entry);
+      if (probability === null) return;
+      entries.push({ label: `情景 ${index + 1}`, probability });
+    });
+  } else if (value && typeof value === 'object') {
+    Object.entries(value as Record<string, unknown>).forEach(([label, raw]) => {
+      const probability = toNumber(raw);
+      if (probability === null) return;
+      entries.push({ label, probability });
+    });
+  }
+  if (entries.length === 0) return [];
+  // 模型经常用 0~1 的小数给概率，这里统一换算成百分比。
+  const total = entries.reduce((sum, item) => sum + item.probability, 0);
+  const looksFractional =
+    total > 0 &&
+    total <= 1.05 &&
+    entries.every((item) => item.probability >= 0 && item.probability <= 1);
+  return entries
+    .map((item) => ({
+      label: item.label,
+      probability: Math.round((looksFractional ? item.probability * 100 : item.probability) * 100) / 100,
+    }))
     .sort((left, right) => right.probability - left.probability);
+}
+
+export function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const parsed = Number(value.trim().replace(/%$/, ''));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export function responseText(value: unknown): string {

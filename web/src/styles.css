@@ -1320,6 +1320,12 @@ textarea {
   width: 100%;
 }
 
+/* 模型给出的情景名可能很长且没有空格，必须允许换行，否则会压到进度条上。 */
+.probability-row > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .flow-viz {
   display: flex;
   flex-direction: column;
