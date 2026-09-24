@@ -21,7 +21,7 @@ from ..storage import (
 )
 from .bar_utils import dedupe_sorted_bars
 from .bar_utils import parse_session_time as _parse_time
-from .bar_utils import session_sort_key as _session_sort_key
+from .bar_utils import session_identity, session_sort_key as _session_sort_key
 from .sqlite import Database as LegacySqliteDatabase
 from .sqlite import (
     _normalize_record_limit,
@@ -31,6 +31,9 @@ from .sqlite import (
     _record_summary,
     _sanitize_json,
 )
+
+_MONITOR_LOG_RETENTION_DAYS = 30
+_MONITOR_LOG_PRUNE_INTERVAL_SECONDS = 600.0
 
 
 class Database:
@@ -47,6 +50,8 @@ class Database:
         self.postgres = postgres
         self.redis = redis_store
         self.influx = influx
+        # 盯盘日志按时间保留，避免 60s 轮询下无限增长；剪枝带节流。
+        self._monitor_log_pruned_at = 0.0
         self._migrate()
 
     @classmethod
@@ -162,6 +167,24 @@ class Database:
                 ON research.ai_analysis_record (created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_analysis_record_dataset_created_at
                 ON research.ai_analysis_record (dataset_id, created_at DESC, id DESC);
+            CREATE TABLE IF NOT EXISTS research.monitor_run_log (
+                id UUID PRIMARY KEY,
+                created_at TIMESTAMPTZ NOT NULL,
+                target_key TEXT,
+                dataset_id TEXT,
+                symbol TEXT,
+                timeframe TEXT,
+                status TEXT,
+                session_id TEXT,
+                message TEXT,
+                detail JSONB NOT NULL DEFAULT '{}'::jsonb
+            );
+            CREATE INDEX IF NOT EXISTS idx_monitor_run_log_created_at
+                ON research.monitor_run_log (created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_monitor_run_log_dataset_created_at
+                ON research.monitor_run_log (dataset_id, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_monitor_run_log_symbol_created_at
+                ON research.monitor_run_log (symbol, created_at DESC, id DESC);
             """
         )
         self.postgres.execute(
@@ -343,23 +366,24 @@ class Database:
         now = datetime.now(UTC)
         created_at = created_at or now
         existing_bars = self._fetch_dataset_bars(dataset_id, existing) if existing else []
-        existing_by_session = {
-            bar["session_id"]: bar for bar in _dedupe_bars(existing_bars).values()
-        }
+        existing_by_session = _dedupe_bars(existing_bars)
 
         new_bars = [
-            bar for session_id, bar in remote_bars.items() if session_id not in existing_by_session
+            bar for identity, bar in remote_bars.items() if identity not in existing_by_session
         ]
         revised_bars = [
             bar
-            for session_id, bar in remote_bars.items()
-            if session_id in existing_by_session
-            and existing_by_session[session_id] != bar
+            for identity, bar in remote_bars.items()
+            if identity in existing_by_session
+            and existing_by_session[identity] != bar
         ]
         bars_to_write = [*new_bars, *revised_bars]
         updated_count = len(remote_bars) - len(new_bars)
         merged = {**existing_by_session, **remote_bars}
-        merged_bars = [merged[session_id] for session_id in sorted(merged)]
+        merged_bars = sorted(
+            merged.values(),
+            key=lambda bar: _session_sort_key(str(bar.get("session_id") or "")),
+        )
         source = str(remote.get("source") or request_payload.get("source") or "unknown")
         source_provider = str(remote.get("source_provider") or source)
         exchange = str(remote.get("exchange") or request_payload.get("exchange") or "")
@@ -705,6 +729,174 @@ class Database:
         )
         return {"deleted": True, "id": record_id}
 
+    def save_monitor_log(self, entry: Mapping[str, Any]) -> dict[str, Any]:
+        log_id = str(uuid4())
+        created_at = _parse_time(entry.get("created_at")) or datetime.now(UTC)
+        dataset_id = str(entry.get("dataset_id") or "").strip() or None
+        symbol = str(entry.get("symbol") or "").strip().upper() or None
+        timeframe = str(entry.get("timeframe") or "").strip().lower() or None
+        status = str(entry.get("status") or "").strip() or None
+        session_id = str(entry.get("session_id") or "").strip() or None
+        message = str(entry.get("message") or "").strip() or None
+        target_key = str(entry.get("target_key") or "").strip() or None
+        detail = _sanitize_json(
+            entry.get("detail") if isinstance(entry.get("detail"), Mapping) else {}
+        )
+        self.postgres.execute(
+            """
+            INSERT INTO research.monitor_run_log
+                (id, created_at, target_key, dataset_id, symbol, timeframe, status,
+                 session_id, message, detail)
+            VALUES
+                (CAST(:id AS uuid), CAST(:created_at AS timestamptz), :target_key,
+                 :dataset_id, :symbol, :timeframe, :status, :session_id, :message,
+                 CAST(:detail AS jsonb))
+            """,
+            {
+                "id": log_id,
+                "created_at": created_at.isoformat(),
+                "target_key": target_key,
+                "dataset_id": dataset_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "status": status,
+                "session_id": session_id,
+                "message": message,
+                "detail": json.dumps(
+                    detail,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            },
+        )
+        self._maybe_prune_monitor_logs()
+        return {
+            "id": log_id,
+            "created_at": created_at.isoformat(),
+            "target_key": target_key,
+            "dataset_id": dataset_id,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "status": status,
+            "session_id": session_id,
+            "message": message,
+            "detail": detail,
+        }
+
+    def _maybe_prune_monitor_logs(self) -> None:
+        now = time.monotonic()
+        if now - self._monitor_log_pruned_at < _MONITOR_LOG_PRUNE_INTERVAL_SECONDS:
+            return
+        self._monitor_log_pruned_at = now
+        cutoff = datetime.now(UTC) - timedelta(days=_MONITOR_LOG_RETENTION_DAYS)
+        try:
+            self.postgres.execute(
+                """
+                DELETE FROM research.monitor_run_log
+                WHERE created_at < CAST(:cutoff AS timestamptz)
+                """,
+                {"cutoff": cutoff.isoformat()},
+            )
+        except Exception:  # noqa: BLE001 - retention is best-effort
+            return
+
+    def list_monitor_logs(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        normalized_limit = _normalize_record_limit(limit)
+        normalized_offset = _normalize_record_offset(offset)
+        clauses: list[str] = []
+        params: dict[str, Any] = {
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+        if dataset_id:
+            clauses.append("dataset_id = :dataset_id")
+            params["dataset_id"] = dataset_id
+        if symbol:
+            clauses.append("symbol = :symbol")
+            params["symbol"] = symbol
+        if status:
+            clauses.append("status = :status")
+            params["status"] = status
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self.postgres.query(
+            f"""
+            SELECT id::text, created_at, target_key, dataset_id, symbol, timeframe,
+                   status, session_id, message, detail
+            FROM research.monitor_run_log
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit OFFSET :offset
+            """,
+            params,
+        )
+        return [_monitor_log_row(row) for row in rows]
+
+    def count_monitor_logs(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        if dataset_id:
+            clauses.append("dataset_id = :dataset_id")
+            params["dataset_id"] = dataset_id
+        if symbol:
+            clauses.append("symbol = :symbol")
+            params["symbol"] = symbol
+        if status:
+            clauses.append("status = :status")
+            params["status"] = status
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        row = self.postgres.query_one(
+            f"SELECT COUNT(*) AS total FROM research.monitor_run_log {where}",
+            params,
+        )
+        return int(row.get("total", 0)) if row is not None else 0
+
+    def delete_monitor_log(self, log_id: str) -> dict[str, Any]:
+        try:
+            UUID(log_id)
+        except ValueError as exc:
+            raise KeyError(f"monitor log not found: {log_id}") from exc
+        row = self.postgres.query_one(
+            "SELECT id::text FROM research.monitor_run_log WHERE id = CAST(:log_id AS uuid)",
+            {"log_id": log_id},
+        )
+        if row is None:
+            raise KeyError(f"monitor log not found: {log_id}")
+        self.postgres.execute(
+            "DELETE FROM research.monitor_run_log WHERE id = CAST(:log_id AS uuid)",
+            {"log_id": log_id},
+        )
+        return {"deleted": True, "id": log_id}
+
+    def clear_monitor_logs(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+    ) -> dict[str, Any]:
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        if dataset_id:
+            clauses.append("dataset_id = :dataset_id")
+            params["dataset_id"] = dataset_id
+        if symbol:
+            clauses.append("symbol = :symbol")
+            params["symbol"] = symbol
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        self.postgres.execute(f"DELETE FROM research.monitor_run_log {where}", params)
+        return {"cleared": True}
+
     def storage_health(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
         checks = {
@@ -1006,6 +1198,8 @@ def _dataset_time_bounds(
 
 
 def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Normalise bars and key them by instant so timezone spellings collapse."""
+
     deduped: dict[str, dict[str, Any]] = {}
     for index, bar in enumerate(bars):
         try:
@@ -1022,8 +1216,32 @@ def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             raise ValueError(f"第 {index + 1} 条 bar 数据无效") from exc
         if not session_id:
             raise ValueError(f"第 {index + 1} 条 bar 缺少 session_id")
-        deduped.setdefault(session_id, normalized)
+        deduped.setdefault(session_identity(session_id), normalized)
     return deduped
+
+
+def _monitor_log_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    detail = row.get("detail")
+    if isinstance(detail, str):
+        try:
+            detail = json.loads(detail)
+        except ValueError:
+            detail = {}
+    created_at = row.get("created_at")
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
+    return {
+        "id": str(row.get("id") or ""),
+        "created_at": created_at,
+        "target_key": row.get("target_key"),
+        "dataset_id": row.get("dataset_id"),
+        "symbol": row.get("symbol"),
+        "timeframe": row.get("timeframe"),
+        "status": row.get("status"),
+        "session_id": row.get("session_id"),
+        "message": row.get("message"),
+        "detail": detail if isinstance(detail, Mapping) else {},
+    }
 
 
 def _dataset_id(symbol: str, timeframe: str) -> str:

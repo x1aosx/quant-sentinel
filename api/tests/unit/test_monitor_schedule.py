@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,7 @@ class _MonitorDb:
     def __init__(self, *, fail_save: bool = False) -> None:
         self.fail_save = fail_save
         self.saved: list[tuple[dict, str | None]] = []
+        self.logs: list[dict] = []
 
     def get_dataset(self, dataset_id: str) -> dict:
         return {
@@ -35,6 +37,10 @@ class _MonitorDb:
             raise RuntimeError("storage unavailable")
         self.saved.append((record, dataset_id))
         return {"id": "saved-record", "dataset_id": dataset_id}
+
+    def save_monitor_log(self, entry: dict) -> dict:
+        self.logs.append(dict(entry))
+        return {**entry, "id": f"log-{len(self.logs)}"}
 
 
 def _shanghai(
@@ -324,3 +330,92 @@ def test_poll_target_counts_idle_checks_as_skips() -> None:
     state = manager._status["dataset:dataset-1"]
     assert state["success_count"] == 1
     assert state["skip_count"] == 1
+
+
+def test_run_once_polls_all_targets_concurrently() -> None:
+    manager = MonitorManager(object())
+    manager._targets = [{"symbol": f"S{index}"} for index in range(4)]
+    # 屏障只有四个目标同时开跑才能通过；串行执行会超时并让测试失败。
+    barrier = threading.Barrier(4, timeout=5)
+    started: list[str] = []
+    lock = threading.Lock()
+
+    def fake_poll(target, _payload):
+        barrier.wait()
+        with lock:
+            started.append(str(target["symbol"]))
+        return {"key": str(target["symbol"]), "status": "ok"}
+
+    manager._poll_target = fake_poll  # type: ignore[method-assign]
+    result = manager.run_once()
+
+    assert result["status"] == "ok"
+    assert result["concurrency"] == 4
+    assert sorted(started) == ["S0", "S1", "S2", "S3"]
+    assert len(result["items"]) == 4
+
+
+def test_poll_target_writes_monitor_logs_for_success_and_idle() -> None:
+    db = _MonitorDb()
+    manager = MonitorManager(db)
+    manager.batch.analyze = lambda *_args, **_kwargs: {
+        "items": [
+            {
+                "status": "ok",
+                "duration_ms": 42.0,
+                "record": {
+                    "id": "record-1",
+                    "status": "ok",
+                    "symbol": "600000",
+                    "stage2_decision": {
+                        "decision": {"action": "LONG", "confidence": 72.0}
+                    },
+                },
+            }
+        ]
+    }
+
+    first = manager._poll_target({"dataset_id": "dataset-1"}, {})
+    second = manager._poll_target({"dataset_id": "dataset-1"}, {})
+
+    assert first["status"] == "ok"
+    assert second["status"] == "idle"
+    assert [entry["status"] for entry in db.logs] == ["ok", "idle"]
+    success = db.logs[0]
+    assert success["symbol"] == "600000"
+    assert success["timeframe"] == "1d"
+    assert success["dataset_id"] == "dataset-1"
+    assert success["message"] == "分析完成：LONG · 72%"
+    assert success["detail"]["action"] == "LONG"
+    assert success["detail"]["confidence"] == 72.0
+    assert db.logs[1]["message"] == "无新增已收盘K线，跳过分析"
+
+
+def test_poll_target_logs_errors_and_keeps_running() -> None:
+    db = _MonitorDb()
+    manager = MonitorManager(db)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("远程行情失败")
+
+    manager.batch._resolve_dataset = boom  # type: ignore[method-assign]
+    result = manager._poll_target({"symbol": "600000"}, {})
+
+    assert result["status"] == "error"
+    assert db.logs and db.logs[0]["status"] == "error"
+    assert "远程行情失败" in str(db.logs[0]["message"])
+
+
+def test_monitor_concurrency_comes_from_payload() -> None:
+    fixed_now = _shanghai(2026, 9, 13, 12, 0)
+    manager = MonitorManager(object(), now_provider=lambda: fixed_now)
+    started = manager.start(
+        [{"symbol": "600000"}],
+        {"monitor_concurrency": 3},
+        interval_seconds=60,
+    )
+    try:
+        assert manager._concurrency == 3
+        assert started["running"] is True
+    finally:
+        manager.stop()

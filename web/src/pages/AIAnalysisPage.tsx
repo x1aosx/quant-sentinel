@@ -15,6 +15,7 @@ import {
   ChevronRight,
   CheckCircle2,
   Eye,
+  FileText,
   Gauge,
   History,
   ListTree,
@@ -29,6 +30,7 @@ import {
   Trash2,
   TrendingUp,
   WandSparkles,
+  X,
 } from 'lucide-react';
 import { api, streamAIAnalysis } from '../api/client';
 import { DecisionVisualization } from '../components/ai/DecisionVisualization';
@@ -38,6 +40,7 @@ import type {
   AIRecordSummary,
   BatchAnalyzeResponse,
   DatasetSummary,
+  MonitorLogEntry,
   MonitorSchedule,
   MonitorTarget,
   MonitorTargetStatus,
@@ -242,6 +245,19 @@ function monitorErrorText(error?: Record<string, any> | null) {
   return String(error.message ?? error.detail ?? JSON.stringify(error));
 }
 
+const MONITOR_STATUS_LABELS: Record<string, string> = {
+  pending: '等待',
+  running: '运行中',
+  ok: '已完成',
+  idle: '空闲',
+  error: '异常',
+};
+
+function monitorStatusLabel(status?: string | null) {
+  if (!status) return '未运行';
+  return MONITOR_STATUS_LABELS[status.toLowerCase()] ?? status;
+}
+
 function statusCount(
   status: MonitorTargetStatus | undefined,
   key: 'success_count' | 'failure_count' | 'skip_count',
@@ -298,6 +314,9 @@ export function AIAnalysisPage() {
   const [scheduleReady, setScheduleReady] = useState(false);
   const [loadingRecordId, setLoadingRecordId] = useState('');
   const [deletingRecordId, setDeletingRecordId] = useState('');
+  const [monitorLogOpen, setMonitorLogOpen] = useState(false);
+  const [monitorLogSymbol, setMonitorLogSymbol] = useState('');
+  const [deletingMonitorLogId, setDeletingMonitorLogId] = useState('');
   // 当前展示的结果若来自「分析结果」列表，记录其列表条目 id，便于删除后同步清空视图。
   const [loadedHistoryRecordId, setLoadedHistoryRecordId] = useState('');
   const [analysisDefaultPending, setAnalysisDefaultPending] = useState(true);
@@ -341,6 +360,16 @@ export function AIAnalysisPage() {
     queryKey: ['monitor-status'],
     queryFn: api.getMonitorStatus,
     refetchInterval: 4000,
+  });
+  const monitorLogQuery = useQuery({
+    queryKey: ['monitor-logs', monitorLogSymbol],
+    queryFn: () =>
+      api.listMonitorLogs({
+        symbol: monitorLogSymbol || undefined,
+        limit: 100,
+      }),
+    enabled: monitorLogOpen,
+    refetchInterval: monitorLogOpen ? 8000 : false,
   });
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
   const stockGroups = useMemo(() => groupDatasetsByStock(datasets), [datasets]);
@@ -601,8 +630,8 @@ export function AIAnalysisPage() {
   });
 
   const saveMonitorConfig = useMutation({
-    mutationFn: async () => {
-      const submittedWatchlist = watchlist;
+    mutationFn: async (override: MonitorTarget[] | undefined) => {
+      const submittedWatchlist = override ?? watchlist;
       const value = await api.saveSystemConfig({
         monitor_watchlist: submittedWatchlist,
         monitor_schedule: scheduleDraft,
@@ -683,8 +712,34 @@ export function AIAnalysisPage() {
     onSuccess: () => {
       setNotice('已完成一次盯盘检查');
       void queryClient.invalidateQueries({ queryKey: ['monitor-status'] });
+      void queryClient.invalidateQueries({ queryKey: ['monitor-logs'] });
+      void queryClient.invalidateQueries({ queryKey: ['ai-records'] });
     },
     onError: (reason: Error) => setError(reason.message),
+  });
+
+  const deleteMonitorLog = useMutation({
+    mutationFn: (logId: string) => api.deleteMonitorLog(logId),
+    onSuccess: () => {
+      setNotice('已删除该条盯盘日志');
+      setError('');
+      void queryClient.invalidateQueries({ queryKey: ['monitor-logs'] });
+    },
+    onError: (reason: Error) => setError(`删除盯盘日志失败：${reason.message}`),
+    onSettled: () => setDeletingMonitorLogId(''),
+  });
+
+  const clearMonitorLogs = useMutation({
+    mutationFn: () =>
+      api.clearMonitorLogs(monitorLogSymbol ? { symbol: monitorLogSymbol } : {}),
+    onSuccess: () => {
+      setNotice(
+        monitorLogSymbol ? `已清空 ${monitorLogSymbol} 的盯盘日志` : '已清空全部盯盘日志',
+      );
+      setError('');
+      void queryClient.invalidateQueries({ queryKey: ['monitor-logs'] });
+    },
+    onError: (reason: Error) => setError(`清空盯盘日志失败：${reason.message}`),
   });
 
   const batchAnalysis = useMutation({
@@ -784,6 +839,55 @@ export function AIAnalysisPage() {
         indexes.has(index) ? { ...target, enabled } : target,
       ),
     );
+  };
+
+  // 删除会立即持久化：盯盘运行中时保存流程会自动重启，避免残留旧标的。
+  const removeWatchlistIndexes = (indexes: number[]) => {
+    const removing = new Set(indexes);
+    if (!removing.size) return;
+    const next = watchlist.filter((_, index) => !removing.has(index));
+    setWatchlist(next);
+    if (expandedMonitor) {
+      const expandedStillPresent = next.some(
+        (target) => monitorTargetKey(target) === expandedMonitor,
+      );
+      if (!expandedStillPresent) setExpandedMonitor(null);
+    }
+    saveMonitorConfig.mutate(next);
+  };
+
+  const handleRemoveProduct = (product: MonitorProductGroup) => {
+    if (
+      !window.confirm(
+        `确定从盯盘列表移除“${product.title}”的全部 ${product.entries.length} 个周期吗？`,
+      )
+    ) {
+      return;
+    }
+    removeWatchlistIndexes(product.entries.map((entry) => entry.index));
+  };
+
+  const handleRemovePeriod = (target: MonitorTarget, index: number) => {
+    const label = `${target.symbol || target.dataset_id || '该标的'} ${formatTimeframeLabel(target.timeframe)}`;
+    if (!window.confirm(`确定从盯盘列表移除“${label}”吗？`)) return;
+    removeWatchlistIndexes([index]);
+  };
+
+  const handleDeleteMonitorLog = (log: MonitorLogEntry) => {
+    if (!window.confirm('确定删除这条盯盘日志吗？')) return;
+    setDeletingMonitorLogId(log.id);
+    deleteMonitorLog.mutate(log.id);
+  };
+
+  const handleClearMonitorLogs = () => {
+    if (
+      !window.confirm(
+        monitorLogSymbol ? `确定清空 ${monitorLogSymbol} 的盯盘日志吗？` : '确定清空全部盯盘日志吗？',
+      )
+    ) {
+      return;
+    }
+    clearMonitorLogs.mutate();
   };
 
   const addWatchlistPeriod = () => {
@@ -1241,6 +1345,13 @@ export function AIAnalysisPage() {
             </div>
             <div className="section-title-actions">
               <button
+                className={monitorLogOpen ? 'button button-primary' : 'button'}
+                onClick={() => setMonitorLogOpen((current) => !current)}
+              >
+                <FileText size={14} />
+                {monitorLogOpen ? '收起运行日志' : '运行日志'}
+              </button>
+              <button
                 className="button"
                 onClick={() => void monitorQuery.refetch()}
                 disabled={monitorQuery.isFetching}
@@ -1433,7 +1544,7 @@ export function AIAnalysisPage() {
               <div className="row">
                 <button
                   className="button"
-                  onClick={() => saveMonitorConfig.mutate()}
+                  onClick={() => saveMonitorConfig.mutate(undefined)}
                   disabled={saveMonitorConfig.isPending || persistWatchlistPending}
                 >
                   <Save size={14} />
@@ -1490,6 +1601,15 @@ export function AIAnalysisPage() {
                           已启用 {enabledCount}/{product.entries.length}
                         </span>
                         <span className={aggregateStatus.className}>{aggregateStatus.label}</span>
+                        <button
+                          className="button button-danger button-compact"
+                          onClick={() => handleRemoveProduct(product)}
+                          disabled={saveMonitorConfig.isPending}
+                          title={`从盯盘列表移除 ${product.title}`}
+                        >
+                          <Trash2 size={14} />
+                          删除
+                        </button>
                       </div>
                     </div>
                     <div className="monitor-product-periods">
@@ -1555,7 +1675,7 @@ export function AIAnalysisPage() {
                                         : 'badge badge-neutral'
                                   }
                                 >
-                                  {status?.status ?? '未运行'}
+                                  {monitorStatusLabel(status?.status)}
                                 </span>
                               </div>
                               <div className="monitor-status-cell">
@@ -1599,6 +1719,18 @@ export function AIAnalysisPage() {
                                 </strong>
                               </div>
                               {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                              <button
+                                className="icon-button icon-button-danger"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleRemovePeriod(target, index);
+                                }}
+                                disabled={saveMonitorConfig.isPending}
+                                title="从盯盘列表移除该周期"
+                                aria-label="从盯盘列表移除该周期"
+                              >
+                                <Trash2 size={14} />
+                              </button>
                             </div>
                             {expanded ? (
                               <div className="monitor-status-detail">
@@ -1734,12 +1866,9 @@ export function AIAnalysisPage() {
                                     className="button button-danger"
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setWatchlist((current) =>
-                                        current.filter(
-                                          (_, targetIndex) => targetIndex !== index,
-                                        ),
-                                      );
+                                      handleRemovePeriod(target, index);
                                     }}
+                                    disabled={saveMonitorConfig.isPending}
                                   >
                                     <Trash2 size={14} />
                                     移除周期
@@ -1756,6 +1885,143 @@ export function AIAnalysisPage() {
               })
             )}
           </div>
+          {monitorLogOpen ? (
+            <div className="panel monitor-log-panel">
+              <div className="section-title">
+                <div className="section-title-main">
+                  <FileText size={15} />
+                  盯盘运行日志
+                  {monitorLogQuery.data ? (
+                    <span className="tag">{monitorLogQuery.data.total} 条</span>
+                  ) : null}
+                </div>
+                <div className="section-title-actions">
+                  <select
+                    value={monitorLogSymbol}
+                    onChange={(event) => setMonitorLogSymbol(event.target.value)}
+                    aria-label="按股票筛选盯盘日志"
+                  >
+                    <option value="">全部股票</option>
+                    {monitorProducts.map((product) => (
+                      <option key={product.key} value={product.symbol}>
+                        {product.title} · {product.symbol}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="button"
+                    onClick={() => void monitorLogQuery.refetch()}
+                    disabled={monitorLogQuery.isFetching}
+                  >
+                    <RefreshCcw size={14} />
+                    {monitorLogQuery.isFetching ? '刷新中...' : '刷新'}
+                  </button>
+                  <button
+                    className="button button-danger"
+                    onClick={handleClearMonitorLogs}
+                    disabled={clearMonitorLogs.isPending || !monitorLogQuery.data?.total}
+                  >
+                    <Trash2 size={14} />
+                    {clearMonitorLogs.isPending ? '清空中...' : '清空日志'}
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => setMonitorLogOpen(false)}
+                    aria-label="关闭盯盘日志"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table className="table monitor-log-table">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>标的</th>
+                      <th>状态</th>
+                      <th>说明</th>
+                      <th>行情时间</th>
+                      <th>决策</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monitorLogQuery.isLoading ? (
+                      <tr>
+                        <td colSpan={7}>
+                          <div className="empty">正在加载盯盘日志...</div>
+                        </td>
+                      </tr>
+                    ) : monitorLogQuery.isError ? (
+                      <tr>
+                        <td colSpan={7}>
+                          <div className="empty">
+                            盯盘日志加载失败：
+                            {monitorLogQuery.error instanceof Error
+                              ? monitorLogQuery.error.message
+                              : '未知错误'}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (monitorLogQuery.data?.items.length ?? 0) === 0 ? (
+                      <tr>
+                        <td colSpan={7}>
+                          <div className="empty">还没有盯盘运行日志。</div>
+                        </td>
+                      </tr>
+                    ) : (
+                      monitorLogQuery.data?.items.map((log) => {
+                        const logStatus = (log.status ?? '').toLowerCase();
+                        const statusClass =
+                          logStatus === 'error'
+                            ? 'badge badge-danger'
+                            : logStatus === 'ok'
+                              ? 'badge badge-ok'
+                              : logStatus === 'running'
+                                ? 'badge badge-info'
+                                : 'badge badge-neutral';
+                        const detail = log.detail ?? {};
+                        return (
+                          <tr key={log.id}>
+                            <td>{formatDateTime(log.created_at)}</td>
+                            <td>
+                              {log.symbol || '--'}
+                              {log.timeframe
+                                ? ` · ${formatTimeframeLabel(log.timeframe)}`
+                                : ''}
+                            </td>
+                            <td>
+                              <span className={statusClass}>{monitorStatusLabel(log.status)}</span>
+                            </td>
+                            <td className="monitor-log-message">{log.message || '--'}</td>
+                            <td>{log.session_id || '--'}</td>
+                            <td>
+                              {detail.action ? String(detail.action) : '--'}
+                              {typeof detail.confidence === 'number'
+                                ? ` · ${Math.round(detail.confidence)}%`
+                                : ''}
+                            </td>
+                            <td>
+                              <button
+                                className="icon-button icon-button-danger"
+                                onClick={() => handleDeleteMonitorLog(log)}
+                                disabled={deletingMonitorLogId === log.id}
+                                title="删除该条日志"
+                                aria-label="删除该条日志"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
           {lastBatch ? (
             <div className="batch-summary">
               <span>完成 {lastBatch.summary.succeeded ?? 0}</span>

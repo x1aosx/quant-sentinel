@@ -1602,8 +1602,22 @@ textarea {
   overflow-x: auto;
 }
 
+.monitor-log-panel {
+  margin-top: 16px;
+}
+
+.monitor-log-table {
+  min-width: 900px;
+}
+
+.monitor-log-message {
+  max-width: 380px;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .monitor-status-item {
-  min-width: 1040px;
+  min-width: 1100px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1654,6 +1668,43 @@ textarea {
   gap: 8px;
 }
 
+.button-compact {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.icon-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: #f5f7f8;
+  color: var(--text);
+}
+
+.icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon-button-danger:hover:not(:disabled) {
+  border-color: #f2b8b5;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .monitor-product-periods .monitor-status-row {
   border-top: 1px solid var(--border);
 }
@@ -1664,7 +1715,7 @@ textarea {
 
 .monitor-status-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1.5fr) repeat(6, minmax(106px, auto)) 24px;
+  grid-template-columns: minmax(190px, 1.5fr) repeat(6, minmax(106px, auto)) 24px 32px;
   align-items: center;
   gap: 12px;
   min-height: 66px;

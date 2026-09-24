@@ -14,6 +14,7 @@ import httpx
 
 from ..analysis.price_action import analyze_price_action
 from ..analysis.sr_levels import detect_support_resistance
+from ..domain.session_time import dedupe_sorted_bars
 
 
 @dataclass(frozen=True)
@@ -138,7 +139,9 @@ def build_snapshot(
     bars: Sequence[Mapping[str, Any]],
     settings: AISettings,
 ) -> dict[str, Any]:
-    selected = list(bars)[-settings.analysis_bar_count :]
+    # 快照与提示词都要求 K 线按 session 旧到新且不重复，这里统一归一化。
+    normalized_bars = dedupe_sorted_bars(bars)
+    selected = normalized_bars[-settings.analysis_bar_count :]
     if len(selected) < 60:
         raise ValueError("AI 快照至少需要 60 根已收盘K线")
     sr = detect_support_resistance(

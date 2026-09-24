@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -15,9 +15,12 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from xquant.marketdata.remote import fetch_remote_bars, resolve_instrument_title
 
 from .bar_utils import dedupe_sorted_bars, session_sort_key
+from .bar_utils import parse_session_time as _parse_time
 
 _PROCESS_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
 _PROCESS_CACHE_LOCK = threading.Lock()
+_MONITOR_LOG_RETENTION_DAYS = 30
+_MONITOR_LOG_PRUNE_INTERVAL_SECONDS = 600.0
 
 
 def _title_needs_resolution(title: Any, symbol: Any) -> bool:
@@ -29,6 +32,8 @@ def _title_needs_resolution(title: Any, symbol: Any) -> bool:
 class Database:
     def __init__(self, path: Path):
         self.path = path
+        # 盯盘日志按时间保留，避免 60s 轮询下无限增长；剪枝带节流。
+        self._monitor_log_pruned_at = 0.0
         self._migrate()
 
     def _connect(self) -> sqlite3.Connection:
@@ -109,6 +114,24 @@ class Database:
                 ON ai_analysis_records (created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_analysis_records_dataset_created_at
                 ON ai_analysis_records (dataset_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS monitor_run_logs (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                target_key TEXT,
+                dataset_id TEXT,
+                symbol TEXT,
+                timeframe TEXT,
+                status TEXT,
+                session_id TEXT,
+                message TEXT,
+                detail_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_monitor_run_logs_created_at
+                ON monitor_run_logs (created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_monitor_run_logs_dataset_created_at
+                ON monitor_run_logs (dataset_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_monitor_run_logs_symbol_created_at
+                ON monitor_run_logs (symbol, created_at DESC);
             """
         )
         conn.execute(
@@ -631,6 +654,157 @@ class Database:
         conn.close()
         return {"deleted": True, "id": record_id}
 
+    def save_monitor_log(self, entry: Mapping[str, Any]) -> dict[str, Any]:
+        log_id = str(uuid4())
+        created_at = _parse_time(entry.get("created_at")) or datetime.now(UTC)
+        detail = _sanitize_json(
+            entry.get("detail") if isinstance(entry.get("detail"), Mapping) else {}
+        )
+        record = {
+            "id": log_id,
+            "created_at": created_at.isoformat(),
+            "target_key": str(entry.get("target_key") or "").strip() or None,
+            "dataset_id": str(entry.get("dataset_id") or "").strip() or None,
+            "symbol": str(entry.get("symbol") or "").strip().upper() or None,
+            "timeframe": str(entry.get("timeframe") or "").strip().lower() or None,
+            "status": str(entry.get("status") or "").strip() or None,
+            "session_id": str(entry.get("session_id") or "").strip() or None,
+            "message": str(entry.get("message") or "").strip() or None,
+            "detail": detail if isinstance(detail, Mapping) else {},
+        }
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO monitor_run_logs
+                (id, created_at, target_key, dataset_id, symbol, timeframe, status,
+                 session_id, message, detail_json)
+            VALUES
+                (:id, :created_at, :target_key, :dataset_id, :symbol, :timeframe,
+                 :status, :session_id, :message, :detail_json)
+            """,
+            {
+                **record,
+                "detail_json": json.dumps(
+                    record["detail"],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            },
+        )
+        conn.commit()
+        conn.close()
+        self._maybe_prune_monitor_logs()
+        return record
+
+    def _maybe_prune_monitor_logs(self) -> None:
+        now = time.monotonic()
+        if now - self._monitor_log_pruned_at < _MONITOR_LOG_PRUNE_INTERVAL_SECONDS:
+            return
+        self._monitor_log_pruned_at = now
+        cutoff = (datetime.now(UTC) - timedelta(days=_MONITOR_LOG_RETENTION_DAYS)).isoformat()
+        try:
+            conn = self._connect()
+            conn.execute("DELETE FROM monitor_run_logs WHERE created_at < ?", (cutoff,))
+            conn.commit()
+            conn.close()
+        except sqlite3.Error:
+            return
+
+    def list_monitor_logs(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        normalized_limit = _normalize_record_limit(limit)
+        normalized_offset = _normalize_record_offset(offset)
+        clauses: list[str] = []
+        params: list[Any] = []
+        if dataset_id:
+            clauses.append("dataset_id = ?")
+            params.append(dataset_id)
+        if symbol:
+            clauses.append("symbol = ?")
+            params.append(symbol)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend((normalized_limit, normalized_offset))
+        conn = self._connect()
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, target_key, dataset_id, symbol, timeframe,
+                   status, session_id, message, detail_json
+            FROM monitor_run_logs
+            {where}
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+        conn.close()
+        return [_monitor_log_row(dict(row)) for row in rows]
+
+    def count_monitor_logs(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if dataset_id:
+            clauses.append("dataset_id = ?")
+            params.append(dataset_id)
+        if symbol:
+            clauses.append("symbol = ?")
+            params.append(symbol)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        conn = self._connect()
+        row = conn.execute(
+            f"SELECT COUNT(*) AS total FROM monitor_run_logs {where}",
+            params,
+        ).fetchone()
+        conn.close()
+        return int(row["total"]) if row is not None else 0
+
+    def delete_monitor_log(self, log_id: str) -> dict[str, Any]:
+        conn = self._connect()
+        cursor = conn.execute("DELETE FROM monitor_run_logs WHERE id = ?", (log_id,))
+        if cursor.rowcount == 0:
+            conn.close()
+            raise KeyError(f"monitor log not found: {log_id}")
+        conn.commit()
+        conn.close()
+        return {"deleted": True, "id": log_id}
+
+    def clear_monitor_logs(
+        self,
+        dataset_id: str | None = None,
+        symbol: str | None = None,
+    ) -> dict[str, Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if dataset_id:
+            clauses.append("dataset_id = ?")
+            params.append(dataset_id)
+        if symbol:
+            clauses.append("symbol = ?")
+            params.append(symbol)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        conn = self._connect()
+        conn.execute(f"DELETE FROM monitor_run_logs {where}", params)
+        conn.commit()
+        conn.close()
+        return {"cleared": True}
+
     def get_cached_json(self, key: str) -> Any | None:
         cache_key = (str(self.path.resolve()), key)
         now = time.monotonic()
@@ -656,6 +830,27 @@ class Database:
         expires_at = time.monotonic() + ttl_seconds
         with _PROCESS_CACHE_LOCK:
             _PROCESS_CACHE[cache_key] = (expires_at, copy.deepcopy(value))
+
+
+def _monitor_log_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    detail = row.get("detail_json")
+    if isinstance(detail, str):
+        try:
+            detail = json.loads(detail)
+        except ValueError:
+            detail = {}
+    return {
+        "id": str(row.get("id") or ""),
+        "created_at": row.get("created_at"),
+        "target_key": row.get("target_key"),
+        "dataset_id": row.get("dataset_id"),
+        "symbol": row.get("symbol"),
+        "timeframe": row.get("timeframe"),
+        "status": row.get("status"),
+        "session_id": row.get("session_id"),
+        "message": row.get("message"),
+        "detail": detail if isinstance(detail, Mapping) else {},
+    }
 
 
 def _normalize_record_limit(limit: int) -> int:

@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
 
+from xquant.domain.session_time import dedupe_sorted_bars as _dedupe_sorted_bars
+from xquant.domain.session_time import parse_session_time as _parse_session_time
+
 _MIN_BARS = 60
 _DIRECTIONS = {"bullish", "bearish", "neutral"}
 
@@ -48,14 +51,25 @@ def _round(value: float | None, digits: int = 6) -> float | None:
 def _parse_bars(raw_bars: Sequence[Mapping[str, Any]]) -> list[_Bar]:
     bars: list[_Bar] = []
     previous_session: str | None = None
+    previous_time = None
     for index, raw in enumerate(raw_bars):
         if not isinstance(raw, Mapping):
             raise TypeError(f"第 {index + 1} 根K线必须是 Mapping")
         session = raw.get("session_id", raw.get("session", raw.get("time", raw.get("date"))))
         session_id = "" if session is None else str(session)
-        if previous_session is not None and session_id and session_id <= previous_session:
-            raise ValueError(f"K线 session 顺序必须旧到新且不重复：{session_id}")
+        session_time = _parse_session_time(session_id) if session_id else None
+        if previous_session is not None and session_id:
+            if session_time is not None and previous_time is not None:
+                if session_time < previous_time:
+                    raise ValueError(f"K线 session 顺序必须旧到新且不重复：{session_id}")
+                if session_time == previous_time:
+                    # 同一时刻的重复K线直接跳过，避免因时区写法不同而误判。
+                    continue
+            elif session_id <= previous_session:
+                raise ValueError(f"K线 session 顺序必须旧到新且不重复：{session_id}")
         previous_session = session_id or previous_session
+        if session_time is not None:
+            previous_time = session_time
 
         open_price = _number(raw.get("open"), "open", index)
         high = _number(raw.get("high"), "high", index)
@@ -464,7 +478,7 @@ def analyze_price_action(
     """Analyze closed OHLCV bars with a deterministic local price-action engine."""
     if lookback < _MIN_BARS:
         raise ValueError("数据不足：至少需要 60 根K线")
-    parsed = _parse_bars(bars)
+    parsed = _parse_bars(_dedupe_sorted_bars(bars))
     if len(parsed) < _MIN_BARS:
         raise ValueError("数据不足：至少需要 60 根K线")
 

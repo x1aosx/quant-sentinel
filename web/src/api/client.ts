@@ -13,6 +13,7 @@ import type {
   IntelligenceRunResult,
   IntelligenceThemeCategory,
   MarketEventListResponse,
+  MonitorLogListResponse,
   MonitorStatus,
   MorningBriefResponse,
   ProviderTestResult,
@@ -286,6 +287,37 @@ export const api = {
     }),
   stopMonitor: () => apiRequest<MonitorStatus>('/ai/monitor/stop', { method: 'POST' }),
   getMonitorStatus: () => apiRequest<MonitorStatus>('/ai/monitor/status'),
+  listMonitorLogs: (
+    params: {
+      dataset_id?: string;
+      symbol?: string;
+      status?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
+    const search = new URLSearchParams({ limit: String(params.limit ?? 100) });
+    if (params.dataset_id) search.set('dataset_id', params.dataset_id);
+    if (params.symbol) search.set('symbol', params.symbol);
+    if (params.status) search.set('status', params.status);
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest<MonitorLogListResponse>(`/ai/monitor/logs?${search.toString()}`);
+  },
+  deleteMonitorLog: (logId: string) =>
+    apiRequest<{ deleted: boolean; id: string }>(
+      `/ai/monitor/logs/${encodeURIComponent(logId)}`,
+      { method: 'DELETE' },
+    ),
+  clearMonitorLogs: (params: { dataset_id?: string; symbol?: string } = {}) => {
+    const search = new URLSearchParams();
+    if (params.dataset_id) search.set('dataset_id', params.dataset_id);
+    if (params.symbol) search.set('symbol', params.symbol);
+    const query = search.toString();
+    return apiRequest<{ cleared: boolean }>(
+      `/ai/monitor/logs${query ? `?${query}` : ''}`,
+      { method: 'DELETE' },
+    );
+  },
   runMonitorOnce: () =>
     apiRequest<{ status: string; items: Array<Record<string, unknown>>; cycle_at?: string }>(
       '/ai/monitor/run-once',

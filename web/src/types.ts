@@ -673,6 +673,26 @@ export interface MonitorStatus {
   items: MonitorTargetStatus[];
 }
 
+export interface MonitorLogEntry {
+  id: string;
+  created_at?: string | null;
+  target_key?: string | null;
+  dataset_id?: string | null;
+  symbol?: string | null;
+  timeframe?: string | null;
+  status?: string | null;
+  session_id?: string | null;
+  message?: string | null;
+  detail?: Record<string, any>;
+}
+
+export interface MonitorLogListResponse {
+  items: MonitorLogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface BatchAnalyzeResponse {
   status: string;
   summary: Record<string, number>;

@@ -291,6 +291,51 @@ def run_monitor_once(
     return monitor.run_once()
 
 
+@router.get("/ai/monitor/logs")
+def list_monitor_logs(
+    db: Annotated[Database, Depends(get_database)],
+    dataset_id: str | None = None,
+    symbol: str | None = None,
+    status: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict[str, Any]:
+    filters = {
+        "dataset_id": str(dataset_id or "").strip() or None,
+        "symbol": str(symbol or "").strip().upper() or None,
+        "status": str(status or "").strip().lower() or None,
+    }
+    return {
+        "items": db.list_monitor_logs(**filters, limit=limit, offset=offset),
+        "total": db.count_monitor_logs(**filters),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.delete("/ai/monitor/logs")
+def clear_monitor_logs(
+    db: Annotated[Database, Depends(get_database)],
+    dataset_id: str | None = None,
+    symbol: str | None = None,
+) -> dict[str, Any]:
+    return db.clear_monitor_logs(
+        dataset_id=str(dataset_id or "").strip() or None,
+        symbol=str(symbol or "").strip().upper() or None,
+    )
+
+
+@router.delete("/ai/monitor/logs/{log_id}")
+def delete_monitor_log(
+    log_id: str,
+    db: Annotated[Database, Depends(get_database)],
+) -> dict[str, Any]:
+    try:
+        return db.delete_monitor_log(log_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="盯盘日志不存在") from exc
+
+
 @router.get("/ai/records")
 def list_analysis_records(
     db: Annotated[Database, Depends(get_database)],

@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 import httpx
 
+from xquant.domain.session_time import session_identity, session_sort_key
+
 logger = logging.getLogger(__name__)
 
 _YAHOO_INTERVALS = {
@@ -307,8 +309,7 @@ def validate_remote_request(raw: Mapping[str, Any] | RemoteImportRequest) -> Rem
 
 
 def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    bars: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    bars: dict[str, dict[str, Any]] = {}
     for index, raw in enumerate(raw_bars):
         try:
             open_price = float(raw["open"])
@@ -320,7 +321,7 @@ def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict
             closed = bool(raw.get("closed", True))
         except (KeyError, TypeError, ValueError):
             continue
-        if not session_id or session_id in seen:
+        if not session_id:
             continue
         if min(open_price, high, low, close) <= 0 or not all(
             math.isfinite(value) for value in (open_price, high, low, close)
@@ -332,19 +333,19 @@ def normalize_remote_payload(raw_bars: Sequence[Mapping[str, Any]]) -> list[dict
             volume = 0.0
         if closed is False:
             continue
-        seen.add(session_id)
-        bars.append(
-            {
-                "session_id": session_id,
-                "open": open_price,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": max(volume, 0.0),
-            }
-        )
-    bars.sort(key=lambda item: item["session_id"])
-    return bars
+        # 同一时刻可能以不同时区写法重复返回，按瞬时去重而不是按字符串。
+        bars[session_identity(session_id)] = {
+            "session_id": session_id,
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": max(volume, 0.0),
+        }
+    return sorted(
+        bars.values(),
+        key=lambda item: session_sort_key(item["session_id"]),
+    )
 
 
 def _iso_timestamp(value: Any) -> str:

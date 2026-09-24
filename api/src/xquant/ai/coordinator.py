@@ -44,6 +44,34 @@ def _target_payload(target: Mapping[str, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in target.items()}
 
 
+def monitor_error_message(error: Any) -> str:
+    if not error:
+        return "未知错误"
+    if isinstance(error, Mapping):
+        return str(error.get("message") or error.get("detail") or error)
+    return str(error)
+
+
+def _decision_summary(record: Mapping[str, Any]) -> tuple[str | None, float | None]:
+    stage2 = record.get("stage2_decision")
+    stage2_data = stage2 if isinstance(stage2, Mapping) else {}
+    decision = stage2_data.get("decision")
+    decision_data = decision if isinstance(decision, Mapping) else stage2_data
+    if not decision_data:
+        fallback = record.get("decision")
+        decision_data = fallback if isinstance(fallback, Mapping) else {}
+    action = decision_data.get("action") or decision_data.get("order_type")
+    confidence = decision_data.get("confidence")
+    try:
+        confidence_value = float(confidence) if confidence is not None else None
+    except (TypeError, ValueError):
+        confidence_value = None
+    return (
+        str(action).upper() if action not in (None, "") else None,
+        confidence_value,
+    )
+
+
 def _schedule_windows(
     schedule: MonitorScheduleSettings,
 ) -> tuple[tuple[dt_time, dt_time], ...]:
@@ -269,6 +297,7 @@ class MonitorManager:
         self._payload: dict[str, Any] = {}
         self._schedule = MonitorScheduleSettings()
         self._interval_seconds = 60
+        self._concurrency = 8
         self._auto_notify = False
         self._status: dict[str, dict[str, Any]] = {}
         self._target_locks: dict[str, threading.Lock] = {}
@@ -302,6 +331,13 @@ class MonitorManager:
                 )
             except (TypeError, ValueError):
                 self._interval_seconds = 60
+            configured_concurrency = self._payload.get("monitor_concurrency") or analysis.get(
+                "monitor_concurrency"
+            )
+            try:
+                self._concurrency = max(1, min(16, int(configured_concurrency or 8)))
+            except (TypeError, ValueError):
+                self._concurrency = 8
             self._schedule = MonitorScheduleSettings.model_validate(schedule or {})
             self._payload["monitor_schedule"] = self._schedule.model_dump()
             self._auto_notify = bool(auto_notify)
@@ -350,14 +386,34 @@ class MonitorManager:
         with self._lock:
             targets = list(self._targets)
             payload = dict(self._payload)
+            concurrency = self._concurrency
         if not targets:
             return self.status()
-        results: list[dict[str, Any]] = []
-        for target in targets:
-            results.append(self._poll_target(target, payload))
+        # 所有盯盘标的并发执行，避免一只股票在跑、其余长期停留在等待状态。
+        workers = max(1, min(concurrency, len(targets)))
+        results: list[dict[str, Any] | None] = [None] * len(targets)
+        if workers == 1:
+            for index, target in enumerate(targets):
+                results[index] = self._poll_target(target, payload)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="xquant-monitor",
+            ) as pool:
+                futures = {
+                    pool.submit(self._poll_target, target, payload): index
+                    for index, target in enumerate(targets)
+                }
+                for future in as_completed(futures):
+                    results[futures[future]] = future.result()
         with self._lock:
             self._last_cycle_at = datetime.now(UTC).isoformat()
-        return {"status": "ok", "items": results, "cycle_at": self._last_cycle_at}
+        return {
+            "status": "ok",
+            "items": [item for item in results if item is not None],
+            "cycle_at": self._last_cycle_at,
+            "concurrency": workers,
+        }
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -418,6 +474,38 @@ class MonitorManager:
             self._now(),
             self._interval_seconds,
         )
+
+    def _write_log(
+        self,
+        key: str,
+        target: Mapping[str, Any],
+        *,
+        status: str,
+        message: str,
+        dataset: Mapping[str, Any] | None = None,
+        session_id: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> None:
+        save = getattr(self.db, "save_monitor_log", None)
+        if not callable(save):
+            return
+        summary = dataset if isinstance(dataset, Mapping) else {}
+        try:
+            save(
+                {
+                    "target_key": key,
+                    "dataset_id": str(summary.get("id") or target.get("dataset_id") or "")
+                    or None,
+                    "symbol": summary.get("symbol") or target.get("symbol"),
+                    "timeframe": summary.get("timeframe") or target.get("timeframe"),
+                    "status": status,
+                    "session_id": session_id or summary.get("last_session"),
+                    "message": message,
+                    "detail": dict(detail or {}),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - logging must never break monitoring
+            logger.warning("保存盯盘日志失败 %s: %s", key, exc)
 
     def _poll_target(self, target: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
         key = _target_key(target)
@@ -483,6 +571,15 @@ class MonitorManager:
                                 "skip_count": int(state.get("skip_count") or 0) + 1,
                             }
                         )
+                    self._write_log(
+                        key,
+                        target,
+                        status="idle",
+                        message="无新增已收盘K线，跳过分析",
+                        dataset=summary,
+                        session_id=latest_session,
+                        detail={"run_count": state.get("run_count") or 0},
+                    )
                     return {"key": key, "status": "idle", "last_session": latest_session}
                 merged: dict[str, Any] = dict(payload)
                 target_analysis = target.get("analysis")
@@ -523,6 +620,28 @@ class MonitorManager:
                         self.notification_callback(record, target, state)
                     except Exception as exc:  # noqa: BLE001 - notification failure is non-fatal
                         logger.warning("监控通知失败 %s: %s", key, exc)
+                action, confidence = _decision_summary(record)
+                self._write_log(
+                    key,
+                    target,
+                    status=item["status"],
+                    message=(
+                        f"分析完成：{action or '--'}"
+                        + (f" · {round(confidence)}%" if confidence is not None else "")
+                    )
+                    if item["status"] == "ok"
+                    else f"分析失败：{monitor_error_message(item.get('error'))}",
+                    dataset=summary,
+                    session_id=latest_session,
+                    detail={
+                        "duration_ms": item.get("duration_ms"),
+                        "action": action,
+                        "confidence": confidence,
+                        "new_bar_count": state.get("new_bar_count"),
+                        "run_count": state.get("run_count"),
+                        "record_id": record.get("id"),
+                    },
+                )
                 return {
                     "key": key,
                     "status": item["status"],
@@ -541,6 +660,13 @@ class MonitorManager:
                             "failure_count": int(state.get("failure_count") or 0) + 1,
                         }
                     )
+                self._write_log(
+                    key,
+                    target,
+                    status="error",
+                    message=f"检查失败：{exc}",
+                    detail={"error_type": type(exc).__name__},
+                )
                 return {
                     "key": key,
                     "status": "error",
