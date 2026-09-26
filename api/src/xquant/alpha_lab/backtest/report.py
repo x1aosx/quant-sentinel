@@ -116,6 +116,12 @@ class BacktestReport:
     execution_model: Mapping[str, Any]
     cost_model: Mapping[str, Any]
     robustness: Mapping[str, Any] = field(default_factory=dict)
+    # ``time_axis`` labels every point of ``equity_curve``. ``time_axis_kind``
+    # records whether those labels are real exchange sessions or the synthetic
+    # bar index, so a consumer never has to invent dates.
+    time_axis: tuple[str, ...] = ()
+    time_axis_kind: str = "bar_index"
+    rolling_sharpe: tuple[float, ...] = ()
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     @property
@@ -158,6 +164,21 @@ class BacktestReport:
         )
         return tuple(float(value) for value in positions)
 
+    def axis_label(self, index: int) -> str:
+        """Return the x-axis label for a bar index (falls back to the index)."""
+
+        if 0 <= index < len(self.time_axis):
+            return str(self.time_axis[index])
+        return str(index)
+
+    def _trade_public(self, trade: TradeRecord) -> dict[str, Any]:
+        payload = trade.to_dict()
+        payload["side"] = trade.direction
+        payload["return_pct"] = float(trade.pnl)
+        payload["entry_session"] = self.axis_label(trade.entry_bar)
+        payload["exit_session"] = self.axis_label(trade.exit_bar)
+        return payload
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
@@ -171,7 +192,10 @@ class BacktestReport:
             "metrics": _mapping_copy(self.metrics),
             "equity_curve": list(self.equity_curve),
             "drawdown_curve": list(self.drawdown_curve),
-            "trade_log": [trade.to_dict() for trade in self.trade_log],
+            "time_axis": list(self.time_axis),
+            "time_axis_kind": self.time_axis_kind,
+            "rolling_sharpe": list(self.rolling_sharpe),
+            "trade_log": [self._trade_public(trade) for trade in self.trade_log],
             "executions": [execution.to_dict() for execution in self.executions],
             "per_symbol": [item.to_dict() for item in self.per_symbol],
             "cost_breakdown": _mapping_copy(self.cost_breakdown),

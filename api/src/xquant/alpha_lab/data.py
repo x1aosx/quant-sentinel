@@ -28,6 +28,10 @@ class BarFrame:
     is_closed: np.ndarray
     source: str = "unknown"
     adjustment: str = "none"
+    # Optional session labels aligned with ``time`` ([N, T]). Dataset frames carry
+    # the exchange session id so reports can label an equity curve with real
+    # sessions instead of the synthetic bar index kept in ``time``.
+    session: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         arrays = (self.open, self.high, self.low, self.close, self.volume, self.time)
@@ -77,6 +81,9 @@ class BarFrame:
             raise InsufficientDataError("dataset has no bars")
         sessions = [str(bar.get("session_id") or "") for bar in bars]
         timestamps = np.arange(len(sessions), dtype=np.float64)[None, :]
+        session_labels = (
+            np.asarray([sessions]) if any(item for item in sessions) else None
+        )
         closed = np.ones((1, len(bars)), dtype=bool)
         symbol = str(summary.get("symbol") or dataset.get("symbol") or "UNKNOWN")
         timeframe = str(summary.get("timeframe") or dataset.get("timeframe") or "1d")
@@ -93,6 +100,7 @@ class BarFrame:
             is_closed=closed,
             source=source,
             adjustment=adjustment,
+            session=session_labels,
         )
 
     @classmethod
@@ -146,6 +154,9 @@ class BarFrame:
             is_closed=self.is_closed[:, start:stop],
             source=self.source,
             adjustment=self.adjustment,
+            session=(
+                None if self.session is None else self.session[:, start:stop]
+            ),
         )
 
     def content_hash(self) -> str:

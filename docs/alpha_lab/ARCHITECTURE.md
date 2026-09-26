@@ -56,6 +56,24 @@ POST   /realtime/evaluate
 GET    /realtime/signals
 ```
 
+## 展示字段契约
+
+前端三个页面直接消费以下由 `runtime.py` 组装的字段，改动时需同步前端
+`web/src/types/alphalab/*` 与 `web/src/api/alphalab/*`：
+
+- 训练任务（`/training/runs`、`/training/runs/{id}`）：`metrics_history`
+  （每一步一行，字段与 `mining.TrainingMetrics` 一致）、`logs`
+  （`{ts, level, step, message}`，最多保留最近 400 行）、`dataset_title`。
+  曲线与日志在内存中保留完整版本，`run.json` 只在里程碑步与结束时落盘。
+- 回测结果（`/backtests`）：除既有指标外，`metrics` 追加
+  `sortino` / `calmar` / `win_rate` / `profit_loss_ratio` / `profit_factor` /
+  `average_holding_bars` / `exposure_mean` / `exposure_max`；顶层追加与
+  `equity_curve` 逐点对齐的 `time_axis`、`time_axis_kind`（`session` 表示真实
+  交易日，`bar_index` 表示合成序号）和 `rolling_sharpe`；`trade_log` 每笔追加
+  `side` / `return_pct` / `entry_session` / `exit_session`。
+- 实时监控（`/realtime/*`）：`create_watch` 强制监控标的与周期必须与所选策略
+  训练时的品种、周期一致（否则 400）；watch 与 signal 均回传 `strategy_name`。
+
 ## Scheduler
 
 The application and scheduler CLI share `register_all_tasks()`:

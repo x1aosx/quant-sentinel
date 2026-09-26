@@ -80,6 +80,7 @@ def _closed_frame(frame: BarFrame) -> BarFrame:
         is_closed=frame.is_closed[:, mask],
         source=frame.source,
         adjustment=frame.adjustment,
+        session=None if frame.session is None else frame.session[:, mask],
     )
 
 

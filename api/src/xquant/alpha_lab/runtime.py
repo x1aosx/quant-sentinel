@@ -72,10 +72,40 @@ def _run_public(run: TrainingRun, **extra: Any) -> dict[str, Any]:
             "current_step": run.step,
             "metrics_json": extra.pop("metrics_json", {}),
             "config_json": extra.pop("config_json", {}),
+            "metrics_history": extra.pop("metrics_history", []),
+            "logs": extra.pop("logs", []),
         }
     )
     payload.update(extra)
     return payload
+
+
+# 训练曲线与日志的保留上限：曲线保留每一步，日志只保留最近若干行。
+_TRAINING_HISTORY_LIMIT = 2_000
+_TRAINING_LOG_LIMIT = 400
+
+
+def _log_entry(
+    level: str,
+    message: str,
+    *,
+    step: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "ts": _utc_now(),
+        "level": level,
+        "step": step,
+        "message": message,
+    }
+
+
+def _append_log(
+    logs: Sequence[Mapping[str, Any]],
+    entry: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    combined = [dict(item) for item in logs]
+    combined.append(dict(entry))
+    return combined[-_TRAINING_LOG_LIMIT:]
 
 
 class TrainingManager:
@@ -183,13 +213,28 @@ class TrainingManager:
             run,
             name=run_name,
             market=str(payload.get("market") or "CN-A"),
+            dataset_title=dataset_title,
             total_steps=total_steps,
             seed=seed,
             config_json={
                 "batch_size": batch_size,
                 "total_steps": total_steps,
                 "profile": str(payload.get("config_profile") or "alpha_master_compat"),
+                "seed": seed,
+                "device": str(payload.get("device") or "auto"),
+                "symbol": frame.symbol,
+                "timeframe": frame.timeframe,
+                "bars": frame.n_bars,
             },
+            metrics_history=[],
+            logs=[
+                _log_entry(
+                    "info",
+                    f"训练任务已创建：{frame.symbol} {frame.timeframe}，"
+                    f"{frame.n_bars} 根已收盘 K 线，"
+                    f"步数 {total_steps}，批量 {batch_size}，seed {seed}",
+                )
+            ],
         )
         self._save_run(public)
         cancel_event = threading.Event()
@@ -224,6 +269,10 @@ class TrainingManager:
             updated = {
                 **current,
                 "status": TrainingStatus.CANCELLED.value,
+                "logs": _append_log(
+                    current.get("logs") or [],
+                    _log_entry("warn", "收到取消请求，训练将在当前步结束后停止"),
+                ),
                 "updated_at": _utc_now(),
             }
             self._runs[run_id] = updated
@@ -275,11 +324,49 @@ class TrainingManager:
             seed=seed,
         )
         metrics: dict[str, Any] = {}
+        # 训练曲线与日志在内存中始终保留完整版本；run.json 只在里程碑步与结束时
+        # 落盘，避免每一步都重写一份不断变大的 JSON。
+        history: list[dict[str, Any]] = list(current.get("metrics_history") or [])
+        logs: list[dict[str, Any]] = list(current.get("logs") or [])
+        persist_every = max(1, total_steps // 100)
+        log_every = max(1, total_steps // 20)
+
+        def snapshot(
+            training_run: TrainingRun,
+            *,
+            persist: bool = True,
+            **extra: Any,
+        ) -> None:
+            self._save_run(
+                _run_public(
+                    training_run,
+                    name=current.get("name"),
+                    market=current.get("market"),
+                    dataset_title=current.get("dataset_title"),
+                    total_steps=total_steps,
+                    seed=seed,
+                    config_json=current.get("config_json", {}),
+                    metrics_json=metrics,
+                    metrics_history=history,
+                    logs=logs,
+                    **extra,
+                ),
+                persist=persist,
+            )
+
         try:
+            logs = _append_log(
+                logs,
+                _log_entry("info", "训练开始，正在初始化挖掘引擎"),
+            )
+            snapshot(run)
             for step in range(total_steps):
                 if cancel_event.is_set():
                     break
                 metrics = engine.train_step().to_dict()
+                history.append({"ts": _utc_now(), **metrics})
+                if len(history) > _TRAINING_HISTORY_LIMIT:
+                    del history[: len(history) - _TRAINING_HISTORY_LIMIT]
                 run = replace(
                     run,
                     status=TrainingStatus.RUNNING,
@@ -289,21 +376,43 @@ class TrainingManager:
                     best_score=engine.best_score,
                     updated_at=_utc_now(),
                 )
-                self._save_run(
-                    _run_public(
-                        run,
-                        name=current.get("name"),
-                        market=current.get("market"),
-                        total_steps=total_steps,
-                        seed=seed,
-                        config_json=current.get("config_json", {}),
-                        metrics_json=metrics,
+                finished = step + 1 == total_steps
+                if finished or (step + 1) % log_every == 0:
+                    logs = _append_log(
+                        logs,
+                        _log_entry(
+                            "info",
+                            f"进度 {step + 1}/{total_steps}："
+                            f"reward={float(metrics.get('reward', 0.0)):.4f}，"
+                            f"验证得分={float(metrics.get('validation_score', 0.0)):.4f}，"
+                            f"最优得分={float(metrics.get('best_score', 0.0)):.4f}",
+                            step=step + 1,
+                        ),
                     )
+                if float(metrics.get("invalid_rate", 0.0)) >= 0.5 and (
+                    finished or (step + 1) % log_every == 0
+                ):
+                    logs = _append_log(
+                        logs,
+                        _log_entry(
+                            "warn",
+                            f"无效公式比例偏高：{float(metrics.get('invalid_rate', 0.0)):.2%}，"
+                            "采样约束可能需要收紧",
+                            step=step + 1,
+                        ),
+                    )
+                snapshot(
+                    run,
+                    persist=finished or (step + 1) % persist_every == 0,
                 )
 
             checkpoint = engine.checkpoint()
             checkpoint_path = self.root / run_id / "checkpoint.json"
             checkpoint.save(checkpoint_path)
+            logs = _append_log(
+                logs,
+                _log_entry("info", f"检查点已保存：{checkpoint_path}"),
+            )
 
             best_strategy_id: str | None = None
             if engine.best_formula_tokens:
@@ -331,11 +440,31 @@ class TrainingManager:
                     },
                 )
                 self.strategies.save(artifact)
+                logs = _append_log(
+                    logs,
+                    _log_entry(
+                        "info",
+                        f"已产出候选策略 {best_strategy_id}，"
+                        f"最优得分 {float(engine.best_score or 0.0):.4f}",
+                    ),
+                )
+            else:
+                logs = _append_log(
+                    logs,
+                    _log_entry("warn", "训练结束但没有可用的最优公式，未产出策略"),
+                )
 
             status = (
                 TrainingStatus.CANCELLED
                 if cancel_event.is_set()
                 else TrainingStatus.SUCCEEDED
+            )
+            logs = _append_log(
+                logs,
+                _log_entry(
+                    "warn" if status is TrainingStatus.CANCELLED else "info",
+                    "训练已取消" if status is TrainingStatus.CANCELLED else "训练完成",
+                ),
             )
             run = replace(
                 run,
@@ -346,18 +475,10 @@ class TrainingManager:
                 checkpoint_uri=str(checkpoint_path),
                 updated_at=_utc_now(),
             )
-            self._save_run(
-                _run_public(
-                    run,
-                    name=current.get("name"),
-                    market=current.get("market"),
-                    total_steps=total_steps,
-                    seed=seed,
-                    config_json=current.get("config_json", {}),
-                    metrics_json=metrics,
-                    best_strategy_id=best_strategy_id,
-                    finished_at=_utc_now(),
-                )
+            snapshot(
+                run,
+                best_strategy_id=best_strategy_id,
+                finished_at=_utc_now(),
             )
         except (AlphaLabError, ArithmeticError, IndexError, ValueError) as exc:
             failed = replace(
@@ -366,28 +487,22 @@ class TrainingManager:
                 error=str(exc),
                 updated_at=_utc_now(),
             )
-            self._save_run(
-                _run_public(
-                    failed,
-                    name=current.get("name"),
-                    market=current.get("market"),
-                    total_steps=total_steps,
-                    seed=seed,
-                    config_json=current.get("config_json", {}),
-                    metrics_json=metrics,
-                    finished_at=_utc_now(),
-                )
+            logs = _append_log(
+                logs,
+                _log_entry("error", f"训练失败：{exc}", step=run.step or None),
             )
+            snapshot(failed, finished_at=_utc_now())
         finally:
             with self._lock:
                 self._cancel_events.pop(run_id, None)
                 self._futures.pop(run_id, None)
 
-    def _save_run(self, payload: dict[str, Any]) -> None:
+    def _save_run(self, payload: dict[str, Any], *, persist: bool = True) -> None:
         run_id = str(payload["id"])
         with self._lock:
             self._runs[run_id] = payload
-        _write_json(self.root / run_id / "run.json", payload)
+        if persist:
+            _write_json(self.root / run_id / "run.json", payload)
 
 
 class BacktestManager:
@@ -471,6 +586,10 @@ class BacktestManager:
         )
         result = report.to_dict()
         result["name"] = str(payload.get("name") or f"{artifact.name} backtest")
+        result["status"] = "SUCCEEDED"
+        result["strategy_name"] = artifact.name
+        result["symbols"] = [artifact.symbol]
+        result["timeframe"] = artifact.timeframe
         result["config_json"] = dict(payload)
         _write_json(self.root / f"{report.run_id}.json", result)
         return result
@@ -519,6 +638,18 @@ class RealtimeManager:
         timeframe = str(payload.get("timeframe") or "1d").strip().lower() or "1d"
         version = str(payload.get("strategy_version") or payload.get("version") or "") or None
         artifact = self.analyzer.strategy_repository.get(strategy_id, version)
+        # 监控标的必须来自已有策略：策略与训练时的品种/周期绑定，换品种或换周期
+        # 需要重新训练或单独验证，否则信号语义与回测结果都对不上。
+        if symbol and symbol != str(artifact.symbol).strip().upper():
+            raise ValueError(
+                f"策略 {artifact.strategy_id} 训练标的为 {artifact.symbol}，"
+                f"不能用于监控 {symbol}；请选择已有该标的策略的监控目标"
+            )
+        if timeframe != str(artifact.timeframe).strip().lower():
+            raise ValueError(
+                f"策略 {artifact.strategy_id} 训练周期为 {artifact.timeframe}，"
+                f"不能用于监控 {timeframe} 周期"
+            )
         watch_id = watch_idempotency_key(
             source,
             symbol or artifact.symbol,
@@ -564,7 +695,7 @@ class RealtimeManager:
             return {
                 "evaluated": 1,
                 "generated": 0 if record.idempotent else 1,
-                "signals": [record.to_dict()],
+                "signals": [self._signal_public(record)],
                 "errors": [],
             }
 
@@ -580,7 +711,7 @@ class RealtimeManager:
             return {
                 "evaluated": 1,
                 "generated": 0 if record.idempotent else 1,
-                "signals": [record.to_dict()],
+                "signals": [self._signal_public(record)],
                 "errors": [],
             }
 
@@ -599,7 +730,7 @@ class RealtimeManager:
                     version=watch.strategy_version,
                     watch_id=watch.id,
                 )
-                signals.append(record.to_dict())
+                signals.append(self._signal_public(record))
             except (AlphaLabError, KeyError, TypeError, ValueError) as exc:
                 errors.append({"watch_id": watch.id, "message": str(exc)})
         return {
@@ -628,12 +759,42 @@ class RealtimeManager:
                 and item.symbol == watch.symbol
                 and item.timeframe == watch.timeframe
             ]
-        return [item.to_dict() for item in records[: max(1, int(limit))]]
+        names: dict[tuple[str, str], str] = {}
+        payloads: list[dict[str, Any]] = []
+        for item in records[: max(1, int(limit))]:
+            payload = item.to_dict()
+            key = (item.strategy_id, item.strategy_version)
+            if key not in names:
+                names[key] = self._strategy_name(*key)
+            payload["strategy_name"] = names[key]
+            payloads.append(payload)
+        return payloads
 
-    @staticmethod
-    def _watch_public(watch: RealtimeWatch) -> dict[str, Any]:
+    def _signal_public(self, record: Any) -> dict[str, Any]:
+        payload = record.to_dict()
+        payload["strategy_name"] = self._strategy_name(
+            str(record.strategy_id),
+            str(record.strategy_version or ""),
+        )
+        return payload
+
+    def _strategy_name(self, strategy_id: str, version: str | None = None) -> str:
+        try:
+            artifact = self.analyzer.strategy_repository.get(
+                strategy_id,
+                version or None,
+            )
+        except (KeyError, TypeError, ValueError):
+            return ""
+        return str(artifact.name or "")
+
+    def _watch_public(self, watch: RealtimeWatch) -> dict[str, Any]:
         payload = watch.to_dict()
         payload["last_error"] = watch.error
+        payload["strategy_name"] = self._strategy_name(
+            watch.strategy_id,
+            watch.strategy_version,
+        )
         return payload
 
 

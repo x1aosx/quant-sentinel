@@ -12,7 +12,13 @@ from ..data import BarFrame
 from ..factor import FEATURE_REGISTRY, FORMULA_VOCAB, FactorRuntime, SignalKernel
 from .costs import AShareCostModel, CostBreakdown
 from .execution_model import AShareExecutionModel
-from .metrics import calculate_metrics, infer_periods_per_year
+from .metrics import (
+    calculate_metrics,
+    infer_periods_per_year,
+    rolling_sharpe_series,
+    time_axis_labels,
+    trade_statistics,
+)
 from .report import (
     BacktestReport,
     ExecutionRecord,
@@ -242,10 +248,26 @@ class BacktestEngine:
             trade_log.extend(standalone["trades"])
             executions.extend(standalone["executions"])
             all_cost_items.extend(portfolio["cost_items"])
+            # 绩效明细按品种展示：单品种也要带上交易级指标与暴露度。
+            symbol_metrics = dict(standalone["metrics"])
+            symbol_trades = standalone["trades"]
+            symbol_metrics.update(
+                trade_statistics(
+                    pnls=[trade.pnl for trade in symbol_trades],
+                    holding_bars=[
+                        float(trade.holding_bars) for trade in symbol_trades
+                    ],
+                )
+            )
+            symbol_positions = np.abs(
+                np.asarray(standalone["actual_positions"], dtype=np.float64)
+            )
+            symbol_metrics["exposure_mean"] = float(np.mean(symbol_positions))
+            symbol_metrics["exposure_max"] = float(np.max(symbol_positions))
             symbol_results.append(
                 SymbolBacktestResult(
                     symbol=symbol,
-                    metrics=standalone["metrics"],
+                    metrics=symbol_metrics,
                     equity_curve=tuple(float(v) for v in standalone["equity"]),
                     drawdown_curve=tuple(
                         float(v) for v in standalone["drawdown"]
@@ -285,6 +307,31 @@ class BacktestEngine:
             ),
             risk_free_rate=self.config.risk_free_rate,
         )
+        # Trade-level statistics come from the executed trade log, not from the
+        # equity curve, so they are merged in after the curve metrics.
+        metrics.update(
+            trade_statistics(
+                pnls=[trade.pnl for trade in trade_log],
+                holding_bars=[float(trade.holding_bars) for trade in trade_log],
+            )
+        )
+        portfolio_positions = np.mean(
+            np.stack(
+                [item["actual_positions"] for item in portfolio_runs], axis=0
+            ),
+            axis=0,
+        )
+        metrics["exposure_mean"] = float(np.mean(np.abs(portfolio_positions)))
+        metrics["exposure_max"] = float(np.max(np.abs(portfolio_positions)))
+        periods_per_year = (
+            self.config.periods_per_year
+            or infer_periods_per_year(frame.timeframe)
+        )
+        time_axis, time_axis_kind = time_axis_labels(frame)
+        rolling_sharpe = rolling_sharpe_series(
+            portfolio_returns,
+            periods_per_year=periods_per_year,
+        )
         cost_breakdown = aggregate_cost_breakdown(all_cost_items)
         run_id = self._run_id(
             frame=frame,
@@ -311,6 +358,9 @@ class BacktestEngine:
             metrics=metrics,
             equity_curve=tuple(float(value) for value in portfolio_equity),
             drawdown_curve=tuple(float(value) for value in portfolio_drawdown),
+            time_axis=tuple(time_axis),
+            time_axis_kind=time_axis_kind,
+            rolling_sharpe=tuple(float(value) for value in rolling_sharpe),
             trade_log=tuple(trade_log),
             executions=tuple(executions),
             per_symbol=tuple(symbol_results),
@@ -502,6 +552,17 @@ class BacktestEngine:
                 ),
                 source=frame.source,
                 adjustment=frame.adjustment,
+                session=(
+                    None
+                    if frame.session is None
+                    else np.concatenate(
+                        [
+                            np.repeat(frame.session[:, :1], warmup, axis=1),
+                            frame.session,
+                        ],
+                        axis=1,
+                    )
+                ),
             )
             features = FEATURE_REGISTRY.compute(extended)[:, :, warmup:]
 

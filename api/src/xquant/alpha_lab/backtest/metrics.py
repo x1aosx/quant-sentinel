@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -56,6 +57,18 @@ def calculate_metrics(
         if excess_std > 1e-12
         else 0.0
     )
+    # Sortino uses only the downside deviation so upside volatility is not punished.
+    downside = excess_returns[excess_returns < 0.0]
+    downside_deviation = (
+        float(np.sqrt(np.mean(np.square(downside)))) if downside.size else 0.0
+    )
+    sortino = (
+        float(np.mean(excess_returns) / downside_deviation * np.sqrt(periods_per_year))
+        if downside_deviation > 1e-12
+        else 0.0
+    )
+    # Calmar: annualized return per unit of worst peak-to-trough loss.
+    calmar = float(annualized_return / max_drawdown) if max_drawdown > 1e-12 else 0.0
     annualized_volatility = volatility * float(np.sqrt(periods_per_year))
     average_turnover = float(turnover / returns.size)
 
@@ -66,14 +79,13 @@ def calculate_metrics(
         annualized_return,
         max_drawdown,
         sharpe,
+        sortino,
+        calmar,
         annualized_volatility,
         float(turnover),
         average_turnover,
     )
-    finite_values = [
-        value if np.isfinite(value) else 0.0
-        for value in values
-    ]
+    finite_values = [value if np.isfinite(value) else 0.0 for value in values]
     (
         initial_equity,
         final_equity,
@@ -81,6 +93,8 @@ def calculate_metrics(
         annualized_return,
         max_drawdown,
         sharpe,
+        sortino,
+        calmar,
         annualized_volatility,
         turnover_value,
         average_turnover,
@@ -93,11 +107,112 @@ def calculate_metrics(
         "annualized_volatility": float(annualized_volatility),
         "max_drawdown": float(max_drawdown),
         "sharpe": float(sharpe),
+        "sortino": float(sortino),
+        "calmar": float(calmar),
         "turnover": float(turnover_value),
         "average_turnover": float(average_turnover),
         "trade_count": int(trade_count),
         "equity": [float(value) for value in equity],
     }
+
+
+def trade_statistics(
+    *,
+    pnls: Sequence[float],
+    holding_bars: Sequence[float] | None = None,
+) -> dict[str, float]:
+    """Trade-level statistics: win rate, profit/loss ratio and holding period.
+
+    ``pnls`` are per-trade returns (fractional). ``profit_loss_ratio`` is the
+    average winning trade divided by the average losing trade; ``profit_factor``
+    is the gross profit divided by the gross loss.
+    """
+
+    values = np.asarray(list(pnls), dtype=np.float64).reshape(-1)
+    values = values[np.isfinite(values)]
+    empty = {
+        "win_rate": 0.0,
+        "profit_loss_ratio": 0.0,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0,
+        "average_holding_bars": 0.0,
+        "win_count": 0.0,
+        "loss_count": 0.0,
+    }
+    if values.size == 0:
+        return empty
+
+    wins = values[values > 0.0]
+    losses = values[values < 0.0]
+    average_win = float(np.mean(wins)) if wins.size else 0.0
+    average_loss = float(np.mean(losses)) if losses.size else 0.0
+    gross_profit = float(np.sum(wins)) if wins.size else 0.0
+    gross_loss = float(np.sum(losses)) if losses.size else 0.0
+
+    holding = np.asarray(list(holding_bars or []), dtype=np.float64).reshape(-1)
+    holding = holding[np.isfinite(holding)]
+    return {
+        "win_rate": float(wins.size / values.size),
+        "profit_loss_ratio": (
+            float(average_win / abs(average_loss)) if average_loss < -1e-12 else 0.0
+        ),
+        "profit_factor": (
+            float(gross_profit / abs(gross_loss)) if gross_loss < -1e-12 else 0.0
+        ),
+        "average_win": average_win,
+        "average_loss": average_loss,
+        "best_trade": float(np.max(values)),
+        "worst_trade": float(np.min(values)),
+        "average_holding_bars": float(np.mean(holding)) if holding.size else 0.0,
+        "win_count": float(wins.size),
+        "loss_count": float(losses.size),
+    }
+
+
+def rolling_sharpe_series(
+    period_returns: np.ndarray,
+    *,
+    periods_per_year: int,
+    window: int | None = None,
+) -> list[float]:
+    """Rolling Sharpe aligned with the equity curve (0.0 while the window is open)."""
+
+    returns = np.asarray(period_returns, dtype=np.float64).reshape(-1)
+    size = int(returns.size)
+    if size == 0:
+        return []
+    if periods_per_year <= 0:
+        raise ValueError("periods_per_year must be positive")
+    resolved_window = window if window is not None else max(5, periods_per_year // 12)
+    resolved_window = int(max(2, min(resolved_window, size)))
+    scale = float(np.sqrt(periods_per_year))
+    series = np.zeros(size, dtype=np.float64)
+    for index in range(resolved_window - 1, size):
+        sample = returns[index - resolved_window + 1 : index + 1]
+        deviation = float(np.std(sample, ddof=0))
+        series[index] = (
+            float(np.mean(sample) / deviation * scale) if deviation > 1e-12 else 0.0
+        )
+    return [float(value) if np.isfinite(value) else 0.0 for value in series]
+
+
+def time_axis_labels(frame: Any) -> tuple[list[str], str]:
+    """Return x-axis labels for a ``BarFrame`` and the kind of label produced.
+
+    Dataset frames expose exchange session ids; frames built directly from
+    arrays only carry a synthetic bar index, so callers can label the axis
+    honestly instead of inventing dates.
+    """
+
+    session = getattr(frame, "session", None)
+    if session is not None:
+        labels = [str(value) for value in np.asarray(session)[0]]
+        if any(label.strip() for label in labels):
+            return labels, "session"
+    return [str(value) for value in np.asarray(frame.time)[0]], "bar_index"
 
 
 def infer_periods_per_year(timeframe: str) -> int:
