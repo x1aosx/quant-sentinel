@@ -1,13 +1,31 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import {
   Ban,
   BrainCircuit,
   CheckCircle2,
-  Database,
   Gauge,
   Plus,
   Rocket,
+  ScrollText,
+  TrendingUp,
 } from 'lucide-react';
 import { trainingApi } from '../../api/alphalab/training';
 import { api } from '../../api/client';
@@ -20,15 +38,25 @@ import {
   AlphaLabStatus,
 } from '../../components/alphalab/AlphaLabStates';
 import {
+  AlphaLabHelp,
+  AlphaLabLabel,
+  AlphaLabNote,
+} from '../../components/alphalab/AlphaLabHelp';
+import {
   errorText,
   formatCompact,
   formatDateTime,
   formatNumber,
+  formatPercent,
   progressValue,
   shortId,
 } from '../../components/alphalab/format';
 import type { DatasetSummary } from '../../types';
-import type { TrainingRun } from '../../types/alphalab/training';
+import type {
+  TrainingLogEntry,
+  TrainingMetricsPoint,
+  TrainingRun,
+} from '../../types/alphalab/training';
 import {
   filterDailyDatasets,
   formatTimeframeLabel,
@@ -45,6 +73,18 @@ const TRAINING_MIN_BARS = 300;
 function hasEnoughBars(dataset: DatasetSummary): boolean {
   return dataset.bar_count >= TRAINING_MIN_BARS;
 }
+
+// 曲线最多绘制的点数；超出时按步长抽样，保留首尾点。
+const MAX_CURVE_POINTS = 400;
+
+const CURVE_COLORS = {
+  reward: '#17746c',
+  validation: '#345b8c',
+  best: '#a15c07',
+  ic: '#17746c',
+  rankIc: '#345b8c',
+  entropy: '#a15c07',
+} as const;
 
 interface TrainingFormState {
   name: string;
@@ -67,6 +107,16 @@ const DEFAULT_FORM: TrainingFormState = {
   device: 'auto',
   fromScratch: true,
 };
+
+interface TrainingCurvePoint {
+  step: number;
+  reward: number | null;
+  validation_score: number | null;
+  best_score: number | null;
+  ic: number | null;
+  rank_ic: number | null;
+  entropy: number | null;
+}
 
 function datasetOptionLabel(dataset: DatasetSummary): string {
   const title = dataset.title?.trim();
@@ -102,12 +152,96 @@ function runFormula(run?: TrainingRun): string {
   );
 }
 
+/** 只保留真实存在的数值，缺失一律按 -- 展示，不补默认值。 */
+function finiteOrNull(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** 训练配置（config_json）里的字段，缺失时返回 --。 */
+function configText(run: TrainingRun, key: string): string {
+  return formatCompact(run.config_json?.[key]);
+}
+
+/** 历史点数过多时抽样：保留第一个、最后一个，中间等距取点。 */
+function downsampleHistory(
+  history: TrainingMetricsPoint[],
+): TrainingMetricsPoint[] {
+  if (history.length <= MAX_CURVE_POINTS) return history;
+  const lastIndex = history.length - 1;
+  const stride = lastIndex / (MAX_CURVE_POINTS - 1);
+  const sampled: TrainingMetricsPoint[] = [];
+  let previousIndex = -1;
+  for (let index = 0; index < MAX_CURVE_POINTS; index += 1) {
+    const sourceIndex = Math.round(index * stride);
+    if (sourceIndex === previousIndex) continue;
+    sampled.push(history[sourceIndex]);
+    previousIndex = sourceIndex;
+  }
+  return sampled;
+}
+
+function buildCurve(history: TrainingMetricsPoint[]): TrainingCurvePoint[] {
+  return downsampleHistory(history).map((point) => ({
+    step: point.step,
+    reward: finiteOrNull(point.reward),
+    validation_score: finiteOrNull(point.validation_score),
+    best_score: finiteOrNull(point.best_score),
+    ic: finiteOrNull(point.ic),
+    rank_ic: finiteOrNull(point.rank_ic),
+    entropy: finiteOrNull(point.entropy),
+  }));
+}
+
+function logLevel(level: string): 'info' | 'warn' | 'error' {
+  const value = String(level).toLowerCase();
+  if (value === 'warn' || value === 'warning') return 'warn';
+  if (value === 'error' || value === 'fatal' || value === 'critical') {
+    return 'error';
+  }
+  return 'info';
+}
+
+function hasValue(
+  points: TrainingCurvePoint[],
+  key: keyof Omit<TrainingCurvePoint, 'step'>,
+): boolean {
+  return points.some((point) => point[key] !== null);
+}
+
+/**
+ * 任务详情里的指标块。AlphaLabMetric 的 label 只接受字符串，
+ * 而这里需要「中文主标题 + 英文次级」的 AlphaLabLabel，
+ * 因此沿用同一套结构类名（.alphalab-metric / .stat-label / .alphalab-metric-value）。
+ */
+function DetailMetric({
+  zh,
+  en,
+  value,
+  detail,
+}: {
+  zh: string;
+  en: string;
+  value: ReactNode;
+  detail?: ReactNode;
+}) {
+  return (
+    <div className="alphalab-metric">
+      <div className="stat-label">
+        <AlphaLabLabel zh={zh} en={en} />
+      </div>
+      <div className="alphalab-metric-value">{value}</div>
+      {detail ? <div className="alphalab-metric-detail">{detail}</div> : null}
+    </div>
+  );
+}
+
 export function TrainingPage() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<TrainingFormState>(DEFAULT_FORM);
   const [formError, setFormError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [selectedId, setSelectedId] = useState('');
+  const logViewRef = useRef<HTMLDivElement | null>(null);
 
   const overviewQuery = useQuery({
     queryKey: ['alphalab', 'training', 'overview'],
@@ -165,6 +299,29 @@ export function TrainingPage() {
     datasetsQuery.dataUpdatedAt,
     detailQuery.dataUpdatedAt,
   );
+
+  const metricsHistory = selectedRun?.metrics_history;
+  const curve = useMemo(() => buildCurve(metricsHistory ?? []), [metricsHistory]);
+  const hasRewardCurve = hasValue(curve, 'reward');
+  const hasValidationCurve = hasValue(curve, 'validation_score');
+  const hasBestCurve = hasValue(curve, 'best_score');
+  const hasIcCurve = hasValue(curve, 'ic');
+  const hasRankIcCurve = hasValue(curve, 'rank_ic');
+  const hasEntropyCurve = hasValue(curve, 'entropy');
+  const hasScoreChart = hasRewardCurve || hasValidationCurve || hasBestCurve;
+  const hasCoefficientChart = hasIcCurve || hasRankIcCurve || hasEntropyCurve;
+
+  const logs: TrainingLogEntry[] = selectedRun?.logs ?? [];
+  const logCount = logs.length;
+  const selectedIsActive = selectedRun ? isActive(selectedRun) : false;
+
+  // 运行中的任务：每次出现新日志行就滚动到最新一行。
+  useEffect(() => {
+    if (!selectedIsActive) return;
+    const node = logViewRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [selectedId, selectedIsActive, logCount]);
 
   const createMutation = useMutation({
     mutationFn: trainingApi.create,
@@ -605,7 +762,7 @@ export function TrainingPage() {
         <div className="section-title">
           <span className="section-title-main">
             <Gauge size={15} />
-            任务详情
+            <AlphaLabLabel zh="任务详情" en="Task Detail" />
           </span>
           {selectedRun ? <AlphaLabStatus status={selectedRun.status} /> : null}
         </div>
@@ -622,34 +779,107 @@ export function TrainingPage() {
           <div className="stack compact">
             <div className="inline-meta">
               <div className="meta-item">
-                <div className="label">任务 ID</div>
-                <div className="value code">{selectedRun.id}</div>
+                <div className="label">
+                  <AlphaLabLabel zh="任务编号" en="Task ID" />
+                </div>
+                <div className="value code">{selectedRun.id || '--'}</div>
               </div>
               <div className="meta-item">
-                <div className="label">Market</div>
+                <div className="label">
+                  <AlphaLabLabel zh="市场" en="Market" />
+                </div>
                 <div className="value">{selectedRun.market || '--'}</div>
               </div>
               <div className="meta-item">
-                <div className="label">Symbols</div>
+                <div className="label">
+                  <AlphaLabLabel zh="标的" en="Symbols" />
+                </div>
                 <div className="value">{selectedRun.symbols?.join(', ') || '--'}</div>
               </div>
               <div className="meta-item">
-                <div className="label">Schema</div>
-                <div className="value">{selectedRun.factor_schema_version || '--'}</div>
+                <div className="label">
+                  <AlphaLabLabel zh="周期" en="Timeframe" />
+                </div>
+                <div className="value">{selectedRun.timeframe || '--'}</div>
               </div>
               <div className="meta-item">
-                <div className="label">Snapshot</div>
+                <div className="label">
+                  <AlphaLabLabel zh="数据集" en="Dataset" />
+                </div>
+                <div className="value">
+                  {selectedRun.dataset_title || selectedRun.dataset_id || '--'}
+                </div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="因子词表版本" en="Schema" />
+                </div>
+                <div className="value">
+                  {selectedRun.factor_schema_version || '--'}
+                </div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="数据快照" en="Snapshot" />
+                </div>
                 <div className="value code">{selectedRun.data_snapshot_id || '--'}</div>
               </div>
               <div className="meta-item">
-                <div className="label">Worker</div>
+                <div className="label">
+                  <AlphaLabLabel zh="配置 Profile" en="Profile" />
+                </div>
+                <div className="value">
+                  {selectedRun.config_profile || configText(selectedRun, 'profile')}
+                </div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="种子" en="Seed" />
+                </div>
+                <div className="value">{formatCompact(selectedRun.seed)}</div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="训练步数" en="Steps" />
+                </div>
+                <div className="value">{formatCompact(selectedRun.total_steps)}</div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="批量" en="Batch" />
+                </div>
+                <div className="value">{configText(selectedRun, 'batch_size')}</div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="执行节点" en="Worker" />
+                </div>
                 <div className="value">{selectedRun.worker_id || '--'}</div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="最优得分" en="Best Score" />
+                </div>
+                <div className="value">
+                  {formatNumber(
+                    selectedRun.best_score ?? selectedRun.metrics_json?.best_score,
+                  )}
+                </div>
+              </div>
+              <div className="meta-item">
+                <div className="label">
+                  <AlphaLabLabel zh="检查点" en="Checkpoint" />
+                </div>
+                <div className="value code alphalab-compact-cell">
+                  {selectedRun.checkpoint_uri || '--'}
+                </div>
               </div>
             </div>
 
             <div className="alphalab-detail-metrics">
-              <AlphaLabMetric
-                label="总进度"
+              <DetailMetric
+                zh="总进度"
+                en="Progress"
                 value={`${formatNumber(runProgress(selectedRun), 1)}%`}
                 detail={
                   selectedRun.total_steps
@@ -657,30 +887,54 @@ export function TrainingPage() {
                     : `Step ${selectedRun.current_step ?? selectedRun.step ?? 0}`
                 }
               />
-              <AlphaLabMetric
-                label="Loss"
-                value={formatNumber(selectedRun.metrics_json?.loss)}
-              />
-              <AlphaLabMetric
-                label="Reward"
+              <DetailMetric
+                zh="奖励"
+                en="Reward"
                 value={formatNumber(selectedRun.metrics_json?.reward)}
               />
-              <AlphaLabMetric
-                label="Entropy"
-                value={formatNumber(selectedRun.metrics_json?.entropy)}
+              <DetailMetric
+                zh="验证得分"
+                en="Validation"
+                value={formatNumber(selectedRun.metrics_json?.validation_score)}
               />
-              <AlphaLabMetric
-                label="IC"
+              <DetailMetric
+                zh="信息系数"
+                en="IC"
                 value={formatNumber(selectedRun.metrics_json?.ic)}
               />
-              <AlphaLabMetric
-                label="Turnover"
-                value={formatNumber(selectedRun.metrics_json?.turnover)}
+              <DetailMetric
+                zh="排序信息系数"
+                en="Rank IC"
+                value={formatNumber(selectedRun.metrics_json?.rank_ic)}
+              />
+              <DetailMetric
+                zh="熵"
+                en="Entropy"
+                value={formatNumber(selectedRun.metrics_json?.entropy)}
+              />
+              <DetailMetric
+                zh="精英池"
+                en="Elite Pool"
+                value={formatNumber(selectedRun.metrics_json?.elite_pool_size, 0)}
+              />
+              <DetailMetric
+                zh="无效比例"
+                en="Invalid Rate"
+                value={formatPercent(selectedRun.metrics_json?.invalid_rate)}
+              />
+              <DetailMetric
+                zh="最优得分"
+                en="Best Score"
+                value={formatNumber(
+                  selectedRun.best_score ?? selectedRun.metrics_json?.best_score,
+                )}
               />
             </div>
 
             <div className="alphalab-formula">
-              <div className="label">Best Formula</div>
+              <div className="label">
+                <AlphaLabLabel zh="最优因子公式" en="Best Formula" />
+              </div>
               <div className="code">{runFormula(selectedRun)}</div>
             </div>
 
@@ -692,7 +946,7 @@ export function TrainingPage() {
               <div className="section-title">
                 <span className="section-title-main">
                   <CheckCircle2 size={15} />
-                  Top Candidates
+                  <AlphaLabLabel zh="候选策略" en="Top Candidates" />
                 </span>
               </div>
               {selectedRun.candidates?.length ? (
@@ -700,12 +954,24 @@ export function TrainingPage() {
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>#</th>
-                        <th>策略</th>
-                        <th>公式</th>
-                        <th>Train</th>
-                        <th>Validation</th>
-                        <th>总分</th>
+                        <th>
+                          <AlphaLabLabel zh="排名" en="Rank" />
+                        </th>
+                        <th>
+                          <AlphaLabLabel zh="策略" en="Strategy" />
+                        </th>
+                        <th>
+                          <AlphaLabLabel zh="公式" en="Formula" />
+                        </th>
+                        <th>
+                          <AlphaLabLabel zh="训练得分" en="Train" />
+                        </th>
+                        <th>
+                          <AlphaLabLabel zh="验证得分" en="Validation" />
+                        </th>
+                        <th>
+                          <AlphaLabLabel zh="总分" en="Total" />
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -730,21 +996,310 @@ export function TrainingPage() {
                 <AlphaLabEmpty>暂无候选策略</AlphaLabEmpty>
               )}
             </div>
-
-            <div className="alphalab-subsection">
-              <div className="section-title">
-                <span className="section-title-main">
-                  <Database size={15} />
-                  Checkpoint
-                </span>
-              </div>
-              <div className="code">{selectedRun.checkpoint_uri || '--'}</div>
-            </div>
           </div>
         ) : (
           <AlphaLabEmpty>暂无训练详情</AlphaLabEmpty>
         )}
       </div>
+
+      <div className="panel">
+        <div className="section-title">
+          <span className="section-title-main">
+            <TrendingUp size={15} />
+            <AlphaLabLabel zh="训练曲线" en="Training Curves" />
+          </span>
+          {curve.length ? (
+            <span className="tag">
+              {metricsHistory?.length ?? 0} 个采样点
+              {curve.length < (metricsHistory?.length ?? 0)
+                ? ` · 图表抽样 ${curve.length} 点`
+                : ''}
+            </span>
+          ) : null}
+        </div>
+        {!selectedId ? (
+          <AlphaLabEmpty>选择一条训练任务查看训练曲线</AlphaLabEmpty>
+        ) : detailQuery.isLoading ? (
+          <AlphaLabLoading label="加载训练曲线" />
+        ) : !selectedRun ? (
+          <AlphaLabEmpty>暂无训练曲线</AlphaLabEmpty>
+        ) : !curve.length ? (
+          <AlphaLabEmpty>
+            该任务暂无训练曲线数据（训练开始后会按步累积每个 step 的指标）
+          </AlphaLabEmpty>
+        ) : (
+          <div className="alphalab-chart-grid">
+            <div className="alphalab-subsection">
+              <div className="section-title">
+                <span className="section-title-main">
+                  <AlphaLabLabel zh="奖励与得分" en="Reward & Score" />
+                </span>
+              </div>
+              {hasScoreChart ? (
+                <div className="alphalab-chart alphalab-chart-small">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={curve}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#dce3ea" />
+                      <XAxis dataKey="step" minTickGap={32} fontSize={11} />
+                      <YAxis width={64} fontSize={11} />
+                      <Tooltip />
+                      <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
+                      {hasRewardCurve ? (
+                        <Line
+                          type="monotone"
+                          dataKey="reward"
+                          name="奖励"
+                          stroke={CURVE_COLORS.reward}
+                          strokeWidth={2}
+                          dot={false}
+                          connectNulls
+                        />
+                      ) : null}
+                      {hasValidationCurve ? (
+                        <Line
+                          type="monotone"
+                          dataKey="validation_score"
+                          name="验证得分"
+                          stroke={CURVE_COLORS.validation}
+                          strokeWidth={1.8}
+                          dot={false}
+                          connectNulls
+                        />
+                      ) : null}
+                      {hasBestCurve ? (
+                        <Line
+                          type="monotone"
+                          dataKey="best_score"
+                          name="最优得分"
+                          stroke={CURVE_COLORS.best}
+                          strokeWidth={1.8}
+                          dot={false}
+                          connectNulls
+                        />
+                      ) : null}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <AlphaLabEmpty>该任务暂未上报奖励与验证得分</AlphaLabEmpty>
+              )}
+              <AlphaLabNote>
+                横轴是训练步（step），每一步对应一次策略采样与评估。
+                <strong>奖励</strong>是当前批量样本的平均奖励；
+                <strong>验证得分</strong>是这批样本在验证集上的平均得分；
+                <strong>最优得分</strong>是历史最优验证得分，只会上升或持平，
+                因此呈阶梯状。
+              </AlphaLabNote>
+            </div>
+
+            <div className="alphalab-subsection">
+              <div className="section-title">
+                <span className="section-title-main">
+                  <AlphaLabLabel zh="信息系数与熵" en="IC / Rank IC / Entropy" />
+                </span>
+              </div>
+              {hasCoefficientChart ? (
+                <div className="alphalab-chart alphalab-chart-small">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={curve}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#dce3ea" />
+                      <XAxis dataKey="step" minTickGap={32} fontSize={11} />
+                      <YAxis yAxisId="coefficient" width={64} fontSize={11} />
+                      {hasEntropyCurve ? (
+                        <YAxis
+                          yAxisId="entropy"
+                          orientation="right"
+                          width={52}
+                          fontSize={11}
+                        />
+                      ) : null}
+                      <Tooltip />
+                      <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
+                      {hasIcCurve ? (
+                        <Line
+                          yAxisId="coefficient"
+                          type="monotone"
+                          dataKey="ic"
+                          name="信息系数 IC"
+                          stroke={CURVE_COLORS.ic}
+                          strokeWidth={2}
+                          dot={false}
+                          connectNulls
+                        />
+                      ) : null}
+                      {hasRankIcCurve ? (
+                        <Line
+                          yAxisId="coefficient"
+                          type="monotone"
+                          dataKey="rank_ic"
+                          name="排序信息系数 Rank IC"
+                          stroke={CURVE_COLORS.rankIc}
+                          strokeWidth={1.8}
+                          dot={false}
+                          connectNulls
+                        />
+                      ) : null}
+                      {hasEntropyCurve ? (
+                        <Line
+                          yAxisId="entropy"
+                          type="monotone"
+                          dataKey="entropy"
+                          name="熵"
+                          stroke={CURVE_COLORS.entropy}
+                          strokeWidth={1.8}
+                          dot={false}
+                          connectNulls
+                        />
+                      ) : null}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <AlphaLabEmpty>该任务暂未上报信息系数与熵</AlphaLabEmpty>
+              )}
+              <AlphaLabNote>
+                横轴同样是训练步（step）。<strong>信息系数（IC）</strong>与
+                <strong>排序信息系数（Rank IC）</strong>
+                衡量因子输出与后续收益的相关程度，数值在 0 附近表示几乎没有线性关系；
+                <strong>熵（entropy）</strong>
+                是策略分布的随机程度，走低说明策略逐渐收敛到少数候选上，
+                长期贴近 0 时通常意味着探索不足。熵使用右侧坐标轴。
+              </AlphaLabNote>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="section-title">
+          <span className="section-title-main">
+            <ScrollText size={15} />
+            <AlphaLabLabel zh="训练日志" en="Training Log" />
+          </span>
+          {logs.length ? <span className="tag">{logs.length} 行</span> : null}
+        </div>
+        {!selectedId ? (
+          <AlphaLabEmpty>选择一条训练任务查看训练日志</AlphaLabEmpty>
+        ) : detailQuery.isLoading ? (
+          <AlphaLabLoading label="加载训练日志" />
+        ) : !selectedRun ? (
+          <AlphaLabEmpty>暂无训练日志</AlphaLabEmpty>
+        ) : logs.length ? (
+          <>
+            <div className="alphalab-log-view" ref={logViewRef}>
+              {logs.map((entry, index) => {
+                const level = logLevel(entry.level);
+                return (
+                  <div
+                    className={`alphalab-log-line ${level}`}
+                    key={`${entry.ts}-${index}`}
+                  >
+                    <span className="alphalab-log-ts">{formatDateTime(entry.ts)}</span>
+                    <span className="alphalab-log-level">{level}</span>
+                    <span className="alphalab-log-message">
+                      {entry.step !== null && entry.step !== undefined ? (
+                        <span className="alphalab-log-step">[step {entry.step}] </span>
+                      ) : null}
+                      {entry.message}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <AlphaLabNote>
+              日志按时间从旧到新排列；任务处于排队中或运行中时，会自动滚动到最新一行，
+              向上滚动可以回看历史。
+            </AlphaLabNote>
+          </>
+        ) : (
+          <AlphaLabEmpty>该任务暂无训练日志</AlphaLabEmpty>
+        )}
+      </div>
+
+      <AlphaLabHelp
+        title="因子训练说明"
+        items={[
+          {
+            heading: '训练曲线怎么看',
+            body: (
+              <ul>
+                <li>
+                  <strong>奖励（reward）</strong>
+                  ：当前批量样本的平均奖励，反映这一步采样出的策略在本轮评估里的整体表现。
+                </li>
+                <li>
+                  <strong>验证得分（validation_score）</strong>
+                  ：这批样本在验证集上的平均得分，是判断训练是否在变好的主要参考。
+                </li>
+                <li>
+                  <strong>最优得分（best_score）</strong>
+                  ：历史最优的验证得分，只会上升或持平，所以曲线呈阶梯状。
+                </li>
+                <li>
+                  <strong>熵（entropy）</strong>
+                  ：策略分布的随机程度。持续下降说明策略逐渐收敛到少数候选上；长期贴近 0
+                  往往意味着探索不足。
+                </li>
+              </ul>
+            ),
+          },
+          {
+            heading: '训练日志怎么看',
+            body: (
+              <ul>
+                <li>
+                  <strong>时间</strong>：日志写入时间。
+                </li>
+                <li>
+                  <strong>级别</strong>：<code>info</code> 为普通进展，
+                  <code>warn</code> 为需要注意，<code>error</code> 为出错。
+                </li>
+                <li>
+                  <strong>内容</strong>：这一步发生了什么；带{' '}
+                  <code>[step n]</code> 前缀时表示该行属于第 n 步。
+                </li>
+                <li>任务失败时先看最后一条 error 行，再看它上方的 warn 行，通常能定位到原因。</li>
+              </ul>
+            ),
+          },
+          {
+            heading: '训练任务状态说明',
+            body: (
+              <ul>
+                <li>
+                  <strong>排队中</strong>（PENDING / QUEUED）：已提交，等待执行器空出线程。
+                </li>
+                <li>
+                  <strong>运行中</strong>（RUNNING）：正在逐步采样与评估，进度、曲线与日志会持续更新。
+                </li>
+                <li>
+                  <strong>成功</strong>（SUCCEEDED）：跑完全部步数，结果写入候选策略与检查点。
+                </li>
+                <li>
+                  <strong>失败</strong>（FAILED）：中途出错，先看日志里的 error 行；可调整数据集或步数后重新提交。
+                </li>
+                <li>
+                  <strong>已取消</strong>（CANCELLED / STOPPED）：被手动取消或停止，之后不会再继续训练。
+                </li>
+                <li>只有排队中与运行中的任务可以点「取消」。</li>
+              </ul>
+            ),
+          },
+          {
+            heading: '数据与步数的注意事项',
+            body: (
+              <ul>
+                <li>
+                  训练至少需要 {TRAINING_MIN_BARS} 根 bar；数据集不足时前端会提示，后端也会拒绝。
+                </li>
+                <li>默认使用日周期（1d）数据集；分钟周期数据集不用于训练，仅用于盘中多周期分析。</li>
+                <li>步数（steps）与批量（batch）越大，单次训练耗时越长；建议先用小步数确认流程能跑通。</li>
+                <li>同一数据集可以创建多个训练任务，任务之间互不影响。</li>
+              </ul>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

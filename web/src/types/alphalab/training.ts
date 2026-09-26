@@ -1,13 +1,31 @@
 import type { AlphaLabStatus } from './common';
 
 export interface TrainingMetrics {
-  loss?: number;
+  step?: number;
   reward?: number;
+  validation_score?: number;
+  ic?: number;
+  rank_ic?: number;
   entropy?: number;
   best_score?: number;
-  ic?: number;
+  elite_pool_size?: number;
+  invalid_rate?: number;
+  loss?: number;
   turnover?: number;
   [key: string]: unknown;
+}
+
+/** One sampled point of the training curve; the backend keeps the full series. */
+export interface TrainingMetricsPoint extends TrainingMetrics {
+  step: number;
+  ts?: string;
+}
+
+export interface TrainingLogEntry {
+  ts: string;
+  level: string;
+  step?: number | null;
+  message: string;
 }
 
 export interface TrainingRun {
@@ -18,6 +36,7 @@ export interface TrainingRun {
   symbols?: string[];
   timeframe: string;
   dataset_id?: string;
+  dataset_title?: string;
   data_snapshot_id?: string;
   factor_schema_version?: string;
   config_profile?: string;
@@ -33,6 +52,8 @@ export interface TrainingRun {
   best_formula_tokens?: number[];
   best_score?: number | null;
   metrics_json?: TrainingMetrics;
+  metrics_history?: TrainingMetricsPoint[];
+  logs?: TrainingLogEntry[];
   checkpoint_uri?: string | null;
   started_at?: string | null;
   finished_at?: string | null;

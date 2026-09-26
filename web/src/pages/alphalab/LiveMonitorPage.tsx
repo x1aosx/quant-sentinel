@@ -1,8 +1,9 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
   CircleDot,
+  Gauge,
   Play,
   Plus,
   Radar,
@@ -10,6 +11,13 @@ import {
   Zap,
 } from 'lucide-react';
 import { realtimeApi } from '../../api/alphalab/realtime';
+import { strategyApi } from '../../api/alphalab/strategies';
+import {
+  AlphaLabHelp,
+  AlphaLabLabel,
+  AlphaLabNote,
+  type AlphaLabHelpItem,
+} from '../../components/alphalab/AlphaLabHelp';
 import {
   AlphaLabEmpty,
   AlphaLabError,
@@ -29,6 +37,7 @@ import type {
   RealtimeWatch,
   RealtimeWatchCreateRequest,
 } from '../../types/alphalab/realtime';
+import type { StrategyArtifact } from '../../types/alphalab/strategy';
 import '../../styles/alphalab.css';
 
 interface WatchFormState {
@@ -47,14 +56,77 @@ interface WatchGroup {
   watches: RealtimeWatch[];
 }
 
+/** 一个可监控组合：策略在训练时绑定的品种 + 周期。 */
+interface MonitorTarget {
+  key: string;
+  symbol: string;
+  timeframe: string;
+  strategy: StrategyArtifact;
+}
+
 const DEFAULT_FORM: WatchFormState = {
   source: 'market_data',
   symbol: '',
-  timeframe: '1d',
+  timeframe: '',
   strategyId: '',
   strategyVersion: '',
   enabled: true,
 };
+
+const TIMEFRAME_MS: Record<string, number> = {
+  '1m': 60_000,
+  '5m': 5 * 60_000,
+  '15m': 15 * 60_000,
+  '30m': 30 * 60_000,
+  '1h': 60 * 60_000,
+  '60m': 60 * 60_000,
+  '4h': 4 * 60 * 60_000,
+  '1d': 24 * 60 * 60_000,
+  '1w': 7 * 24 * 60 * 60_000,
+};
+
+const STRATEGY_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  CANDIDATE: '候选',
+  VALIDATED: '已验证',
+  PRODUCTION: '生产中',
+  DEPRECATED: '已弃用',
+  REJECTED: '已拒绝',
+};
+
+function strategyStatusLabel(status?: string | null): string {
+  const value = String(status ?? '').toUpperCase();
+  return STRATEGY_STATUS_LABELS[value] ?? (value || '状态未知');
+}
+
+function strategyVersionLabel(strategy: StrategyArtifact): string {
+  return strategy.version ? `v${strategy.version}` : '版本未知';
+}
+
+function targetKey(strategy: StrategyArtifact, symbol: string): string {
+  return `${symbol}::${strategy.id}::${strategy.version}`;
+}
+
+function strategyTargetValue(target: MonitorTarget): string {
+  return `${target.strategy.id}::${target.strategy.version}`;
+}
+
+function targetLabel(target: MonitorTarget): string {
+  return [
+    target.symbol,
+    target.timeframe,
+    strategyStatusLabel(target.strategy.status),
+    `${target.strategy.name || target.strategy.id} ${strategyVersionLabel(target.strategy)}`,
+  ].join(' · ');
+}
+
+function strategyLabel(target: MonitorTarget): string {
+  return [
+    `${target.strategy.name || target.strategy.id} ${strategyVersionLabel(target.strategy)}`,
+    target.timeframe,
+    strategyStatusLabel(target.strategy.status),
+  ].join(' · ');
+}
 
 function directionTone(direction?: string | null): string {
   switch (String(direction ?? '').toUpperCase()) {
@@ -64,6 +136,17 @@ function directionTone(direction?: string | null): string {
       return 'short';
     default:
       return 'flat';
+  }
+}
+
+function directionText(direction?: string | null): string {
+  switch (String(direction ?? '').toUpperCase()) {
+    case 'LONG':
+      return '预期上涨';
+    case 'SHORT':
+      return '预期下跌';
+    default:
+      return '观望';
   }
 }
 
@@ -77,6 +160,95 @@ function DirectionBadge({ direction }: { direction?: string | null }) {
   );
 }
 
+/** 因子接近 0 视为无信号，其余档位按 last_strength（等于 |tanh(因子)|，范围 0..1）分档。 */
+function confidenceLabel(
+  lastFactor?: number | null,
+  lastStrength?: number | null,
+): string {
+  if (Math.abs(lastFactor ?? 0) < 0.05) return '无信号';
+  const strength = Math.abs(lastStrength ?? 0);
+  if (strength < 0.25) return '把握不大';
+  if (strength < 0.5) return '一半把握';
+  if (strength < 0.75) return '比较有把握';
+  return '很有把握';
+}
+
+function confidencePercent(lastStrength?: number | null): number {
+  const value = (lastStrength ?? 0) * 100;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+/** 距离下一根 K 线收盘的剩余毫秒；时间戳或周期无法解析时返回 null。 */
+function countdownMs(watch: RealtimeWatch, now: number): number | null {
+  const interval = TIMEFRAME_MS[watch.timeframe];
+  if (!interval || !watch.last_closed_bar_ts) return null;
+  const closedAt = new Date(watch.last_closed_bar_ts).getTime();
+  if (Number.isNaN(closedAt)) return null;
+  return Math.max(0, closedAt + interval - now);
+}
+
+function countdownText(remaining: number | null): string {
+  if (remaining === null) return '距离下次判断 --';
+  const totalSeconds = Math.floor(remaining / 1_000);
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  // 长周期用「天/时」表述，避免 1d 监控出现 863分59秒 这种读数。
+  if (days > 0) {
+    return `距离下次判断 ${days}天${String(hours).padStart(2, '0')}时`;
+  }
+  if (hours > 0) {
+    return `距离下次判断 ${hours}时${String(minutes).padStart(2, '0')}分`;
+  }
+  return `距离下次判断 ${minutes}分${String(seconds).padStart(2, '0')}秒`;
+}
+
+const HELP_ITEMS: AlphaLabHelpItem[] = [
+  {
+    heading: '这张卡怎么看',
+    body: (
+      <>
+        卡片顶部的颜色来自方向：预期上涨为多头方向，预期下跌为空头方向，观望表示因子接近 0。
+        中间的「把握」由因子的绝对值换算而来（|tanh(因子)|，取值 0 到 1），只说明策略对这个方向有多坚决，
+        <strong>不是胜率</strong>，也不表示一定会盈利；进度条长度与把握程度同步。
+        下面的因子、仓位、强度是策略最近一次评估输出的原始数值，收盘前不会变化。
+      </>
+    ),
+  },
+  {
+    heading: '为什么只在收盘后才重新判断',
+    body: (
+      <>
+        评估只使用已经收盘的 K 线。盘中未收盘的 K 线还在变化，用它算出的因子会来回跳动；
+        同一根 K 线收盘后数据固定下来，信号才随之稳定。所以卡片上显示的是「最后收盘K线」，
+        而不是当前正在走的这一根。
+      </>
+    ),
+  },
+  {
+    heading: '为什么必须选择已有策略的标的',
+    body: (
+      <>
+        策略与训练时的品种、周期绑定：因子表达式、阈值和仓位规则都是在那个品种和周期上拟合与验证的。
+        把同一份策略套到别的品种或别的周期上，等于换了一个未经验证的假设，需要重新训练或单独验证。
+        因此新增监控只能从已训练策略的标的与周期里选，不能自由填写。
+      </>
+    ),
+  },
+  {
+    heading: '距离下次判断在倒计时什么',
+    body: (
+      <>
+        倒计时指向下一根 K 线收盘、可以重新判断信号的时刻，按「最后收盘K线 + 周期长度」计算，到 0 表示新的 K 线
+        应该已经收盘。倒计时本身不会触发重新评估：需要等页面的定时刷新或手动点「评估」之后，才会出现新的结果。
+        时间戳无法解析时显示 --。
+      </>
+    ),
+  },
+];
+
 export function LiveMonitorPage() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<WatchFormState>(DEFAULT_FORM);
@@ -84,6 +256,12 @@ export function LiveMonitorPage() {
   const [actionMessage, setActionMessage] = useState('');
   const [selectedWatchId, setSelectedWatchId] = useState('');
   const [signalFilter, setSignalFilter] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const overviewQuery = useQuery({
     queryKey: ['alphalab', 'realtime', 'overview'],
@@ -100,9 +278,14 @@ export function LiveMonitorPage() {
     queryFn: () => realtimeApi.listSignals({ limit: 200 }),
     refetchInterval: 8_000,
   });
+  const strategiesQuery = useQuery({
+    queryKey: ['alphalab', 'strategy', 'list'],
+    queryFn: strategyApi.list,
+  });
 
   const watches = watchesQuery.data ?? [];
   const signals = signalsQuery.data ?? [];
+  const strategies = strategiesQuery.data ?? [];
   const selectedWatch =
     watches.find((watch) => watch.id === selectedWatchId) ?? null;
   const queryError =
@@ -111,6 +294,53 @@ export function LiveMonitorPage() {
     overviewQuery.dataUpdatedAt,
     watchesQuery.dataUpdatedAt,
     signalsQuery.dataUpdatedAt,
+  );
+
+  // 只有策略训练时绑定的（品种, 周期）组合才允许创建监控项，后端会校验同样的规则。
+  const targets = useMemo<MonitorTarget[]>(() => {
+    const items: MonitorTarget[] = [];
+    const seen = new Set<string>();
+    strategies.forEach((strategy) => {
+      const timeframe = String(strategy.timeframe ?? '').trim();
+      if (!timeframe) return;
+      const symbols = (
+        strategy.symbols?.length
+          ? strategy.symbols
+          : strategy.symbol_scope
+            ? [strategy.symbol_scope]
+            : []
+      )
+        .map((symbol) => String(symbol).trim())
+        .filter(Boolean);
+      symbols.forEach((symbol) => {
+        const key = targetKey(strategy, symbol);
+        if (seen.has(key)) return;
+        seen.add(key);
+        items.push({ key, symbol, timeframe, strategy });
+      });
+    });
+    return items.sort(
+      (left, right) =>
+        left.symbol.localeCompare(right.symbol) ||
+        left.timeframe.localeCompare(right.timeframe) ||
+        left.strategy.name.localeCompare(right.strategy.name),
+    );
+  }, [strategies]);
+
+  const selectedTarget = useMemo(
+    () =>
+      targets.find(
+        (target) =>
+          target.symbol === form.symbol &&
+          target.strategy.id === form.strategyId &&
+          target.strategy.version === form.strategyVersion,
+      ) ?? null,
+    [form.strategyId, form.strategyVersion, form.symbol, targets],
+  );
+
+  const symbolTargets = useMemo(
+    () => targets.filter((target) => target.symbol === form.symbol),
+    [form.symbol, targets],
   );
 
   const groups = useMemo(() => {
@@ -151,13 +381,17 @@ export function LiveMonitorPage() {
     );
   }, [signalFilter, signals]);
 
-  const enabledWatches = watches.filter((watch) => watch.enabled).length;
+  const enabledWatchList = watches.filter((watch) => watch.enabled);
+  const enabledWatches = enabledWatchList.length;
   const activeWatches = watches.filter((watch) =>
     ['RUNNING', 'ACTIVE', 'SUCCESS', 'SUCCEEDED'].includes(
       String(watch.state).toUpperCase(),
     ),
   ).length;
   const errorWatches = watches.filter((watch) => watch.last_error || watch.error).length;
+
+  const formLocked =
+    strategiesQuery.isLoading || strategiesQuery.isError || !targets.length;
 
   const createMutation = useMutation({
     mutationFn: realtimeApi.createWatch,
@@ -197,30 +431,52 @@ export function LiveMonitorPage() {
     void overviewQuery.refetch();
     void watchesQuery.refetch();
     void signalsQuery.refetch();
+    void strategiesQuery.refetch();
+  };
+
+  const selectTarget = (key: string) => {
+    const target = targets.find((item) => item.key === key);
+    setForm((current) => ({
+      ...current,
+      symbol: target?.symbol ?? '',
+      timeframe: target?.timeframe ?? '',
+      strategyId: target?.strategy.id ?? '',
+      strategyVersion: target?.strategy.version ?? '',
+    }));
+  };
+
+  const selectStrategy = (value: string) => {
+    const target = symbolTargets.find(
+      (item) => strategyTargetValue(item) === value,
+    );
+    if (!target) return;
+    setForm((current) => ({
+      ...current,
+      // 周期必须跟随所选策略，后端按策略训练时的周期校验。
+      timeframe: target.timeframe,
+      strategyId: target.strategy.id,
+      strategyVersion: target.strategy.version,
+    }));
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError('');
     setActionMessage('');
-    if (!form.source.trim()) {
-      setFormError('source 不能为空');
-      return;
-    }
-    if (!form.symbol.trim()) {
-      setFormError('symbol 不能为空');
-      return;
-    }
-    if (!form.strategyId.trim()) {
-      setFormError('strategy_id 不能为空');
+    if (!selectedTarget) {
+      setFormError(
+        targets.length
+          ? '请选择已有策略对应的监控标的'
+          : '暂无可监控标的：请先训练或导入与品种、周期绑定的策略',
+      );
       return;
     }
     const payload: RealtimeWatchCreateRequest = {
-      source: form.source.trim(),
-      symbol: form.symbol.trim().toUpperCase(),
-      timeframe: form.timeframe,
-      strategy_id: form.strategyId.trim(),
-      strategy_version: form.strategyVersion.trim() || undefined,
+      source: form.source,
+      symbol: selectedTarget.symbol,
+      timeframe: selectedTarget.timeframe,
+      strategy_id: selectedTarget.strategy.id,
+      strategy_version: selectedTarget.strategy.version || undefined,
       enabled: form.enabled,
     };
     createMutation.mutate(payload);
@@ -301,80 +557,188 @@ export function LiveMonitorPage() {
       <div className="panel">
         <div className="section-title">
           <span className="section-title-main">
+            <Gauge size={15} />
+            信号雷达
+          </span>
+          <span className="tag">{enabledWatchList.length} 个启用</span>
+        </div>
+        {watchesQuery.isLoading ? (
+          <AlphaLabLoading label="加载信号雷达" />
+        ) : enabledWatchList.length ? (
+          <div className="alphalab-radar-grid">
+            {enabledWatchList.map((watch) => (
+              <div
+                key={watch.id}
+                className={`alphalab-radar-card ${directionTone(watch.last_direction)}${
+                  selectedWatchId === watch.id ? ' selected' : ''
+                }`}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectedWatchId === watch.id}
+                onClick={() => setSelectedWatchId(watch.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setSelectedWatchId(watch.id);
+                  }
+                }}
+              >
+                <div className="alphalab-radar-head">
+                  <div className="alphalab-radar-symbol">
+                    <strong>{watch.symbol}</strong>
+                    <span className="tag">{watch.timeframe}</span>
+                  </div>
+                  <AlphaLabStatus status={watch.state} />
+                </div>
+                <div className="alphalab-radar-body">
+                  <div className="alphalab-radar-confidence">
+                    <div className="alphalab-radar-confidence-value">
+                      {confidenceLabel(watch.last_factor, watch.last_strength)}
+                    </div>
+                    <div className="alphalab-radar-confidence-track">
+                      <div
+                        className="alphalab-radar-confidence-fill"
+                        style={{ width: `${confidencePercent(watch.last_strength)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="stack compact">
+                    <span className="muted">{directionText(watch.last_direction)}</span>
+                    <DirectionBadge direction={watch.last_direction} />
+                  </div>
+                </div>
+                <div className="alphalab-radar-meta">
+                  <div>
+                    <span>因子</span>
+                    <span>{formatNumber(watch.last_factor)}</span>
+                  </div>
+                  <div>
+                    <span>仓位</span>
+                    <span>{formatNumber(watch.last_position)}</span>
+                  </div>
+                  <div>
+                    <span>强度</span>
+                    <span>{formatNumber(watch.last_strength)}</span>
+                  </div>
+                  <div>
+                    <span>策略</span>
+                    <span>{watch.strategy_name || shortId(watch.strategy_id)}</span>
+                  </div>
+                  <div>
+                    <span>最后收盘K线</span>
+                    <span>{formatDateTime(watch.last_closed_bar_ts)}</span>
+                  </div>
+                </div>
+                <div className="alphalab-radar-foot">
+                  <span>更新 {formatDateTime(watch.updated_at)}</span>
+                  <span className="alphalab-radar-countdown">
+                    {countdownText(countdownMs(watch, now))}
+                  </span>
+                </div>
+                {watch.last_error ? (
+                  <div className="alphalab-radar-note">
+                    该监控最近一次评估失败，结果仅供参考：{watch.last_error}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <AlphaLabEmpty>暂无启用的监控项</AlphaLabEmpty>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="section-title">
+          <span className="section-title-main">
             <Plus size={15} />
             新增监控
           </span>
+          <span className="tag">{targets.length} 个可选组合</span>
         </div>
+        {strategiesQuery.isLoading ? (
+          <AlphaLabLoading label="加载已有策略" />
+        ) : strategiesQuery.isError ? (
+          <AlphaLabError
+            error={strategiesQuery.error}
+            onRetry={() => void strategiesQuery.refetch()}
+          />
+        ) : targets.length ? null : (
+          <AlphaLabEmpty>
+            暂无可监控标的：请先在「策略」页训练或导入与品种、周期绑定的策略
+          </AlphaLabEmpty>
+        )}
         <form onSubmit={submit}>
           <div className="form-grid alphalab-form-grid">
             <div className="field">
-              <label htmlFor="alpha-watch-source">Source</label>
-              <input
-                id="alpha-watch-source"
-                value={form.source}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, source: event.target.value }))
-                }
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="alpha-watch-symbol">Symbol</label>
-              <input
-                id="alpha-watch-symbol"
-                value={form.symbol}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, symbol: event.target.value }))
-                }
-                placeholder="600519.SH"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="alpha-watch-timeframe">周期</label>
+              <label htmlFor="alpha-watch-target">
+                <AlphaLabLabel zh="监控标的" en="Symbol" />
+              </label>
               <select
-                id="alpha-watch-timeframe"
-                value={form.timeframe}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, timeframe: event.target.value }))
-                }
+                id="alpha-watch-target"
+                value={selectedTarget?.key ?? ''}
+                disabled={formLocked}
+                onChange={(event) => selectTarget(event.target.value)}
               >
-                <option value="1d">1d</option>
-                <option value="1h">1h</option>
-                <option value="30m">30m</option>
-                <option value="15m">15m</option>
-                <option value="5m">5m</option>
+                <option value="">请选择已有策略的标的</option>
+                {targets.map((target) => (
+                  <option key={target.key} value={target.key}>
+                    {targetLabel(target)}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="field">
-              <label htmlFor="alpha-watch-strategy">Strategy ID</label>
-              <input
+              <label htmlFor="alpha-watch-strategy">
+                <AlphaLabLabel zh="策略" en="Strategy" />
+              </label>
+              <select
                 id="alpha-watch-strategy"
-                value={form.strategyId}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    strategyId: event.target.value,
-                  }))
-                }
+                value={selectedTarget ? strategyTargetValue(selectedTarget) : ''}
+                disabled={formLocked || !symbolTargets.length}
+                onChange={(event) => selectStrategy(event.target.value)}
+              >
+                <option value="">请选择策略</option>
+                {symbolTargets.map((target) => (
+                  <option key={target.key} value={strategyTargetValue(target)}>
+                    {strategyLabel(target)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="alpha-watch-timeframe">
+                <AlphaLabLabel zh="周期" en="Timeframe" />
+              </label>
+              <input
+                id="alpha-watch-timeframe"
+                value={form.timeframe}
+                placeholder="--"
+                disabled
+                readOnly
               />
             </div>
             <div className="field">
-              <label htmlFor="alpha-watch-version">策略版本</label>
-              <input
-                id="alpha-watch-version"
-                value={form.strategyVersion}
+              <label htmlFor="alpha-watch-source">
+                <AlphaLabLabel zh="数据源" en="Source" />
+              </label>
+              <select
+                id="alpha-watch-source"
+                value={form.source}
+                disabled={formLocked}
                 onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    strategyVersion: event.target.value,
-                  }))
+                  setForm((current) => ({ ...current, source: event.target.value }))
                 }
-                placeholder="可选"
-              />
+              >
+                <option value="market_data">数据中心 (market_data)</option>
+                <option value="local">本地 (local)</option>
+              </select>
             </div>
             <label className="checkbox-row alphalab-checkbox">
               <input
                 type="checkbox"
                 checked={form.enabled}
+                disabled={formLocked}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
@@ -386,11 +750,14 @@ export function LiveMonitorPage() {
             </label>
           </div>
           {formError ? <div className="error-text">{formError}</div> : null}
+          <AlphaLabNote>
+            监控标的与周期来自已训练策略：策略与训练时的品种、周期绑定，换品种或换周期需要重新训练或单独验证。
+          </AlphaLabNote>
           <div className="row alphalab-form-actions">
             <button
               type="submit"
               className="button button-primary"
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || formLocked || !selectedTarget}
             >
               <Plus size={14} />
               {createMutation.isPending ? '创建中' : '添加监控'}
@@ -694,6 +1061,8 @@ export function LiveMonitorPage() {
           </AlphaLabEmpty>
         )}
       </div>
+
+      <AlphaLabHelp items={HELP_ITEMS} />
     </div>
   );
 }

@@ -443,10 +443,379 @@
   width: 260px;
 }
 
+/* ------------------------------------------------------------------ */
+/* 中文标题 + 英文补充                                                  */
+/* ------------------------------------------------------------------ */
+
+.alphalab-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.alphalab-label-zh {
+  color: var(--heading);
+  font-weight: 650;
+}
+
+.alphalab-label-en {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-metric .alphalab-label-en {
+  display: block;
+  margin-top: 2px;
+}
+
+.alphalab-chart-note {
+  margin-top: 10px;
+  border-left: 2px solid var(--accent-soft);
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------------ */
+/* 板块说明面板                                                        */
+/* ------------------------------------------------------------------ */
+
+.alphalab-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.alphalab-help-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.alphalab-help-chevron {
+  transition: transform 0.15s ease;
+}
+
+.alphalab-help-chevron.open {
+  transform: rotate(180deg);
+}
+
+.alphalab-help-body {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.alphalab-help-item-heading {
+  color: var(--heading);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.alphalab-help-item-body {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.72;
+}
+
+.alphalab-help-item-body ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.alphalab-help-item-body li {
+  margin-bottom: 4px;
+}
+
+.alphalab-help-item-body strong {
+  color: var(--heading);
+}
+
+.alphalab-help-item-body code {
+  border-radius: 3px;
+  background: var(--panel-muted);
+  padding: 1px 5px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------------ */
+/* 训练日志                                                            */
+/* ------------------------------------------------------------------ */
+
+.alphalab-log-view {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #f8fafb;
+  padding: 10px 12px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.alphalab-log-line {
+  display: grid;
+  grid-template-columns: 132px 52px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.alphalab-log-ts {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.alphalab-log-level {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.alphalab-log-line.info .alphalab-log-level {
+  color: var(--info);
+}
+
+.alphalab-log-line.warn .alphalab-log-level {
+  color: var(--warning);
+}
+
+.alphalab-log-line.error .alphalab-log-level {
+  color: var(--danger);
+}
+
+.alphalab-log-message {
+  color: #3b4a56;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-log-step {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* 绩效卡片 / 明细                                                     */
+/* ------------------------------------------------------------------ */
+
+.alphalab-perf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.alphalab-perf-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-muted);
+  padding: 12px 14px;
+}
+
+.alphalab-perf-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.alphalab-perf-label .alphalab-label-en {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+.alphalab-perf-value {
+  margin-top: 8px;
+  color: var(--heading);
+  font-size: 21px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-perf-value.positive {
+  color: var(--accent);
+}
+
+.alphalab-perf-value.negative {
+  color: var(--danger);
+}
+
+.alphalab-perf-detail {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.alphalab-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+/* ------------------------------------------------------------------ */
+/* 信号雷达                                                            */
+/* ------------------------------------------------------------------ */
+
+.alphalab-radar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(268px, 1fr));
+  gap: 14px;
+}
+
+.alphalab-radar-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 14px;
+}
+
+.alphalab-radar-card.long {
+  border-top: 3px solid var(--accent);
+}
+
+.alphalab-radar-card.short {
+  border-top: 3px solid var(--danger);
+}
+
+.alphalab-radar-card.flat {
+  border-top: 3px solid var(--border-strong);
+}
+
+.alphalab-radar-card.selected {
+  border-color: #b7d9cf;
+  background: rgba(223, 241, 236, 0.4);
+}
+
+.alphalab-radar-card {
+  cursor: pointer;
+}
+
+.alphalab-radar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.alphalab-radar-symbol {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.alphalab-radar-symbol strong {
+  color: var(--heading);
+  font-size: 15px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-radar-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.alphalab-radar-confidence {
+  flex: 1;
+  min-width: 0;
+}
+
+.alphalab-radar-confidence-value {
+  color: var(--heading);
+  font-size: 19px;
+  font-weight: 750;
+}
+
+.alphalab-radar-confidence-track {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: #e9edf1;
+  overflow: hidden;
+}
+
+.alphalab-radar-confidence-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.alphalab-radar-card.short .alphalab-radar-confidence-fill {
+  background: var(--danger);
+}
+
+.alphalab-radar-meta {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  font-size: 12px;
+}
+
+.alphalab-radar-meta > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.alphalab-radar-meta span:first-child {
+  color: var(--muted);
+}
+
+.alphalab-radar-meta span:last-child {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.alphalab-radar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.alphalab-radar-countdown {
+  color: var(--info);
+  font-variant-numeric: tabular-nums;
+}
+
+.alphalab-radar-note {
+  margin-top: 10px;
+  color: var(--warning);
+  font-size: 11px;
+}
+
 @media (max-width: 1180px) {
   .alphalab-metric-grid,
   .alphalab-form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .alphalab-chart-grid {
+    grid-template-columns: 1fr;
   }
 }
 

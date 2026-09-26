@@ -1,5 +1,7 @@
 import type { AlphaLabOverview } from '../../types/alphalab/common';
 import type {
+  TrainingLogEntry,
+  TrainingMetricsPoint,
   TrainingRun,
   TrainingRunCreateRequest,
 } from '../../types/alphalab/training';
@@ -11,6 +13,36 @@ import {
   recordValue,
   stringArray,
 } from './request';
+
+function normalizeMetricsPoint(value: unknown): TrainingMetricsPoint | null {
+  const raw = recordValue(value);
+  const step = finiteNumber(raw.step);
+  if (step === undefined) return null;
+  return { ...raw, step, ts: optionalString(raw.ts) };
+}
+
+function normalizeMetricsHistory(value: unknown): TrainingMetricsPoint[] {
+  return (Array.isArray(value) ? value : []).flatMap((item) => {
+    const point = normalizeMetricsPoint(item);
+    return point ? [point] : [];
+  });
+}
+
+function normalizeLogs(value: unknown): TrainingLogEntry[] {
+  return (Array.isArray(value) ? value : []).flatMap((item) => {
+    const raw = recordValue(item);
+    const message = optionalString(raw.message);
+    if (!message) return [];
+    return [
+      {
+        ts: String(raw.ts ?? raw.timestamp ?? ''),
+        level: String(raw.level ?? 'info').toLowerCase(),
+        step: finiteNumber(raw.step) ?? null,
+        message,
+      },
+    ];
+  });
+}
 
 function normalizeRun(value: unknown): TrainingRun {
   const raw = recordValue(value);
@@ -29,6 +61,7 @@ function normalizeRun(value: unknown): TrainingRun {
     symbol: optionalString(raw.symbol),
     timeframe: String(raw.timeframe ?? ''),
     dataset_id: optionalString(raw.dataset_id),
+    dataset_title: optionalString(raw.dataset_title),
     data_snapshot_id:
       optionalString(raw.data_snapshot_id) ?? optionalString(raw.dataset_id),
     status: String(raw.status ?? 'PENDING'),
@@ -44,6 +77,8 @@ function normalizeRun(value: unknown): TrainingRun {
     best_score:
       finiteNumber(raw.best_score) ?? finiteNumber(metadata.best_score),
     metrics_json: recordValue(raw.metrics_json ?? raw.metrics),
+    metrics_history: normalizeMetricsHistory(raw.metrics_history),
+    logs: normalizeLogs(raw.logs),
     error_message:
       optionalString(raw.error_message) ?? optionalString(raw.error),
     error: optionalString(raw.error),
