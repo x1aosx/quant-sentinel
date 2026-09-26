@@ -680,6 +680,7 @@
   border-radius: var(--radius);
   background: var(--panel);
   padding: 14px;
+  cursor: pointer;
 }
 
 .alphalab-radar-card.long {
@@ -697,10 +698,6 @@
 .alphalab-radar-card.selected {
   border-color: #b7d9cf;
   background: rgba(223, 241, 236, 0.4);
-}
-
-.alphalab-radar-card {
-  cursor: pointer;
 }
 
 .alphalab-radar-head {
