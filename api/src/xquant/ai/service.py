@@ -143,7 +143,13 @@ def build_snapshot(
     normalized_bars = dedupe_sorted_bars(bars)
     selected = normalized_bars[-settings.analysis_bar_count :]
     if len(selected) < 60:
-        raise ValueError("AI 快照至少需要 60 根已收盘K线")
+        if not selected:
+            # 数据集元数据还在，但行情存储里已经查不到这些 K 线（例如 InfluxDB
+            # 的 market_bar 表被清空过），这里给出可执行的提示而不是只报数量不足。
+            raise ValueError(
+                "数据集没有可用K线：行情存储中已查不到该品种数据，请重新同步行情后再分析"
+            )
+        raise ValueError(f"AI 快照至少需要 60 根已收盘K线，当前只有 {len(selected)} 根")
     sr = detect_support_resistance(
         selected,
         symbol=symbol,
@@ -240,8 +246,7 @@ def build_stage2_prompt(
         + json.dumps(stage1, ensure_ascii=False)
         + "\n请结合当前趋势、周期、支撑阻力、K线结构与失效条件，"
         "生成决策路径、未来走势预期、下一周期预期和下根K线预期。"
-        "若没有充分优势，action 使用 WAIT。\nK线（旧到新）：\n"
-        + _snapshot_table(snapshot)
+        "若没有充分优势，action 使用 WAIT。\nK线（旧到新）：\n" + _snapshot_table(snapshot)
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -363,7 +368,9 @@ def _reply_from_response(data: Mapping[str, Any], latency_ms: float) -> dict[str
         "id": data.get("id") or "",
         "model": data.get("model") or "",
         "content": str(message.get("content") or ""),
-        "reasoning_content": str(message.get("reasoning_content") or message.get("reasoning") or ""),
+        "reasoning_content": str(
+            message.get("reasoning_content") or message.get("reasoning") or ""
+        ),
         "usage": dict(usage),
         "latency_ms": round(latency_ms, 2),
         "finish_reason": choices[0].get("finish_reason"),
@@ -510,8 +517,7 @@ def test_provider_connection(
         "model": str(reply.get("model") or provider.model),
         "requested_model": provider.model,
         "base_url": provider.base_url,
-        "latency_ms": reply.get("latency_ms")
-        or round((time.perf_counter() - started) * 1000, 2),
+        "latency_ms": reply.get("latency_ms") or round((time.perf_counter() - started) * 1000, 2),
         "reply": str(reply.get("content") or "").strip()[:500],
         "usage": dict(reply.get("usage") or {}),
         "request_id": str(reply.get("id") or ""),
@@ -855,9 +861,7 @@ def _normalize_future_trend(raw: Any, fallback_label: str = "") -> dict[str, Any
         "description",
     )
     direction = _normalize_direction(_first(data, "direction", "trend", "bias", default=""))
-    confidence = _as_percent(
-        _first(data, "confidence", "probability", "prob", "conviction")
-    )
+    confidence = _as_percent(_first(data, "confidence", "probability", "prob", "conviction"))
     probabilities = _first_probabilities(
         data,
         ("probabilities", "scenarios", "outcomes", "cases", "distribution", "paths"),
@@ -992,7 +996,9 @@ def _apply_next_bar_setting(
     return stage2
 
 
-def normalize_diagnosis(raw: Mapping[str, Any] | None, fallback: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_diagnosis(
+    raw: Mapping[str, Any] | None, fallback: Mapping[str, Any]
+) -> dict[str, Any]:
     data = dict(raw or {})
     trend = data.get("current_trend")
     if isinstance(trend, str):
@@ -1090,9 +1096,7 @@ def normalize_stage2(
     future_raw = _first(data, "future_trend", "future", "future_outlook")
     if future_raw in (None, ""):
         future_raw = _first(decision_data, "future_trend", "future", "future_outlook")
-    next_cycle_raw = _first(
-        data, "next_cycle_prediction", "next_cycle", "cycle_prediction"
-    )
+    next_cycle_raw = _first(data, "next_cycle_prediction", "next_cycle", "cycle_prediction")
     if next_cycle_raw in (None, ""):
         next_cycle_raw = _first(
             decision_data, "next_cycle_prediction", "next_cycle", "cycle_prediction"
@@ -1191,9 +1195,7 @@ def _local_stage2(local_pa: Mapping[str, Any], diagnosis: Mapping[str, Any]) -> 
             "label": trend_label,
             "direction": direction,
             "confidence": round(confidence, 2) if confidence is not None else 0,
-            "reasoning": (
-                "本地确定性规则依据趋势方向、周期位置与结构给出预期，未调用外部模型。"
-            ),
+            "reasoning": ("本地确定性规则依据趋势方向、周期位置与结构给出预期，未调用外部模型。"),
         },
         "next_cycle_prediction": {
             "cycle": cycle,

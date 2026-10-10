@@ -1,4 +1,4 @@
-from .influxdb import InfluxDBQueryError, InfluxDBStore
+from .influxdb import InfluxDBQueryError, InfluxDBStore, is_missing_table_error
 from .postgres import PostgresStore
 from .redis_store import RedisStore
 from .settings import (
@@ -19,4 +19,5 @@ __all__ = [
     "RedisStore",
     "SchedulerSettings",
     "StorageSettings",
+    "is_missing_table_error",
 ]

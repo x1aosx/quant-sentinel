@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -16,6 +17,10 @@ _MAX_ERROR_DETAIL_CHARS = 500
 # 超限时直接以 HTTP 500 失败。命中该错误可以收窄时间范围重试。
 _FILE_LIMIT_MARKERS = ("file limit", "query-file-limit")
 
+# InfluxDB 3 的表在首次写入前并不存在，查询会在规划阶段失败：
+# ``Error during planning: table 'public.iox.market_bar' not found``。
+_MISSING_TABLE_PATTERN = re.compile(r"table\s+'[^']*'\s+not\s+found", re.IGNORECASE)
+
 # InfluxDB 3 SQL 的时间边界写法：RFC3339 UTC 字符串。
 _TIME_PARAM_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -30,6 +35,19 @@ def is_file_limit_error(exc: BaseException) -> bool:
     """判断异常是否为 InfluxDB 3 Core 的 parquet 文件数超限。"""
     detail = str(getattr(exc, "detail", "") or exc).lower()
     return any(marker in detail for marker in _FILE_LIMIT_MARKERS)
+
+
+def is_missing_table_error(exc: BaseException) -> bool:
+    """判断异常是否为“查询的表还不存在”。
+
+    表按写入自动创建，所以这个错误等价于「该数据集在当前行情存储里没有数据」。
+    调用方应当按空结果处理并触发重建，而不是把它当成存储不可用；
+    数据库不存在（``database not found``）之类的错误仍然算真实故障。
+    """
+    if str(getattr(exc, "operation", "")) != "query":
+        return False
+    detail = str(getattr(exc, "detail", "") or exc)
+    return _MISSING_TABLE_PATTERN.search(detail) is not None
 
 
 def _format_time_param(value: datetime) -> str:

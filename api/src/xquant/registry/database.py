@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import zlib
 from collections.abc import Mapping
@@ -14,10 +15,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ..marketdata.remote import fetch_remote_bars, resolve_instrument_title
 from ..storage import (
+    InfluxDBQueryError,
     InfluxDBStore,
     PostgresStore,
     RedisStore,
     StorageSettings,
+    is_missing_table_error,
 )
 from .bar_utils import dedupe_sorted_bars
 from .bar_utils import parse_session_time as _parse_time
@@ -34,6 +37,14 @@ from .sqlite import (
 
 _MONITOR_LOG_RETENTION_DAYS = 30
 _MONITOR_LOG_PRUNE_INTERVAL_SECONDS = 600.0
+
+# 数据集至少要有这么多根已收盘 K 线；重建时少于该数量就判定为回源失败。
+_MIN_DATASET_BARS = 60
+
+# 远端接口对 lookback 的上限，重建时按原始 bar 数放大也不能超过它。
+_MAX_REMOTE_LOOKBACK = 5000
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -332,9 +343,62 @@ class Database:
                 "created_at": created_at,
             },
         )
-        self._write_dataset_bars(dataset_id, payload["symbol"], payload["timeframe"], bars, created_at)
+        self._write_dataset_bars(
+            dataset_id, payload["symbol"], payload["timeframe"], bars, created_at
+        )
         self._invalidate("dataset:list", f"dataset:{dataset_id}:bars")
         return self.get_dataset(dataset_id)["summary"]
+
+    def _dataset_storage_state(
+        self,
+        existing: Mapping[str, Any] | None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """返回（行情存储中的 K 线, 是否需要全量重建）。
+
+        元数据里记着 ``bar_count``，行情存储里却查不到 K 线，说明 InfluxDB 的
+        ``market_bar`` 表被清空或丢失过（表本身会在首次写入时按需创建）。此时
+        必须按原始 bar 数回源重建：照常走增量同步只会补回最近几根 K 线，还会
+        把数据集元数据覆盖成残缺的窗口。
+        """
+        if not existing:
+            return [], False
+        stored_bars = self._fetch_dataset_bars(str(existing["id"]), existing)
+        needs_rebuild = not stored_bars and int(existing.get("bar_count") or 0) > 0
+        return stored_bars, needs_rebuild
+
+    def _prepare_rebuild(
+        self,
+        request_payload: dict[str, Any],
+        existing: Mapping[str, Any],
+        original_payload: Mapping[str, Any],
+    ) -> bool:
+        """把增量请求改成全量重建请求，返回请求是否真的变了。
+
+        调用方显式给定的 ``session_start`` 代表明确的时间范围，不去改动它。
+        """
+        changed = False
+        if not original_payload.get("session_start") and "session_start" in request_payload:
+            request_payload.pop("session_start")
+            changed = True
+        lookback = min(
+            _MAX_REMOTE_LOOKBACK,
+            max(
+                int(request_payload.get("lookback") or 0),
+                int(existing.get("bar_count") or 0),
+                _MIN_DATASET_BARS,
+            ),
+        )
+        if lookback != int(request_payload.get("lookback") or 0):
+            request_payload["lookback"] = lookback
+            changed = True
+        logger.warning(
+            "数据集 %s（%s %s）在行情存储中没有 K 线，按 %s 根回源重建",
+            existing.get("id"),
+            existing.get("symbol"),
+            existing.get("timeframe"),
+            lookback,
+        )
+        return changed
 
     def sync_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_payload = dict(payload)
@@ -346,13 +410,24 @@ class Database:
         if existing and not request_payload.get("session_start"):
             request_payload["session_start"] = existing["last_session"]
 
+        stored_bars, rebuild = self._dataset_storage_state(existing)
+        prepared_dataset_id = str(existing["id"]) if existing else None
+        if rebuild:
+            # 先按全量参数发请求，正常（含恢复）路径只需一次回源。
+            self._prepare_rebuild(request_payload, existing, payload)
+
         remote = fetch_remote_bars(request_payload)
-        symbol = str(remote.get("symbol") or requested_symbol).strip().upper()
-        timeframe = str(remote.get("timeframe") or requested_timeframe).strip() or "1d"
-        if not symbol:
-            raise ValueError("远程行情返回的 symbol 不能为空")
+        symbol, timeframe = _remote_identity(remote, requested_symbol, requested_timeframe)
         if existing is None or symbol != requested_symbol or timeframe != requested_timeframe:
             existing = self._find_dataset(symbol, timeframe)
+        dataset_id = str(existing["id"]) if existing else _dataset_id(symbol, timeframe)
+
+        if dataset_id != prepared_dataset_id:
+            # 远端命中的数据集与预检查的不是同一个：按它重新判断，必要时补一次全量回源。
+            stored_bars, rebuild = self._dataset_storage_state(existing)
+            if rebuild and self._prepare_rebuild(request_payload, existing, payload):
+                remote = fetch_remote_bars(request_payload)
+                symbol, timeframe = _remote_identity(remote, symbol, timeframe)
 
         raw_bars = remote.get("bars")
         if raw_bars is None:
@@ -360,13 +435,17 @@ class Database:
         if not isinstance(raw_bars, list):
             raise TypeError("远程行情返回的 bars 格式无效")
         remote_bars = _dedupe_bars(raw_bars)
+        if rebuild and len(remote_bars) < _MIN_DATASET_BARS:
+            # 宁可不写，也不要把数据集元数据覆盖成残缺的几根 K 线。
+            raise ValueError(
+                f"数据集 {dataset_id} 的 K 线已从行情存储丢失，"
+                f"回源只取到 {len(remote_bars)} 根，不足以重建"
+            )
 
-        dataset_id = str(existing["id"]) if existing else _dataset_id(symbol, timeframe)
         created_at = _parse_time(existing.get("created_at")) if existing else None
         now = datetime.now(UTC)
         created_at = created_at or now
-        existing_bars = self._fetch_dataset_bars(dataset_id, existing) if existing else []
-        existing_by_session = _dedupe_bars(existing_bars)
+        existing_by_session = _dedupe_bars(stored_bars)
 
         new_bars = [
             bar for identity, bar in remote_bars.items() if identity not in existing_by_session
@@ -374,8 +453,7 @@ class Database:
         revised_bars = [
             bar
             for identity, bar in remote_bars.items()
-            if identity in existing_by_session
-            and existing_by_session[identity] != bar
+            if identity in existing_by_session and existing_by_session[identity] != bar
         ]
         bars_to_write = [*new_bars, *revised_bars]
         updated_count = len(remote_bars) - len(new_bars)
@@ -433,6 +511,7 @@ class Database:
             "updated_count": updated_count,
             "total_count": len(merged_bars),
             "sync_status": "updated" if new_bars or revised_bars else "unchanged",
+            "rebuilt": rebuild,
             "synced_at": now.isoformat(),
         }
 
@@ -611,7 +690,7 @@ class Database:
             rows = self.postgres.query(
                 columns
                 + f"""
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY r.created_at DESC, r.id DESC
                 LIMIT :limit OFFSET :offset
                 """,
@@ -671,7 +750,7 @@ class Database:
             row = self.postgres.query_one(
                 query
                 + f"""
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 """,
                 params,
             )
@@ -1115,18 +1194,29 @@ class Database:
         metadata: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         bounds = _dataset_time_bounds(metadata)
-        if bounds is None:
-            rows = self.influx.query(
-                _UNBOUNDED_BAR_QUERY_SQL,
-                {"dataset_id": dataset_id},
+        try:
+            if bounds is None:
+                rows = self.influx.query(
+                    _UNBOUNDED_BAR_QUERY_SQL,
+                    {"dataset_id": dataset_id},
+                )
+            else:
+                rows = self.influx.query_time_windows(
+                    _BAR_TIME_WINDOW_QUERY_SQL,
+                    {"dataset_id": dataset_id},
+                    lower=bounds[0],
+                    upper=bounds[1],
+                )
+        except InfluxDBQueryError as exc:
+            if not is_missing_table_error(exc):
+                raise
+            # 表在首次写入前不存在；对读路径来说等同于「这个数据集还没有数据」。
+            logger.warning(
+                "行情存储缺少 market_bar 表，数据集 %s 按空 K 线处理：%s",
+                dataset_id,
+                exc.detail,
             )
-        else:
-            rows = self.influx.query_time_windows(
-                _BAR_TIME_WINDOW_QUERY_SQL,
-                {"dataset_id": dataset_id},
-                lower=bounds[0],
-                upper=bounds[1],
-            )
+            return []
         bars: list[dict[str, Any]] = []
         for row in rows:
             bars.append(
@@ -1218,6 +1308,19 @@ def _dedupe_bars(bars: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             raise ValueError(f"第 {index + 1} 条 bar 缺少 session_id")
         deduped.setdefault(session_identity(session_id), normalized)
     return deduped
+
+
+def _remote_identity(
+    remote: Mapping[str, Any],
+    fallback_symbol: str,
+    fallback_timeframe: str,
+) -> tuple[str, str]:
+    """取远端返回的品种/周期，缺失时回落到请求里的值。"""
+    symbol = str(remote.get("symbol") or fallback_symbol).strip().upper()
+    if not symbol:
+        raise ValueError("远程行情返回的 symbol 不能为空")
+    timeframe = str(remote.get("timeframe") or fallback_timeframe).strip() or "1d"
+    return symbol, timeframe
 
 
 def _monitor_log_row(row: Mapping[str, Any]) -> dict[str, Any]:
