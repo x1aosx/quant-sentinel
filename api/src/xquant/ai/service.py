@@ -731,6 +731,69 @@ def _text(mapping: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
+# 模型偶尔把本该是文本的字段写成对象/数组，这里按“可读文本优先”的顺序取第一个值。
+_TEXT_HINTS = (
+    "label",
+    "title",
+    "phase",
+    "summary",
+    "description",
+    "detail",
+    "details",
+    "expected",
+    "expected_cycle",
+    "cycle",
+    "state",
+    "direction",
+    "bias",
+    "outlook",
+    "base_case",
+    "current",
+    "overview",
+    "overall",
+    "status",
+    "conclusion",
+    "reasoning",
+    "note",
+    "text",
+    "value",
+    "answer",
+    "result",
+    "name",
+    "key",
+    "scenario",
+)
+
+
+def _flatten_text(value: Any, depth: int = 3) -> str:
+    """把模型返回的对象/数组压成一行可读文本；标量直接返回文本。
+
+    前端会把诊断字段直接渲染成 JSX 子节点，返回容器会触发 React #31
+    （Objects are not valid as a React child），因此归一化阶段就要落成文本。
+    """
+    if depth < 0:
+        return ""
+    if isinstance(value, Mapping):
+        for hint in _TEXT_HINTS:
+            text = _flatten_text(value.get(hint), depth - 1)
+            if text:
+                return text
+        # 没有命中已知键时取最长的标量文本：模型常用散文描述说明状态。
+        longest = ""
+        for item in value.values():
+            text = _scalar_text(item)
+            if len(text) > len(longest):
+                longest = text
+        return longest
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            text = _flatten_text(item, depth - 1)
+            if text:
+                return text
+        return ""
+    return _scalar_text(value)
+
+
 def _to_number(value: Any) -> float | None:
     """Parse a model-supplied number, tolerating percent strings and word scales."""
     if value is None or isinstance(value, bool):
@@ -1006,7 +1069,12 @@ def normalize_diagnosis(
     if not isinstance(trend, Mapping):
         trend = fallback.get("trend") if isinstance(fallback.get("trend"), Mapping) else {}
     trend_data = dict(trend)
-    direction = _first(data, "direction", default=trend_data.get("direction", "neutral"))
+    direction = (
+        _flatten_text(
+            _first(data, "direction", default=trend_data.get("direction", "neutral"))
+        )
+        or "neutral"
+    )
     sr = fallback.get("support_resistance")
     if not isinstance(sr, Mapping):
         sr = {}
@@ -1014,34 +1082,49 @@ def normalize_diagnosis(
         "current_trend": {
             **trend_data,
             "direction": direction,
-            "strength": _first(data, "trend_strength", default=trend_data.get("strength")),
-            "cycle_position": _first(
-                data,
-                "cycle_position",
-                "current_cycle",
-                default=trend_data.get("cycle_position"),
+            "strength": _flatten_text(
+                _first(data, "trend_strength", default=trend_data.get("strength"))
+            ),
+            "cycle_position": _flatten_text(
+                _first(
+                    data,
+                    "cycle_position",
+                    "current_cycle",
+                    default=trend_data.get("cycle_position"),
+                )
             ),
         },
-        "current_cycle": _first(
-            data,
-            "current_cycle",
-            "cycle_position",
-            default=trend_data.get("cycle_position", "unknown"),
-        ),
-        "next_cycle": _first(data, "next_cycle", "next_cycle_prediction", default="unknown"),
+        "current_cycle": _flatten_text(
+            _first(
+                data,
+                "current_cycle",
+                "cycle_position",
+                default=trend_data.get("cycle_position", "unknown"),
+            )
+        )
+        or "unknown",
+        "next_cycle": _flatten_text(
+            _first(data, "next_cycle", "next_cycle_prediction", default="unknown")
+        )
+        or "unknown",
         "supports": _as_list(data.get("supports") or sr.get("supports_only")),
         "resistances": _as_list(data.get("resistances") or sr.get("resistances")),
-        "diagnosis_summary": _first(
-            data,
-            "diagnosis_summary",
-            "summary",
-            default="未返回诊断摘要。",
-        ),
+        "diagnosis_summary": _flatten_text(
+            _first(
+                data,
+                "diagnosis_summary",
+                "summary",
+                default="未返回诊断摘要。",
+            )
+        )
+        or "未返回诊断摘要。",
         "key_factors": _as_list(_first(data, "key_factors", "key_signals", default=[])),
         "confidence": _first(data, "confidence", "diagnosis_confidence", default=0),
-        "market_phase": _first(data, "market_phase", default="unknown"),
+        "market_phase": _flatten_text(_first(data, "market_phase", default="unknown"))
+        or "unknown",
         "detected_patterns": _as_list(_first(data, "detected_patterns", "patterns", default=[])),
-        "gate_result": _first(data, "gate_result", default="unknown"),
+        "gate_result": _flatten_text(_first(data, "gate_result", default="unknown"))
+        or "unknown",
         "gate_trace": _as_list(data.get("gate_trace")),
         "raw": data,
     }
@@ -1086,7 +1169,9 @@ def normalize_stage2(
         ),
         "target_2": _first(decision_data, "target_2", "take_profit_price_2"),
         "rr": _first(decision_data, "rr", "risk_reward", "risk_reward_ratio"),
-        "reasoning": _first(decision_data, "reasoning", "summary", default=""),
+        "reasoning": _flatten_text(
+            _first(decision_data, "reasoning", "summary", default="")
+        ),
         "invalidation": _first(decision_data, "invalidation", "invalid_condition"),
         "watch_points": _as_list(
             decision_data.get("watch_points") or decision_data.get("key_factors")
@@ -1114,10 +1199,12 @@ def normalize_stage2(
     next_bar = _normalize_next_bar(next_bar_raw)
     return {
         "decision": normalized_decision,
-        "diagnosis_summary": _first(
-            data,
-            "diagnosis_summary",
-            default=diagnosis.get("diagnosis_summary", ""),
+        "diagnosis_summary": _flatten_text(
+            _first(
+                data,
+                "diagnosis_summary",
+                default=diagnosis.get("diagnosis_summary", ""),
+            )
         ),
         "decision_trace": _as_list(data.get("decision_trace")),
         "terminal": data.get("terminal") if isinstance(data.get("terminal"), Mapping) else {},

@@ -48,11 +48,14 @@ import type {
 } from '../types';
 import {
   actionOf,
+  compactLabel,
   confidenceOf,
   decisionOf,
+  describeValue,
   diagnosisOf,
   firstText,
   formatValue,
+  listText,
   probabilityRows,
   responseText,
 } from '../utils/aiRecord';
@@ -2100,21 +2103,21 @@ export function AIAnalysisPage() {
               <div className="panel stat">
                 <div>
                   <div className="stat-label">趋势方向</div>
-                  <div className="stat-value">{diagnosis.current_trend?.direction ?? '--'}</div>
+                  <div className="stat-value">{describeValue(diagnosis.current_trend?.direction)}</div>
                 </div>
                 <TrendingUp size={18} />
               </div>
               <div className="panel stat">
                 <div>
                   <div className="stat-label">当前周期</div>
-                  <div className="stat-value">{diagnosis.current_cycle ?? '--'}</div>
+                  <div className="stat-value">{compactLabel(diagnosis.current_cycle)}</div>
                 </div>
                 <CalendarClock size={18} />
               </div>
               <div className="panel stat">
                 <div>
                   <div className="stat-label">下一周期</div>
-                  <div className="stat-value">{diagnosis.next_cycle ?? '--'}</div>
+                  <div className="stat-value">{compactLabel(diagnosis.next_cycle)}</div>
                 </div>
                 <RefreshCcw size={18} />
               </div>
@@ -2129,7 +2132,7 @@ export function AIAnalysisPage() {
             <div className="grid grid-2">
               <div className="panel">
                 <div className="section-title">诊断摘要</div>
-                <p>{diagnosis.diagnosis_summary ?? '未提供'}</p>
+                <p>{describeValue(diagnosis.diagnosis_summary, '未提供')}</p>
                 <div className="feature-list">
                   {(diagnosis.key_factors ?? []).map((factor: unknown, index: number) => (
                     <div key={`${String(factor)}-${index}`} className="feature-item">
@@ -2183,7 +2186,7 @@ export function AIAnalysisPage() {
                   <div className="value">{formatValue(decision.rr)}</div>
                 </div>
               </div>
-              <p>{decision.reasoning ?? '未提供决策理由。'}</p>
+              <p>{describeValue(decision.reasoning, '未提供决策理由。')}</p>
             </div>
             <div className="panel">
               <div className="section-title">风险与失效条件</div>
@@ -2195,17 +2198,13 @@ export function AIAnalysisPage() {
                 <div className="feature-item">
                   <div className="label">关注点</div>
                   <div className="value">
-                    {(decision.watch_points ?? []).length
-                      ? (decision.watch_points as unknown[]).join('、')
-                      : '--'}
+                    {listText(decision.watch_points)}
                   </div>
                 </div>
                 <div className="feature-item">
                   <div className="label">风险</div>
                   <div className="value">
-                    {(decision.risk_flags ?? []).length
-                      ? (decision.risk_flags as unknown[]).join('、')
-                      : '--'}
+                    {listText(decision.risk_flags)}
                   </div>
                 </div>
               </div>

@@ -33,6 +33,127 @@ export function formatValue(value: unknown, fallback = '--'): string {
   return String(value);
 }
 
+// 模型偶尔把本该是文本的字段写成对象（例如 next_cycle 返回带 expected/transition 的字典），
+// 直接渲染进 JSX 会触发 React #31（Objects are not valid as a React child），
+// 因此这里统一压成一行可读文本。
+const TEXT_HINT_KEYS = [
+  'label',
+  'title',
+  'phase',
+  'summary',
+  'description',
+  'detail',
+  'details',
+  'expected',
+  'expected_cycle',
+  'cycle',
+  'state',
+  'direction',
+  'bias',
+  'outlook',
+  'base_case',
+  'current',
+  'overview',
+  'overall',
+  'status',
+  'conclusion',
+  'reasoning',
+  'note',
+  'text',
+  'value',
+  'answer',
+  'result',
+  'name',
+  'key',
+  'scenario',
+];
+
+export function describeValue(value: unknown, fallback = '--'): string {
+  return describeText(value, 3) || fallback;
+}
+
+// 统计卡片只放得下一行短标签，优先取紧凑的状态字段，长散文兜底并截断。
+const COMPACT_HINT_KEYS = [
+  'phase',
+  'label',
+  'title',
+  'name',
+  'cycle',
+  'state',
+  'expected',
+  'expected_cycle',
+  'direction',
+  'bias',
+  'status',
+  'text',
+  'value',
+  'key',
+  'scenario',
+  'summary',
+  'description',
+];
+
+export function compactLabel(value: unknown, fallback = '--', maxLength = 48): string {
+  const text = compactText(value, 3) || fallback;
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
+function compactText(value: unknown, depth: number): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (depth < 0) return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const text = compactText(item, depth - 1);
+      if (text) return text;
+    }
+    return '';
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of COMPACT_HINT_KEYS) {
+    const text = compactText(record[key], depth - 1);
+    if (text) return text;
+  }
+  return describeText(value, depth);
+}
+
+function describeText(value: unknown, depth: number): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (depth < 0) return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const text = describeText(item, depth - 1);
+      if (text) return text;
+    }
+    return '';
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of TEXT_HINT_KEYS) {
+    const text = describeText(record[key], depth - 1);
+    if (text) return text;
+  }
+  // 没有命中已知键时取最长的标量文本：模型常用散文说明状态。
+  let longest = '';
+  for (const item of Object.values(record)) {
+    if (typeof item !== 'string' && typeof item !== 'number') continue;
+    const text = String(item).trim();
+    if (text.length > longest.length) longest = text;
+  }
+  return longest;
+}
+
+/** 把数组/对象字段渲染成一行文本，对象元素不再输出 [object Object]。 */
+export function listText(value: unknown, fallback = '--'): string {
+  const items = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+  const texts = items.map((item) => describeText(item, 3)).filter(Boolean);
+  return texts.length ? texts.join('、') : fallback;
+}
+
 export function probabilityRows(value: unknown): Array<{ label: string; probability: number }> {
   const entries: Array<{ label: string; probability: number }> = [];
   if (Array.isArray(value)) {

@@ -12,6 +12,7 @@ from xquant.ai.service import (
     call_chat_completion,
     mask_provider,
     normalize_ai_settings,
+    normalize_diagnosis,
     normalize_probabilities,
     normalize_stage2,
     run_two_stage,
@@ -550,6 +551,40 @@ def test_yahoo_fetch_encodes_symbol_and_normalizes_bars(monkeypatch) -> None:
     assert requests[0][1]["range"] == "2y"
     # Yahoo marks the latest intraday bar unclosed; normalization removes it.
     assert len(result["bars"]) == 79
+
+
+def test_normalize_diagnosis_flattens_object_fields() -> None:
+    # 回归：模型把 next_cycle/current_cycle 等字段写成对象时，归一化必须落成文本，
+    # 否则前端直接渲染对象会触发 React #31（Objects are not valid as a React child）。
+    diagnosis = normalize_diagnosis(
+        {
+            "direction": {"value": "bearish"},
+            "current_cycle": {
+                "name": "bearish_markdown_range_low_breakout_attempt",
+                "phase": "下跌趋势中的区间下沿破位尝试阶段",
+                "description": "自 15.30 高点以来处于下行周期",
+            },
+            "next_cycle": {
+                "expected": "pending_confirmation",
+                "bearish_transition": "若收盘有效跌破 9.10 且放量，则进入下跌延续周期。",
+                "bullish_transition": "若收复 9.49 并站稳，则进入破位失败修复。",
+                "neutral_transition": "若继续窄幅整理，则维持低位弱震荡。",
+            },
+            "diagnosis_summary": {"summary": "区间下沿破位尝试"},
+            "gate_result": {"label": "破位确认门控", "status": "pending"},
+            "market_phase": {"phase": "低位破位测试"},
+        },
+        {"support_resistance": {}},
+    )
+    assert diagnosis["current_trend"]["direction"] == "bearish"
+    assert diagnosis["current_cycle"] == "下跌趋势中的区间下沿破位尝试阶段"
+    assert diagnosis["next_cycle"] == "pending_confirmation"
+    assert diagnosis["diagnosis_summary"] == "区间下沿破位尝试"
+    assert diagnosis["gate_result"] == "破位确认门控"
+    assert diagnosis["market_phase"] == "低位破位测试"
+    for field in ("current_cycle", "next_cycle", "diagnosis_summary", "gate_result", "market_phase"):
+        assert isinstance(diagnosis[field], str)
+
 
 
 def test_normalize_probabilities_accepts_fractions_and_lists() -> None:
