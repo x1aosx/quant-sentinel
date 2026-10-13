@@ -3676,6 +3676,12 @@ textarea {
   margin-top: 14px;
 }
 
+.intelligence-source-pagination {
+  margin-top: 14px;
+  padding-top: 0;
+  border-top: none;
+}
+
 @media (max-width: 1080px) {
   .intelligence-source-row {
     grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1fr) 38px;

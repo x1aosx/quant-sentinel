@@ -4,6 +4,8 @@ import {
   Bell,
   CalendarClock,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileDown,
   Newspaper,
@@ -61,6 +63,9 @@ const EMPTY_INTELLIGENCE: IntelligenceConfig = {
   feeds: [],
 };
 
+const INTELLIGENCE_SOURCE_PAGE_SIZES = [10, 20, 50, 100] as const;
+const INTELLIGENCE_SOURCE_DEFAULT_PAGE_SIZE = 20;
+
 const WEEKDAY_OPTIONS = [
   { value: 1, label: '周一' },
   { value: 2, label: '周二' },
@@ -95,8 +100,13 @@ export function SystemConfigPage() {
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [feedPage, setFeedPage] = useState(1);
+  const [feedPageSize, setFeedPageSize] = useState<number>(
+    INTELLIGENCE_SOURCE_DEFAULT_PAGE_SIZE,
+  );
   const sourceFileInputRef = useRef<HTMLInputElement>(null);
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
+  const feedCount = form?.intelligence.feeds.length ?? 0;
 
   useEffect(() => {
     if (configQuery.data) {
@@ -114,6 +124,11 @@ export function SystemConfigPage() {
       setWatchlistDatasetId(datasets[0].id);
     }
   }, [datasets, watchlistDatasetId]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(feedCount / feedPageSize));
+    setFeedPage((current) => (current > totalPages ? totalPages : current));
+  }, [feedCount, feedPageSize]);
 
   const save = useMutation({
     mutationFn: (value: SystemConfig) => api.saveSystemConfig(value),
@@ -169,6 +184,13 @@ export function SystemConfigPage() {
     );
   }
 
+  const feedTotalPages = Math.max(1, Math.ceil(feedCount / feedPageSize));
+  const feedCurrentPage = Math.min(feedPage, feedTotalPages);
+  const feedPageStart = (feedCurrentPage - 1) * feedPageSize;
+  const pagedFeeds = form.intelligence.feeds
+    .slice(feedPageStart, feedPageStart + feedPageSize)
+    .map((feed, offset) => ({ feed, index: feedPageStart + offset }));
+
   const updateProvider = (patch: Partial<SystemConfig['provider']>) => {
     setProviderTest(null);
     setForm({ ...form, provider: { ...form.provider, ...patch } });
@@ -191,19 +213,19 @@ export function SystemConfigPage() {
     updateIntelligence({ feeds });
   };
   const addFeed = () => {
-    updateIntelligence({
-      feeds: [
-        ...form.intelligence.feeds,
-        {
-          id: `feed-${Date.now()}`,
-          url: '',
-          source: '',
-          source_type: 'NEWS',
-          language: 'zh-CN',
-          enabled: true,
-        },
-      ],
-    });
+    const feeds = [
+      ...form.intelligence.feeds,
+      {
+        id: `feed-${Date.now()}`,
+        url: '',
+        source: '',
+        source_type: 'NEWS' as const,
+        language: 'zh-CN',
+        enabled: true,
+      },
+    ];
+    updateIntelligence({ feeds });
+    setFeedPage(Math.max(1, Math.ceil(feeds.length / feedPageSize)));
   };
   const exportSources = () => {
     downloadIntelligenceSourcesCsv(form.intelligence.feeds);
@@ -475,9 +497,9 @@ export function SystemConfigPage() {
             />
           </div>
         </div>
-        {form.intelligence.feeds.length ? (
+        {feedCount ? (
           <div className="intelligence-source-list">
-            {form.intelligence.feeds.map((feed, index) => (
+            {pagedFeeds.map(({ feed, index }) => (
               <div className="intelligence-source-row" key={`${feed.id}-${index}`}>
                 <label className="checkbox-row intelligence-source-enabled">
                   <input
@@ -544,6 +566,56 @@ export function SystemConfigPage() {
             尚未配置情报源。添加 RSS 或 Atom 地址后，可在市场情报页执行采集。
           </div>
         )}
+        {feedCount ? (
+          <div className="summary-pagination intelligence-source-pagination">
+            <span className="muted">
+              第 {feedPageStart + 1}-{Math.min(feedPageStart + feedPageSize, feedCount)} 条，共{' '}
+              {feedCount} 条
+            </span>
+            <div className="summary-page-actions">
+              <button
+                className="button"
+                type="button"
+                onClick={() => setFeedPage((current) => Math.max(current - 1, 1))}
+                disabled={feedCurrentPage <= 1}
+              >
+                <ChevronLeft size={14} />
+                上一页
+              </button>
+              <span className="summary-page-indicator">
+                第 {feedCurrentPage} / {feedTotalPages} 页
+              </span>
+              <button
+                className="button"
+                type="button"
+                onClick={() =>
+                  setFeedPage((current) => Math.min(current + 1, feedTotalPages))
+                }
+                disabled={feedCurrentPage >= feedTotalPages}
+              >
+                下一页
+                <ChevronRight size={14} />
+              </button>
+            </div>
+            <label className="summary-page-size">
+              每页
+              <select
+                value={feedPageSize}
+                onChange={(event) => {
+                  setFeedPageSize(Number(event.target.value));
+                  setFeedPage(1);
+                }}
+                aria-label="每页情报源数量"
+              >
+                {INTELLIGENCE_SOURCE_PAGE_SIZES.map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
       </div>
 
       <div className="panel">
