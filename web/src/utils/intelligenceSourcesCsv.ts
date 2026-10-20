@@ -14,6 +14,8 @@ type SourceField =
 export interface IntelligenceSourceImportResult {
   feeds: IntelligenceFeedConfig[];
   invalidRows: number;
+  /** 类型列无法识别、已按默认类型归类的行数。 */
+  typeFallbacks: number;
   errors: string[];
 }
 
@@ -41,13 +43,31 @@ const TEMPLATE_HEADERS = [
   '启用',
 ];
 
+const DEFAULT_SOURCE_TYPE: IntelligenceSourceType = 'NEWS';
+
+// 后端 SourceType 只接受 NEWS / POLICY / ANNOUNCEMENT 三个值，
+// 但外部表格常按业务分类书写，这里把常见写法收敛到三个枚举上。
 const SOURCE_TYPE_ALIASES: Record<string, IntelligenceSourceType> = {
   NEWS: 'NEWS',
   POLICY: 'POLICY',
   ANNOUNCEMENT: 'ANNOUNCEMENT',
   新闻: 'NEWS',
+  资讯: 'NEWS',
+  快讯: 'NEWS',
+  行业: 'NEWS',
+  海外: 'NEWS',
+  区域: 'NEWS',
+  研究: 'NEWS',
+  研报: 'NEWS',
+  数据: 'NEWS',
+  宏观数据: 'NEWS',
+  能源商品: 'NEWS',
+  舆情: 'NEWS',
   政策: 'POLICY',
+  监管: 'POLICY',
   公告: 'ANNOUNCEMENT',
+  披露: 'ANNOUNCEMENT',
+  财报: 'ANNOUNCEMENT',
 };
 
 const HEADER_ALIASES: Record<SourceField, string[]> = {
@@ -105,7 +125,7 @@ export function parseIntelligenceSourcesCsv(
 ): IntelligenceSourceImportResult {
   const normalized = text.replace(/^\uFEFF/, '').trim();
   if (!normalized) {
-    return { feeds: [], invalidRows: 0, errors: ['文件为空。'] };
+    return { feeds: [], invalidRows: 0, typeFallbacks: 0, errors: ['文件为空。'] };
   }
 
   const rows = parseCsv(normalized, detectDelimiter(normalized));
@@ -113,6 +133,7 @@ export function parseIntelligenceSourcesCsv(
     return {
       feeds: [],
       invalidRows: 0,
+      typeFallbacks: 0,
       errors: ['CSV 文件缺少数据行。'],
     };
   }
@@ -125,6 +146,7 @@ export function parseIntelligenceSourcesCsv(
     return {
       feeds: [],
       invalidRows: rows.length - 1,
+      typeFallbacks: 0,
       errors: [`CSV 缺少必要列：${missingHeaders.join(', ')}。`],
     };
   }
@@ -132,6 +154,7 @@ export function parseIntelligenceSourcesCsv(
   const feeds: IntelligenceFeedConfig[] = [];
   const errors: string[] = [];
   let invalidRows = 0;
+  let typeFallbacks = 0;
 
   rows.slice(1).forEach((row, index) => {
     if (row.every((value) => !value.trim())) return;
@@ -151,12 +174,11 @@ export function parseIntelligenceSourcesCsv(
     }
 
     const sourceTypeValue = cell(row, headerIndexes.source_type).trim();
-    const sourceType = normalizeSourceType(sourceTypeValue);
-    if (!sourceType) {
-      invalidRows += 1;
-      errors.push(`第 ${rowNumber} 行的类型无效。`);
-      return;
+    const matchedType = normalizeSourceType(sourceTypeValue);
+    if (!matchedType && sourceTypeValue) {
+      typeFallbacks += 1;
     }
+    const sourceType = matchedType ?? DEFAULT_SOURCE_TYPE;
 
     const enabledValue = cell(row, headerIndexes.enabled).trim();
     const enabled = parseEnabled(enabledValue);
@@ -177,7 +199,7 @@ export function parseIntelligenceSourcesCsv(
     });
   });
 
-  return { feeds, invalidRows, errors };
+  return { feeds, invalidRows, typeFallbacks, errors };
 }
 
 export function mergeIntelligenceSources(

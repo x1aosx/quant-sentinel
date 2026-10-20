@@ -251,7 +251,15 @@ export function SystemConfigPage() {
       updateIntelligence({ feeds: merged.feeds });
       const details = [`已导入 ${merged.added} 个情报源`];
       if (merged.duplicates) details.push(`跳过 ${merged.duplicates} 个重复项`);
-      if (parsed.invalidRows) details.push(`忽略 ${parsed.invalidRows} 行无效数据`);
+      if (parsed.invalidRows) {
+        const reason = parsed.errors[0] ? `（${parsed.errors[0]}）` : '';
+        details.push(`忽略 ${parsed.invalidRows} 行无效数据${reason}`);
+      }
+      if (parsed.typeFallbacks) {
+        details.push(
+          `${parsed.typeFallbacks} 行类型无法识别，已按「新闻」归类`,
+        );
+      }
       setNotice(`${details.join('，')}。请保存系统配置后生效。`);
       setError('');
     } catch (reason) {
@@ -496,6 +504,10 @@ export function SystemConfigPage() {
               onChange={(event) => void importSources(event)}
             />
           </div>
+          <p className="muted">
+            CSV 必须包含「订阅地址」和「来源名称」两列；「类型」只支持 新闻 / 政策 / 公告，
+            其它写法（如按行业、区域分类）会按「新闻」归类。
+          </p>
         </div>
         {feedCount ? (
           <div className="intelligence-source-list">
