@@ -4,6 +4,52 @@ export const DEFAULT_ANALYSIS_TIMEFRAME = '1d';
 export const DEFAULT_REALTIME_TIMEFRAME = '15m';
 export const REALTIME_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h'] as const;
 
+const TIMEFRAME_SECONDS: Record<string, number> = {
+  '1m': 60,
+  '5m': 300,
+  '15m': 900,
+  '30m': 1_800,
+  '1h': 3_600,
+  '1d': 86_400,
+  '1w': 604_800,
+};
+
+/** 自动同步频率候选；具体数据集只展示不密于自身周期的选项。 */
+export const SYNC_INTERVAL_PRESETS = [
+  { value: 60, label: '1 分钟' },
+  { value: 300, label: '5 分钟' },
+  { value: 900, label: '15 分钟' },
+  { value: 1_800, label: '30 分钟' },
+  { value: 3_600, label: '1 小时' },
+  { value: 14_400, label: '4 小时' },
+  { value: 86_400, label: '1 天' },
+  { value: 604_800, label: '1 周' },
+];
+
+export function formatDurationLabel(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 3_600) return `${seconds / 60} 分钟`;
+  if (seconds < 86_400) return `${seconds / 3_600} 小时`;
+  if (seconds < 604_800) return `${seconds / 86_400} 天`;
+  return `${seconds / 604_800} 周`;
+}
+
+/** 同步间隔不得密于周期本身，否则只是空跑抓取。 */
+export function minSyncIntervalSeconds(timeframe: string): number {
+  return Math.max(60, TIMEFRAME_SECONDS[timeframe.trim().toLowerCase()] ?? 300);
+}
+
+export function defaultSyncIntervalSeconds(timeframe: string): number {
+  return minSyncIntervalSeconds(timeframe);
+}
+
+export function syncIntervalOptions(
+  timeframe: string,
+): Array<{ value: number; label: string }> {
+  const minimum = minSyncIntervalSeconds(timeframe);
+  return SYNC_INTERVAL_PRESETS.filter((option) => option.value >= minimum);
+}
+
 const TIMEFRAME_LABELS: Record<string, string> = {
   '1m': '1分钟',
   '5m': '5分钟',

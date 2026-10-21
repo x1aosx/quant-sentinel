@@ -45,6 +45,22 @@ export interface SyncDatasetResponse {
   synced_at: string;
 }
 
+export interface DatasetSyncScheduleResult {
+  dataset_id: string | null;
+  schedule_id: string | null;
+  task_name?: string;
+  enabled: boolean;
+  interval_seconds: number | null;
+  timezone?: string;
+  next_fire_at?: string | null;
+}
+
+export interface DatasetSyncReconcileResult {
+  created: string[];
+  updated: string[];
+  deleted: string[];
+}
+
 export interface SrLevel {
   zone_type: 'support' | 'resistance';
   zone_label?: string;

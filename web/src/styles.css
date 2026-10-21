@@ -541,6 +541,26 @@ a {
   font-size: 12px;
 }
 
+.dataset-group-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.dataset-group-sync-button {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.dataset-list-panel .dataset-group-sync-button {
+  min-width: 0;
+  justify-content: center;
+}
+
 .dataset-group-end td {
   border-bottom: 2px solid var(--border-strong);
 }

@@ -124,7 +124,22 @@ market.symbol.sync
             └── 依赖 dataset-0、dataset-1
 ```
 
-调度计划接口使用统一的触发器结构：
+## 数据中心自动同步（数据集级计划）
+
+数据中心页面的「自动同步」以**数据集**（symbol + timeframe）为粒度维护计划：每个数据集一条
+`market.daily.sync` interval 计划，参数带 `origin=data-center.dataset-sync` 与 `dataset_id`。
+
+- 频率默认跟随周期（1m→1 分钟、15m→15 分钟、1h→1 小时、1d→1 天、1w→1 周），且不允许密于周期。
+- 新增周期会自动纳入：`POST /api/v1/datasets/remote/sync` 成功后，该标的已启用的自动同步会把新数据集按默认频率补建计划。
+- 删除数据集会同时清理对应计划，避免残留指向已删数据集的任务。
+- 旧的 symbol 级计划（一条计划覆盖整组周期）在「整理同步计划」时自动拆分为数据集级计划。
+
+| 接口 | 作用 |
+| --- | --- |
+| `PUT /api/v1/datasets/{dataset_id}/sync-schedule` | 开启/停用/改频率（body：`enabled`，可选 `interval_seconds`、`lookback`、`adjust`） |
+| `POST /api/v1/datasets/sync-schedules/reconcile` | 与数据集列表对账：补建漏掉的新周期、修正参数漂移、清理已删数据集、拆分旧计划 |
+
+## 调度计划接口使用统一的触发器结构：
 
 ```json
 {

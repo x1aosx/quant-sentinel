@@ -6,6 +6,8 @@ import type {
   AnalysisInstrumentSummariesResponse,
   BatchAnalyzeResponse,
   DatasetSummary,
+  DatasetSyncReconcileResult,
+  DatasetSyncScheduleResult,
   DiscoveryCandidateListResponse,
   HealthSummary,
   IntelligenceOverview,
@@ -172,6 +174,23 @@ export const api = {
     apiRequest<SyncDatasetResponse>('/datasets/remote/sync', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  setDatasetSyncSchedule: (
+    datasetId: string,
+    payload: {
+      enabled: boolean;
+      interval_seconds?: number;
+      lookback?: number;
+      adjust?: 'qfq' | 'hfq' | 'none';
+    },
+  ) =>
+    apiRequest<DatasetSyncScheduleResult>(
+      `/datasets/${encodeURIComponent(datasetId)}/sync-schedule`,
+      { method: 'PUT', body: JSON.stringify(payload) },
+    ),
+  reconcileDatasetSyncSchedules: () =>
+    apiRequest<DatasetSyncReconcileResult>('/datasets/sync-schedules/reconcile', {
+      method: 'POST',
     }),
   importRemoteDataset: async (payload: {
     source: 'yfinance' | 'akshare' | 'tradingview' | 'mt5';
