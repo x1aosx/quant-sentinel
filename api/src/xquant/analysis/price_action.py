@@ -359,19 +359,120 @@ def _breakout_events(bars: Sequence[_Bar], atr_value: float) -> tuple[list[dict[
     return events[-8:], quality
 
 
+_HL_PIVOT_RIGHT = 2
+_HL_MAX_LEG_BARS = 30
+
+
+def _count_pullback_triggers(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    seqs: Sequence[int],
+) -> tuple[int, int | None, int | None]:
+    """统计「当前回撤腿」内的 H 触发次数（旧到新的时间序）。
+
+    口径对齐 PA_Agent 的 market_features._count_pullback_triggers：
+      * 腿的起点是一个已确认的分形摆动高点（左右各 _HL_PIVOT_RIGHT 根）。
+      * 后续某根 K 线的高点越过该摆动高点，或腿存活超过 _HL_MAX_LEG_BARS
+        根，腿即失效（清零）。
+      * 触发 = 腿内某根 K 线的高点高于前一根的高点；触发后计数器解除武装，
+        只有后续 K 线跌破上一个信号棒低点时才重新武装。
+
+    返回 ``(次数, 最近触发的 seq, 腿起点 seq)``；无活动腿时后两项为 ``None``。
+    统计 L 系列时以镜像数组调用（highs=-lows、lows=-highs）。
+    """
+    total = len(highs)
+    state: dict[str, Any] | None = None
+    for index in range(total):
+        origin = index - _HL_PIVOT_RIGHT
+        if (
+            state is None
+            and origin >= 2
+            and highs[origin] > highs[origin - 1]
+            and highs[origin] > highs[origin - 2]
+            and highs[origin] > highs[origin + 1]
+            and highs[origin] > highs[index]
+        ):
+            state = {
+                "origin": origin,
+                "swing_high": highs[origin],
+                "count": 0,
+                "armed": True,
+                "signal_low": None,
+                "last": None,
+            }
+        if state is None:
+            continue
+        if index > state["origin"] + _HL_PIVOT_RIGHT and highs[index] > state["swing_high"]:
+            state = None
+            continue
+        if index - state["origin"] > _HL_MAX_LEG_BARS:
+            state = None
+            continue
+        if (
+            not state["armed"]
+            and state["signal_low"] is not None
+            and lows[index] < state["signal_low"]
+        ):
+            state["armed"] = True
+        if (
+            state["armed"]
+            and index > state["origin"] + _HL_PIVOT_RIGHT
+            and highs[index] > highs[index - 1]
+        ):
+            state["count"] += 1
+            state["last"] = seqs[index]
+            state["armed"] = False
+            state["signal_low"] = lows[index - 1]
+    if state is None:
+        return 0, None, None
+    return state["count"], state["last"], seqs[state["origin"]]
+
+
 def _hl_count(bars: Sequence[_Bar]) -> dict[str, Any]:
-    sample = bars[-min(20, len(bars)) :]
-    bull = bear = 0
-    for previous, current in pairwise(sample):
-        if current.high > previous.high:
-            bull += 1
-        if current.low < previous.low:
-            bear += 1
+    """统计当前回撤腿内的 H1/H2/L1/L2 次数。
+
+    旧实现按「最近 20 根整窗口」统计高点抬升/低点下移次数，会在震荡区间
+    反复累加，导致 h3/l3 形态误触发并污染置信度。这里改为 PA_Agent 的
+    腿内因果计数口径。
+    """
+    if len(bars) < 6:
+        return {
+            "bull_count": 0,
+            "bear_count": 0,
+            "bull_candidate": "none",
+            "bear_candidate": "none",
+            "bar_range": None,
+            "last_bull_trigger_seq": None,
+            "last_bear_trigger_seq": None,
+            "bull_leg_start_seq": None,
+            "bear_leg_start_seq": None,
+        }
+    highs = [float(bar.high) for bar in bars]
+    lows = [float(bar.low) for bar in bars]
+    seqs = [int(bar.seq) for bar in bars]
+
+    bull_count, last_bull, bull_start = _count_pullback_triggers(highs, lows, seqs)
+    bear_count, last_bear, bear_start = _count_pullback_triggers(
+        [-value for value in lows], [-value for value in highs], seqs
+    )
+
+    def _tag(count: int, prefix: str) -> str:
+        if count <= 0:
+            return "none"
+        return f"{prefix}{min(count, 3)}"
+
+    newest = seqs[-1]
+    oldest = seqs[0]
     return {
-        "bull_count": bull,
-        "bear_count": bear,
-        "bull_candidate": "none" if bull == 0 else f"h{min(bull, 3)}",
-        "bear_candidate": "none" if bear == 0 else f"l{min(bear, 3)}",
+        "bull_count": bull_count,
+        "bear_count": bear_count,
+        "bull_candidate": _tag(bull_count, "h"),
+        "bear_candidate": _tag(bear_count, "l"),
+        "bar_range": f"K{newest}-K{oldest}" if newest != oldest else f"K{newest}",
+        "last_bull_trigger_seq": last_bull,
+        "last_bear_trigger_seq": last_bear,
+        "bull_leg_start_seq": bull_start,
+        "bear_leg_start_seq": bear_start,
     }
 
 

@@ -198,6 +198,236 @@ def _snapshot_table(snapshot: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
+_BREAKOUT_QUALITY_ZH = {
+    "none": "无显著突破",
+    "wick_probe": "影线试探（未收盘站稳）",
+    "close_breakout": "收盘突破（尚未确认存涚）",
+    "failed": "突破失败/已收回",
+    "testing": "突破回测中",
+    "surviving": "存活突破（站稳，可作测量移动目标）",
+}
+
+_PATTERN_ZH = {
+    "higher_highs_higher_lows": "抬高的高点 + 抬高的低点",
+    "lower_lows_lower_highs": "走低的低点 + 走低的高点",
+    "overlap": "高重叠（震荡/铁丝网）",
+    "h3": "当前回撤腿内三次推高（H3）",
+    "l3": "当前回撤腿内三次下压（L3）",
+    "range_boundary_low": "贴近区间下沿",
+    "range_boundary_high": "贴近区间上沿",
+    "middle_range": "位于区间中部",
+    "near_support": "贴近支撑带",
+    "near_resistance": "贴近阻力带",
+}
+
+_PATTERN_PREFIX_ZH = {
+    "breakout_none": "无显著突破",
+    "breakout_wick_probe": "影线试探（未收盘站稳）",
+    "breakout_close_breakout": "收盘突破（尚未确认）",
+    "breakout_failed": "突破失败/已收回",
+    "breakout_testing": "突破回测中",
+    "breakout_surviving": "存活突破",
+}
+
+_RECENT_EVENT_BARS = 15
+
+
+def _fmt_number(value: Any, digits: int = 4) -> str:
+    """把数值压到可读精度，避免 prompt 里出现 102.169515 这类长尾小数。"""
+    if value is None:
+        return "--"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        return "--"
+    text = f"{number:.{digits}f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _pattern_label(value: str) -> str:
+    if value in _PATTERN_ZH:
+        return _PATTERN_ZH[value]
+    if value in _PATTERN_PREFIX_ZH:
+        return _PATTERN_PREFIX_ZH[value]
+    return value
+
+
+def _price_zone_label(position: Any) -> str:
+    try:
+        value = float(position)
+    except (TypeError, ValueError):
+        return "未知"
+    if value <= 0.3:
+        return "下三分之一（偏支撑/区间下沿）"
+    if value >= 0.7:
+        return "上三分之一（偏阻力/区间上沿）"
+    return "中部（区间中部多空拉锯，风险高）"
+
+
+def _render_market_features(snapshot: Mapping[str, Any]) -> str:
+    """把本地预计算的结构特征渲染成中文块，注入两阶段 prompt。
+
+    ``build_snapshot`` 已经把 ``analyze_price_action`` 的 features 和完整的
+    支撑阻力强度字段算好，但旧版 prompt 只用了支撑阻力的 ``center``，
+    导致模型无法看到波段结构、H/L 腿内计数、突破质量与价位概率。
+
+    渲染口径参考 PA_Agent 的 ``market_features.render_simple_market_features``。
+    """
+    features = snapshot.get("features")
+    if not isinstance(features, Mapping) or not features:
+        return ""
+    trend = snapshot.get("trend")
+    if not isinstance(trend, Mapping):
+        trend = {}
+
+    lines: list[str] = [
+        "## 程序结构辅助特征（客观预计算，供你复核引用；最终形态判断仍由你负责）",
+        "",
+        "### 区间与位置",
+    ]
+    range_high = trend.get("range_high")
+    range_low = trend.get("range_low")
+    if range_high is not None and range_low is not None:
+        lines.append(f"- 分析窗口包络：高 **{range_high}** / 低 **{range_low}**")
+        position = trend.get("price_position")
+        if position is not None:
+            lines.append(f"- 收盘位置分位：**{position}** → {_price_zone_label(position)}")
+    overlap = trend.get("overlap_mean_10")
+    if overlap is not None:
+        try:
+            dense = "（已达铁丝网/震荡阈值）" if float(overlap) >= 0.72 else ""
+        except (TypeError, ValueError):
+            dense = ""
+        lines.append(f"- 近10棒平均重叠：**{overlap}**{dense}")
+    if trend.get("scale_conflict"):
+        lines.append("- 多尺度方向冲突：**是**（诊断置信度应压低，执行跟短窗）")
+
+    lines.extend(["", "### 波段结构"])
+    structure = features.get("swing_structure")
+    if structure:
+        lines.append(f"- 结构标签：**{structure}**")
+    swings = features.get("swings")
+    if isinstance(swings, Sequence) and swings:
+        rendered: list[str] = []
+        for pivot in list(swings)[-6:]:
+            if not isinstance(pivot, Mapping):
+                continue
+            kind = "高" if pivot.get("kind") == "high" else "低"
+            rendered.append(f"K{pivot.get('seq')}{kind}{pivot.get('price')}")
+        if rendered:
+            lines.append(f"- 最近摆动点（新→旧）：{'，'.join(rendered)}")
+
+    hl_count = features.get("hl_count")
+    if isinstance(hl_count, Mapping):
+        lines.extend(["", "### H/L 触发计数（当前回撤腿内，不是整窗口累计）"])
+        bull = int(hl_count.get("bull_count") or 0)
+        bear = int(hl_count.get("bear_count") or 0)
+        if bull:
+            lines.append(
+                f"- 多头腿：**{hl_count.get('bull_candidate')}**（{bull} 次推高，"
+                f"腿起点 K{hl_count.get('bull_leg_start_seq')}，"
+                f"最近触发 K{hl_count.get('last_bull_trigger_seq')}）"
+            )
+        else:
+            lines.append("- 多头腿：无活动腿（尚未形成有效回撤，H1/H2/H3 不计数）")
+        if bear:
+            lines.append(
+                f"- 空头腿：**{hl_count.get('bear_candidate')}**（{bear} 次下压，"
+                f"腿起点 K{hl_count.get('bear_leg_start_seq')}，"
+                f"最近触发 K{hl_count.get('last_bear_trigger_seq')}）"
+            )
+        else:
+            lines.append("- 空头腿：无活动腿")
+
+    lines.extend(["", "### 突破 / 收回 / 回测"])
+    quality = str(features.get("breakout_quality") or "none")
+    lines.append(f"- 突破质量：**{quality}** → {_BREAKOUT_QUALITY_ZH.get(quality, quality)}")
+    events = features.get("breakout_events")
+    # 只渲染近期事件：更早的事件已被后续行情覆盖，列出来反而会误导模型。
+    latest_seq = snapshot.get("analysis_bar_count")
+    try:
+        latest_seq = int(latest_seq) if latest_seq is not None else None
+    except (TypeError, ValueError):
+        latest_seq = None
+    recent_events: list[Mapping[str, Any]] = []
+    if isinstance(events, Sequence):
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            if latest_seq is not None:
+                try:
+                    trigger = int(event.get("trigger_seq") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if trigger < latest_seq - _RECENT_EVENT_BARS:
+                    continue
+            recent_events.append(event)
+    if recent_events:
+        for event in recent_events[-4:]:
+            direction = "上破" if event.get("direction") == "up" else "下破"
+            name = {
+                "breakout": "突破",
+                "failed": "失败/收回",
+                "test": "回测",
+            }.get(str(event.get("event")), str(event.get("event")))
+            lines.append(
+                f"- {direction}{name} **{_fmt_number(event.get('level'))}** "
+                f"@ K{event.get('trigger_seq')}"
+            )
+    else:
+        lines.append(f"- 最近 {_RECENT_EVENT_BARS} 根内无显著区间突破/收回事件")
+
+    patterns = features.get("patterns")
+    if isinstance(patterns, Sequence) and patterns:
+        rendered_patterns = [_pattern_label(str(item)) for item in patterns]
+        lines.extend(["", "### 形态标签", f"- {'；'.join(rendered_patterns)}"])
+
+    levels = snapshot.get("support_resistance")
+    if not isinstance(levels, Mapping):
+        levels = {}
+    lines.extend(["", "### 关键价位强度（概率与历史表现，非预测）"])
+    rendered_levels = 0
+    for key, label in (("supports_only", "支撑"), ("resistances", "阻力")):
+        bucket = levels.get(key)
+        if not isinstance(bucket, Sequence):
+            continue
+        for level in list(bucket)[:3]:
+            if not isinstance(level, Mapping):
+                continue
+            rendered_levels += 1
+            parts = [
+                f"- {label} **{_fmt_number(level.get('low'))}-{_fmt_number(level.get('high'))}**"
+                f"（中心 {_fmt_number(level.get('center'))}"
+                f"，距 {_fmt_number(level.get('distance_atr'), 2)}×ATR"
+            ]
+            if any(
+                level.get(field) is not None
+                for field in ("p_touch", "p_hold", "p_effective")
+            ):
+                parts.append(
+                    f"，触及 {_fmt_number(level.get('p_touch'), 2)}"
+                    f" / 守住 {_fmt_number(level.get('p_hold'), 2)}"
+                    f" / 有效 {_fmt_number(level.get('p_effective'), 2)}"
+                )
+            if level.get("event_hold_rate") is not None:
+                parts.append(
+                    f"，历史事件保持率 {_fmt_number(level.get('event_hold_rate'), 2)}"
+                    f"（{level.get('n_hold')}/{level.get('n_decided')}）"
+                )
+            if level.get("bucket") is not None:
+                parts.append(f"，强度 {level.get('bucket')}")
+            if level.get("p_stall") is not None:
+                parts.append(f"，停滞概率 {_fmt_number(level.get('p_stall'), 2)}")
+            parts.append("）")
+            lines.append("".join(parts))
+    if not rendered_levels:
+        lines.append("- 未识别到有效支撑阻力带")
+
+    return "\n".join(lines)
+
+
 def build_stage1_prompt(snapshot: Mapping[str, Any]) -> list[dict[str, str]]:
     system = (
         "你是严谨的价格行为量化研究助手。只基于给定的已收盘K线做市场诊断，"
@@ -219,6 +449,9 @@ def build_stage1_prompt(snapshot: Mapping[str, Any]) -> list[dict[str, str]]:
         "请先识别趋势、周期、结构、关键价位、确认信号与失效条件。\n"
         "K线（旧到新）：\n" + _snapshot_table(snapshot)
     )
+    feature_block = _render_market_features(snapshot)
+    if feature_block:
+        user = f"{user}\n\n{feature_block}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -248,6 +481,9 @@ def build_stage2_prompt(
         "生成决策路径、未来走势预期、下一周期预期和下根K线预期。"
         "若没有充分优势，action 使用 WAIT。\nK线（旧到新）：\n" + _snapshot_table(snapshot)
     )
+    feature_block = _render_market_features(snapshot)
+    if feature_block:
+        user = f"{user}\n\n{feature_block}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 

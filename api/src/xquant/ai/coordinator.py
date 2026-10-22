@@ -164,26 +164,44 @@ class BatchAnalyzer:
     def __init__(self, db: Any) -> None:
         self.db = db
 
-    def _resolve_dataset(self, target: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    def _find_dataset_id(self, symbol: str, timeframe: str) -> str | None:
+        """在本地数据集注册表里按 (symbol, timeframe) 定位已有数据集。"""
+        lister = getattr(self.db, "list_datasets", None)
+        if not callable(lister):
+            return None
+        wanted_symbol = symbol.strip().upper()
+        wanted_timeframe = timeframe.strip().lower()
+        for row in lister() or []:
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("symbol") or "").strip().upper() != wanted_symbol:
+                continue
+            row_timeframe = str(row.get("timeframe") or "").strip().lower()
+            if wanted_timeframe and row_timeframe != wanted_timeframe:
+                continue
+            dataset_id = row.get("id")
+            if dataset_id:
+                return str(dataset_id)
+        return None
+
+    def _resolve_dataset(self, target: Mapping[str, Any]) -> dict[str, Any]:
+        """只从本地数据库加载已同步的数据集，不再触发远端拉取。
+
+        行情同步由数据中心独立负责；AI 分析与盯盘只消费库里已有的 K 线，
+        避免在轮询线程里发起网络请求。
+        """
         dataset_id = str(target.get("dataset_id") or "").strip()
         if dataset_id:
-            return self.db.get_dataset(dataset_id), None
-        source = str(target.get("source") or "yfinance").strip().lower()
+            return self.db.get_dataset(dataset_id)
         symbol = str(target.get("symbol") or "").strip()
-        timeframe = str(target.get("timeframe") or "1d").strip().lower()
+        timeframe = str(target.get("timeframe") or "").strip().lower()
         if not symbol:
-            raise ValueError("监控标的必须提供 dataset_id 或 symbol")
-        sync_result = self.db.sync_dataset(
-            {
-                "source": source,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "lookback": int(target.get("lookback") or 500),
-                "adjust": str(target.get("adjust") or "qfq"),
-                "exchange": str(target.get("exchange") or ""),
-            }
-        )
-        return self.db.get_dataset(str(sync_result["id"])), sync_result
+            raise ValueError("分析标的必须提供 dataset_id 或 symbol")
+        resolved = self._find_dataset_id(symbol, timeframe)
+        if resolved is None:
+            scope = f"{symbol} {timeframe}".strip()
+            raise ValueError(f"数据库中没有 {scope} 的数据集，请先在数据中心同步行情")
+        return self.db.get_dataset(resolved)
 
     def _analyze_target(
         self,
@@ -193,7 +211,7 @@ class BatchAnalyzer:
     ) -> dict[str, Any]:
         started = time.perf_counter()
         try:
-            dataset, sync_result = self._resolve_dataset(target)
+            dataset = self._resolve_dataset(target)
             target_analysis = target.get("analysis")
             merged: dict[str, Any] = dict(global_payload)
             if isinstance(target_analysis, Mapping):
@@ -220,7 +238,6 @@ class BatchAnalyzer:
                 "index": index,
                 "target": _target_payload(target),
                 "dataset": dataset["summary"],
-                "sync": sync_result,
                 "status": "ok" if record.get("status") == "ok" else "error",
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "record": record,
@@ -542,23 +559,28 @@ class MonitorManager:
             )
         try:
             try:
-                dataset, sync_result = self.batch._resolve_dataset(target)
+                dataset = self.batch._resolve_dataset(target)
                 summary = dataset["summary"]
                 latest_session = str(summary.get("last_session") or "")
                 previous_session = state.get("last_session")
-                inserted_count = int((sync_result or {}).get("inserted_count") or 0)
+                # 行情同步已交给数据中心，这里不再有 sync 返回的 inserted_count，
+                # 改用「数据集 last_session + K线条数」指纹判断是否有新的已收盘 K 线。
+                current_bars = len(dataset.get("bars") or [])
+                previous_bars = state.get("bar_count")
                 first_run = previous_session is None
                 has_new_bar = (
                     first_run
                     or not previous_session
                     or latest_session != previous_session
-                    or inserted_count > 0
+                    or previous_bars is None
+                    or current_bars > int(previous_bars)
                 )
                 with self._lock:
                     state.update(
                         {
                             "status": "running",
                             "last_session": latest_session,
+                            "bar_count": current_bars,
                             "last_run_at": datetime.now(UTC).isoformat(),
                         }
                     )
