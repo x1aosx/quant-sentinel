@@ -146,8 +146,8 @@ function datasetSyncState(
 
 export function DataCenterPage() {
   const queryClient = useQueryClient();
-  const [source, setSource] = useState<DatasetSource>('yfinance');
-  const [symbol, setSymbol] = useState('GC=F');
+  const [source, setSource] = useState<DatasetSource>('akshare');
+  const [symbol, setSymbol] = useState('600519');
   const [timeframe, setTimeframe] = useState('1d');
   const [lookback, setLookback] = useState('500');
   const [adjust, setAdjust] = useState<DatasetAdjust>('qfq');
@@ -470,8 +470,8 @@ export function DataCenterPage() {
                 value={source}
                 onChange={(event) => setSource(event.target.value as DatasetSource)}
               >
+                <option value="akshare">AkShare / A股（默认）</option>
                 <option value="yfinance">YFinance</option>
-                <option value="akshare">AkShare / A股</option>
                 <option value="tradingview">TradingView</option>
                 <option value="mt5">MT5</option>
               </select>
