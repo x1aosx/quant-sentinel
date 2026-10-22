@@ -954,6 +954,7 @@ export interface IntelligenceRunResult {
   deduplicated: number;
   event_count: number;
   theme_count: number;
+  failed_sources?: string[];
   generated_at: string;
 }
 

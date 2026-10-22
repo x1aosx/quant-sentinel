@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from xquant.intelligence.domain import RawInformation, SourceType
 from xquant.intelligence.pipeline import IntelligencePipeline, PipelineConfig
-from xquant.intelligence.providers import InMemoryInformationSource
+from xquant.intelligence.providers import InMemoryInformationSource, RateLimit
 from xquant.intelligence.repository import SqliteIntelligenceRepository
 from xquant.intelligence.service import IntelligenceService
 from xquant.intelligence.tasks import register_intelligence_tasks
@@ -89,3 +89,48 @@ def test_register_intelligence_tasks_uses_required_names(tmp_path) -> None:
         "intelligence.process",
         "intelligence.brief.morning",
     }
+
+
+class _UnreachableSource:
+    """Source whose fetch always fails, mimicking an unreachable RSS feed."""
+
+    source = "broken-feed"
+
+    async def fetch(self, start_time, end_time, cursor=None):
+        raise RuntimeError("feed unavailable")
+
+    async def health_check(self) -> bool:
+        return False
+
+    async def get_rate_limit(self) -> RateLimit:
+        return RateLimit(requests_per_second=1.0)
+
+
+def test_collect_isolates_failed_sources(tmp_path) -> None:
+    now = datetime(2026, 9, 15, 3, 0, tzinfo=UTC)
+    healthy = InMemoryInformationSource(
+        [
+            RawInformation(
+                source="policy",
+                source_type=SourceType.POLICY,
+                url="https://policy.example.com/ai",
+                title="人工智能产业政策发布",
+                content="政策支持算力建设。",
+                publish_time=now - timedelta(hours=1),
+                fetch_time=now - timedelta(minutes=59),
+            )
+        ]
+    )
+    repository = SqliteIntelligenceRepository(Database(tmp_path / "legacy.db"))
+    service = IntelligenceService(repository, [healthy, _UnreachableSource()])
+    errors: list[str] = []
+
+    result = asyncio.run(
+        service.run(now - timedelta(hours=2), now, now=now, source_errors=errors)
+    )
+
+    assert result["collected"] == 1
+    assert len(errors) == 1
+    assert "broken-feed" in errors[0]
+    assert "RuntimeError" in errors[0]
+    assert repository.counts()["information"] == 1

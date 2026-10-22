@@ -300,6 +300,7 @@ export function IntelligencePage() {
         deduplicated: result.deduplicated,
         event_count: result.event_count,
         theme_count: result.theme_count,
+        failed_sources: result.failed_sources ?? [],
         generated_at: result.generated_at,
       });
     },
@@ -320,6 +321,7 @@ export function IntelligencePage() {
     deduplicated: number;
     event_count: number;
     theme_count: number;
+    failed_sources: string[];
     generated_at: string;
   }>(['intelligence', 'last-run']);
 
@@ -418,6 +420,9 @@ export function IntelligencePage() {
             {lastRun.action}完成：采集 {lastRun.collected} 条，去重 {lastRun.deduplicated} 条，
             事件 {lastRun.event_count} 个，主题 {lastRun.theme_count} 个。
             生成时间 {formatTimestamp(lastRun.generated_at)}。
+            {lastRun.failed_sources.length > 0 ? (
+              <div>部分数据源采集失败（其余已完成）：{lastRun.failed_sources.join('；')}</div>
+            ) : null}
           </div>
         ) : null}
         {runMutation.isError ? (

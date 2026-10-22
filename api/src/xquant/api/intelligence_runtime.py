@@ -61,17 +61,19 @@ class ApplicationIntelligenceService:
 
     async def run(self, *, process_only: bool = False) -> dict[str, Any]:
         self._refresh_sources()
+        source_errors: list[str] = []
         if process_only:
             result = await self._service.process()
             collected = 0
         else:
-            result = await self._service.run()
+            result = await self._service.run(source_errors=source_errors)
             collected = int(result.get("collected") or 0)
         return {
             "collected": collected,
             "deduplicated": int(result.get("duplicates") or 0),
             "event_count": int(result.get("events") or 0),
             "theme_count": int(result.get("themes") or 0),
+            "failed_sources": source_errors,
             "generated_at": datetime.now(UTC).isoformat(),
         }
 

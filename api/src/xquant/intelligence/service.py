@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -25,6 +26,19 @@ from .pipeline import IntelligencePipeline
 from .providers import InformationSource
 from .repository import IntelligenceRepository
 
+logger = logging.getLogger(__name__)
+
+
+def _source_name(source: Any) -> str:
+    """Resolve a readable source name, unwrapping provider decorators."""
+    candidate = getattr(source, "source", None)
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate
+    nested = getattr(candidate, "source", None)
+    if isinstance(nested, str) and nested.strip():
+        return nested
+    return type(source).__name__
+
 
 class IntelligenceService:
     def __init__(
@@ -45,6 +59,7 @@ class IntelligenceService:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         cursor: str | None = None,
+        source_errors: list[str] | None = None,
     ) -> list[RawInformation]:
         end = ensure_utc(end_time, field_name="end_time") or utc_now()
         start = ensure_utc(start_time, field_name="start_time") or (
@@ -55,9 +70,20 @@ class IntelligenceService:
 
         batches = await asyncio.gather(
             *(source.fetch(start, end, cursor) for source in self.sources),
-            return_exceptions=False,
+            return_exceptions=True,
         )
-        items = [item for batch in batches for item in batch]
+        items: list[RawInformation] = []
+        for source, batch in zip(self.sources, batches, strict=True):
+            if isinstance(batch, BaseException):
+                if isinstance(batch, asyncio.CancelledError):
+                    raise batch
+                name = _source_name(source)
+                detail = f"{name}: {type(batch).__name__}: {batch}"
+                if source_errors is not None:
+                    source_errors.append(detail)
+                logger.warning("intelligence source fetch failed: %s", detail, exc_info=batch)
+                continue
+            items.extend(batch)
         self.repository.save_information(items)
         return items
 
@@ -121,8 +147,9 @@ class IntelligenceService:
         *,
         cursor: str | None = None,
         now: datetime | None = None,
+        source_errors: list[str] | None = None,
     ) -> dict[str, Any]:
-        items = await self.collect(start_time, end_time, cursor)
+        items = await self.collect(start_time, end_time, cursor, source_errors=source_errors)
         processed = await self.process(items, now=now)
         return {"collected": len(items), **processed}
 

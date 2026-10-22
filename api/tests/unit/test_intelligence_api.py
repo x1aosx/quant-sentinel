@@ -66,3 +66,32 @@ def test_intelligence_sources_reload_after_system_config_update(tmp_path) -> Non
         assert sources.status_code == 200
         assert sources.json()["items"][0]["source"] == "政策发布"
         assert sources.json()["items"][0]["source_type"] == "POLICY"
+
+
+def test_intelligence_run_survives_unreachable_feed(tmp_path) -> None:
+    with TestClient(
+        create_app(
+            tmp_path / "xquant.db",
+            system_config_path=tmp_path / "system-settings.json",
+        )
+    ) as client:
+        config = client.get("/api/v1/system/config").json()["config"]
+        config["intelligence"]["feeds"] = [
+            {
+                "id": "broken-feed",
+                "url": "http://127.0.0.1:9/feed.xml",
+                "source": "不可达源",
+                "source_type": "NEWS",
+                "language": "zh-CN",
+                "enabled": True,
+            }
+        ]
+        assert client.put("/api/v1/system/config", json=config).status_code == 200
+
+        run = client.post("/api/v1/intelligence/run", json={})
+
+        assert run.status_code == 200, run.text
+        payload = run.json()
+        assert payload["collected"] == 0
+        assert len(payload["failed_sources"]) == 1
+        assert "不可达源" in payload["failed_sources"][0]
