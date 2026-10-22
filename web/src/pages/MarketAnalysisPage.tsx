@@ -142,6 +142,23 @@ function levelLabel(level: SrLevel | null | undefined): string {
   return `${level.zone_type === 'support' ? '支撑' : '压力'} ${fmtNum(level.center, 4)}`;
 }
 
+function metaText(meta: Record<string, unknown> | undefined, key: string): string {
+  const value = meta?.[key];
+  return typeof value === 'string' ? value : '--';
+}
+
+function metaLoaded(meta: Record<string, unknown> | undefined, key: string): string {
+  return meta?.[key] === true ? '已加载' : '未加载';
+}
+
+function bucketLabel(level: SrLevel | null | undefined): string {
+  if (!level?.bucket) return '--';
+  const rate = level.bucket_hold_rate;
+  return rate === null || rate === undefined
+    ? level.bucket
+    : `${level.bucket} · 实测 ${(rate * 100).toFixed(1)}%`;
+}
+
 export function MarketAnalysisPage() {
   const queryClient = useQueryClient();
   const [selectedSymbol, setSelectedSymbol] = useState('');
@@ -292,7 +309,7 @@ export function MarketAnalysisPage() {
     <div className="stack">
       <div className="page-header">
         <div>
-          <h1>支撑阻力与价格行为</h1>
+          <h1>成交量密度关键位分析</h1>
           <div className="muted">
             用一个分析入口查看全部股票概览，并结合关键价位、市场结构与行为决策查看完整信息。
           </div>
@@ -429,7 +446,9 @@ export function MarketAnalysisPage() {
                     <th>涨跌%</th>
                     <th>触及概率</th>
                     <th>守住概率</th>
-                    <th>历史被测试</th>
+                    <th>有效概率</th>
+                    <th>被测试</th>
+                    <th>分位档</th>
                     <th>趋势</th>
                     <th>距离</th>
                     <th>最近支撑</th>
@@ -479,7 +498,16 @@ export function MarketAnalysisPage() {
                           {fmtProbability(item.touch_probability, '未标定')}
                         </td>
                         <td className="summary-value">{fmtProbability(item.hold_probability)}</td>
+                        <td className="summary-value">
+                          {fmtProbability(item.effective_probability)}
+                        </td>
                         <td className="summary-value">{item.historical_tests}</td>
+                        <td>
+                          <div className="summary-value">{item.bucket ?? '--'}</div>
+                          <div className="summary-subtext">
+                            实测 {fmtProbability(item.bucket_hold_rate)}
+                          </div>
+                        </td>
                         <td>
                           <span className="tag">{item.trend.label}</span>
                         </td>
@@ -574,7 +602,8 @@ export function MarketAnalysisPage() {
               </div>
             ) : null}
             <p className="muted" style={{ marginBottom: 0 }}>
-              触及概率在模型未标定时显示“未标定”；守住概率优先使用标定值，缺失时回退为历史事件守住率。
+              有效概率 = 触及概率 × 守住概率，汇总表按它降序排列；分位档是该价位在历史同类样本中的位置，
+              “实测”为该档样本外真实守住率（非模型预测）。
             </p>
           </>
         ) : summaryData ? (
@@ -812,6 +841,25 @@ export function MarketAnalysisPage() {
                 <div className="value">{fmtNum(riskReward?.risk_reward_ratio)}</div>
               </div>
               <div>
+                <div className="label">触及 / 守住 / 有效</div>
+                <div className="value">
+                  {fmtProbability(result.summary.nearest?.p_touch)} /{' '}
+                  {fmtProbability(result.summary.nearest?.p_hold)} /{' '}
+                  {fmtProbability(result.summary.nearest?.p_effective)}
+                </div>
+              </div>
+              <div>
+                <div className="label">最近位分位档</div>
+                <div className="value">{bucketLabel(result.summary.nearest)}</div>
+              </div>
+              <div>
+                <div className="label">引擎 / 概率模型</div>
+                <div className="value">
+                  {metaText(result.meta, 'engine')} · 标定{metaLoaded(result.meta, 'calibrated')} · 概率
+                  {metaLoaded(result.meta, 'prob_ready')}
+                </div>
+              </div>
+              <div>
                 <div className="label">最近关键位</div>
                 <div className="value">{levelLabel(result.summary.nearest)}</div>
               </div>
@@ -949,10 +997,12 @@ export function MarketAnalysisPage() {
                       <th>距离</th>
                       <th>触及概率</th>
                       <th>守住概率</th>
-                      <th>历史被测试</th>
-                      <th>守住 / 已决</th>
-                      <th>成交量</th>
-                      <th>边界评分</th>
+                      <th>有效概率</th>
+                      <th>被测试</th>
+                      <th>分位档</th>
+                      <th>停滞</th>
+                      <th>共振</th>
+                      <th>评分</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -972,14 +1022,16 @@ export function MarketAnalysisPage() {
                           <div className="summary-subtext">{fmtNum(level.distance_atr)} ATR</div>
                         </td>
                         <td>{fmtProbability(level.p_touch, '未标定')}</td>
+                        <td>{fmtProbability(level.p_hold)}</td>
+                        <td>{fmtProbability(level.p_effective)}</td>
+                        <td>{level.n_events ?? 0}</td>
+                        <td>{bucketLabel(level)}</td>
+                        <td>{fmtNum(level.p_stall)}</td>
                         <td>
-                          {fmtProbability(level.p_hold ?? level.event_hold_rate)}
+                          {level.tf_count && level.tf_count > 1
+                            ? level.tfs || `${level.tf_count} 个周期`
+                            : '--'}
                         </td>
-                        <td>{level.n_events ?? level.touch_count ?? 0}</td>
-                        <td>
-                          {level.n_hold ?? 0} / {level.n_decided ?? 0}
-                        </td>
-                        <td>{fmtNum(level.volume_pct)}%</td>
                         <td>{fmtNum(level.edge_score)}</td>
                       </tr>
                     ))}
@@ -987,6 +1039,59 @@ export function MarketAnalysisPage() {
                 </table>
               </div>
             )}
+          </div>
+
+          <div className="panel">
+            <div className="section-title">
+              <span>其他的周期关键位</span>
+              <span className="tag">
+                {(result.mtf_zones ?? []).map((group) => formatTimeframeLabel(group.tf)).join(' · ') ||
+                  '无'}
+              </span>
+            </div>
+            {(result.mtf_zones ?? []).length === 0 ? (
+              <div className="empty">本品种没有可对比的其他周期数据。</div>
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>周期</th>
+                      <th>类型</th>
+                      <th>中心价</th>
+                      <th>区间</th>
+                      <th>触及概率</th>
+                      <th>守住概率</th>
+                      <th>被测试</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(result.mtf_zones ?? []).flatMap((group) =>
+                      group.zones.map((zone, index) => (
+                        <tr key={`${group.tf}-${zone.zone_type}-${zone.center}-${index}`}>
+                          <td>{formatTimeframeLabel(group.tf)}</td>
+                          <td>
+                            <span className={`zone-chip ${zone.zone_type}`}>
+                              {zone.zone_type === 'support' ? '支撑' : '压力'}
+                            </span>
+                          </td>
+                          <td>{fmtNum(zone.center, 4)}</td>
+                          <td>
+                            {fmtNum(zone.low, 4)} ~ {fmtNum(zone.high, 4)}
+                          </td>
+                          <td>{fmtProbability(zone.p_touch)}</td>
+                          <td>{fmtProbability(zone.p_hold)}</td>
+                          <td>{zone.n_events ?? 0}</td>
+                        </tr>
+                      )),
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="muted" style={{ marginBottom: 0 }}>
+              其他周期中心价与主周期距离在 0.8 ATR 以内的关键位会标注为共振，共振越多通常越值得关注。
+            </p>
           </div>
 
           <div className="panel">

@@ -13,6 +13,12 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 T = TypeVar("T", bound="Serializable")
 
 
+def code(value: Any) -> str:
+    """把 Enum / 字符串统一成其代码值（``Enum`` 取 ``.value``，其余取字符串）。"""
+    raw = getattr(value, "value", value)
+    return raw if isinstance(raw, str) else str(raw)
+
+
 class Serializable:
     """Mixin that provides stable JSON-safe dataclass serialization."""
 
@@ -531,6 +537,7 @@ __all__ = [
     "Theme",
     "ThemeCategory",
     "ThemeState",
+    "code",
     "compute_content_hash",
     "ensure_utc",
     "information_id",

@@ -76,7 +76,7 @@ export function DashboardPage() {
             </span>
           </div>
           {ready ? (
-            <p className="muted">数据准备完成，可以直接进入量价分析查看全部品种汇总与完整信息。</p>
+            <p className="muted">数据准备完成，可以直接进入成交量密度关键位查看全部品种汇总与完整信息。</p>
           ) : datasetsQuery.isLoading ? (
             <p className="muted">正在连接本地 API...</p>
           ) : (
@@ -88,7 +88,7 @@ export function DashboardPage() {
           <div className="row">
             <Link className="button button-primary" to="/market-analysis">
               <Crosshair size={15} />
-              量价分析
+              成交量密度关键位
               <ArrowRight size={15} />
             </Link>
           </div>

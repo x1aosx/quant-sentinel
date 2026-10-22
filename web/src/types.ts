@@ -61,28 +61,47 @@ export interface DatasetSyncReconcileResult {
   deleted: string[];
 }
 
+export type ProbabilityBucket = 'Q1' | 'Q2' | 'Q3' | 'Q4';
+
 export interface SrLevel {
   zone_type: 'support' | 'resistance';
   zone_label?: string;
   center: number;
   low: number;
   high: number;
+  /** 距现价的距离，正数表示位在现价上方 */
   distance_pct?: number;
   distance_atr?: number;
   width_atr?: number;
   width_pct?: number;
+  /** 排序分：只由 log1p(触及次数) 与陈旧度决定 */
   edge_score?: number;
   n_events?: number;
-  n_decided?: number;
-  n_hold?: number;
-  event_hold_rate?: number | null;
-  touch_count?: number;
-  volume_pct?: number;
+  /** 陈旧度 0~1，越大表示越久没被测试 */
+  stale?: number;
+  /** 停滞倾向（未归一化分数，供放止损/目标参考） */
+  p_stall?: number;
+  stall_bucket?: ProbabilityBucket | null;
+  vp_strength?: number;
+  /** 触及概率 */
   p_touch?: number | null;
+  /** 守住概率（校准良好，绝对值可信） */
   p_hold?: number | null;
+  /** 触及 × 守住 */
   p_effective?: number | null;
+  /** 该位所属的历史分位档 */
+  bucket?: ProbabilityBucket | null;
+  /** 该分位档在样本外的实测守住率 */
+  bucket_hold_rate?: number | null;
+  bucket_fwd_ret?: number | null;
+  bucket_n?: number | null;
   tf_count?: number;
   tfs?: string;
+}
+
+export interface MtfZoneGroup {
+  tf: string;
+  zones: SrLevel[];
 }
 
 export interface SrAnalysisResult {
@@ -94,15 +113,25 @@ export interface SrAnalysisResult {
   atr_pct: number;
   trend: { label: string; detail?: string };
   levels: SrLevel[];
+  /** 其他周期检测出的关键位，用于标注共振 */
+  mtf_zones?: MtfZoneGroup[];
   summary: {
     headline?: string;
     nearest?: SrLevel | null;
     best?: SrLevel | null;
+    direction?: string;
+    direction_label?: string;
+    trend_label?: string;
+    trend_detail?: string;
     risk_reward?: {
+      ratio?: number;
       risk_reward_ratio?: number;
       quality?: string;
+      potential_reward_atr?: number;
+      potential_risk_atr?: number;
       potential_profit_pct?: number;
       potential_loss_pct?: number;
+      basis?: string;
     };
     caveat?: string;
   };
@@ -258,6 +287,12 @@ export interface AnalysisInstrumentSummary {
   change_pct: number | null;
   touch_probability: number | null;
   hold_probability: number | null;
+  /** 触及 × 守住，汇总表按它降序 */
+  effective_probability: number | null;
+  bucket: ProbabilityBucket | null;
+  bucket_hold_rate: number | null;
+  p_stall: number | null;
+  zone_count: number;
   historical_tests: number;
   trend: {
     label: string;
@@ -271,6 +306,10 @@ export interface AnalysisInstrumentSummary {
   key_level_type: 'support' | 'resistance' | null;
   key_level_score: number | null;
   bars_used: number | null;
+  atr_pct: number | null;
+  engine: string | null;
+  calibrated: boolean | null;
+  prob_ready: boolean | null;
 }
 
 export type AnalysisChangeFilter = 'up' | 'down' | 'flat';
@@ -280,6 +319,8 @@ export interface AnalysisInstrumentSummariesParams {
   timeframe?: string;
   trend?: string;
   change?: AnalysisChangeFilter;
+  direction?: 'both' | 'long' | 'short';
+  n_zones?: number;
   page?: number;
   page_size?: number;
   refresh?: boolean;
@@ -298,6 +339,8 @@ export interface AnalysisInstrumentSummariesResponse {
   page_size: number;
   total_pages: number;
   timeframe: string;
+  direction?: 'both' | 'long' | 'short';
+  n_zones?: number;
   facets: {
     timeframes: string[];
     trends: string[];
@@ -485,6 +528,12 @@ export interface AIProviderConfig {
   context_window: number;
 }
 
+export interface AIAnalysisDebugInfo {
+  provider?: { model?: string; base_url?: string } | null;
+  attempts?: number | string | null;
+  [key: string]: unknown;
+}
+
 export interface AIAnalysisRecord {
   id: string;
   dataset_id?: string;
@@ -496,7 +545,7 @@ export interface AIAnalysisRecord {
   duration_ms?: number;
   action?: string;
   confidence?: number;
-  snapshot: Record<string, any>;
+  snapshot: Record<string, unknown>;
   stage1_messages: Array<{ role: string; content: string }>;
   stage2_messages: Array<{ role: string; content: string }>;
   raw_prompt: Record<string, unknown>;
@@ -504,14 +553,14 @@ export interface AIAnalysisRecord {
   stage2_response: string | Record<string, any>;
   stage1_response_text?: string;
   stage2_response_text?: string;
-  stage1_diagnosis?: Record<string, any>;
+  stage1_diagnosis?: Record<string, unknown>;
   stage2_decision?: Record<string, any>;
-  decision_trace?: Array<Record<string, any>>;
-  future_trend?: Record<string, any>;
-  next_cycle_prediction?: Record<string, any>;
-  next_bar_prediction?: Record<string, any>;
+  decision_trace?: Array<Record<string, unknown>>;
+  future_trend?: Record<string, unknown>;
+  next_cycle_prediction?: Record<string, unknown>;
+  next_bar_prediction?: Record<string, unknown>;
   usage_total?: Record<string, number>;
-  debug?: Record<string, any>;
+  debug?: AIAnalysisDebugInfo;
   decision_tree_layout?: {
     nodes: Array<{
       id: string;
@@ -526,7 +575,7 @@ export interface AIAnalysisRecord {
     }>;
     edges: Array<{ from: string; to: string }>;
   };
-  exception?: Record<string, any> | null;
+  exception?: Record<string, unknown> | null;
 }
 
 export interface AIRecordSummary {
@@ -663,7 +712,7 @@ export interface MonitorTargetStatus {
   last_check_at?: string | null;
   next_check_at?: string | null;
   last_status?: string | null;
-  last_error?: Record<string, any> | null;
+  last_error?: Record<string, unknown> | null;
   last_record?: AIAnalysisRecord | null;
   run_count: number;
   success_count?: number;
@@ -699,7 +748,7 @@ export interface MonitorLogEntry {
   status?: string | null;
   session_id?: string | null;
   message?: string | null;
-  detail?: Record<string, any>;
+  detail?: Record<string, unknown>;
 }
 
 export interface MonitorLogListResponse {
@@ -718,7 +767,7 @@ export interface BatchAnalyzeResponse {
     status: string;
     duration_ms: number;
     record?: AIAnalysisRecord;
-    error?: Record<string, any> | null;
+    error?: Record<string, unknown> | null;
   }>;
 }
 

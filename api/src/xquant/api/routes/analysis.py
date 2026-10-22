@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from xquant.analysis.density_sr import normalize_timeframe, pick_mtf_timeframes
 from xquant.analysis.price_action import analyze_price_action
 from xquant.analysis.sr_levels import detect_support_resistance
 from xquant.registry import Database
@@ -42,15 +43,21 @@ def _change_pct(bars: list[dict[str, Any]]) -> float | None:
     return round((current - previous) / previous * 100.0, 4)
 
 
-def _summary_item(dataset: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str, Any]:
+def _summary_item(
+    dataset: dict[str, Any],
+    bars: list[dict[str, Any]],
+    *,
+    n_zones: int = 6,
+    direction: str = "both",
+) -> dict[str, Any]:
     summary = dataset["summary"]
     result = detect_support_resistance(
         bars,
         symbol=str(summary["symbol"]),
         timeframe=str(summary["timeframe"]),
         lookback=250,
-        n_zones=6,
-        direction="both",
+        n_zones=n_zones,
+        direction=direction,
     )
     levels = list(result.get("levels") or [])
     supports = [level for level in levels if level.get("zone_type") == "support"]
@@ -70,11 +77,8 @@ def _summary_item(dataset: dict[str, Any], bars: list[dict[str, Any]]) -> dict[s
     nearest = summary_data.get("nearest") or None
     best = summary_data.get("best") or None
     touch_probability = nearest.get("p_touch") if nearest else None
-    hold_probability = None
-    if nearest:
-        hold_probability = nearest.get("p_hold")
-        if hold_probability is None:
-            hold_probability = nearest.get("event_hold_rate")
+    hold_probability = nearest.get("p_hold") if nearest else None
+    effective_probability = nearest.get("p_effective") if nearest else None
 
     return {
         "dataset_id": summary["id"],
@@ -85,6 +89,11 @@ def _summary_item(dataset: dict[str, Any], bars: list[dict[str, Any]]) -> dict[s
         "change_pct": _change_pct(bars),
         "touch_probability": touch_probability,
         "hold_probability": hold_probability,
+        "effective_probability": effective_probability,
+        "bucket": nearest.get("bucket") if nearest else None,
+        "bucket_hold_rate": nearest.get("bucket_hold_rate") if nearest else None,
+        "p_stall": nearest.get("p_stall") if nearest else None,
+        "zone_count": len(levels),
         "historical_tests": int(nearest.get("n_events") or 0) if nearest else 0,
         "trend": {
             "label": result.get("trend", {}).get("label") or "未知",
@@ -100,7 +109,19 @@ def _summary_item(dataset: dict[str, Any], bars: list[dict[str, Any]]) -> dict[s
         "key_level_type": best.get("zone_type") if best else None,
         "key_level_score": best.get("edge_score") if best else None,
         "bars_used": result.get("bars_used"),
+        "atr_pct": result.get("atr_pct"),
+        "engine": (result.get("meta") or {}).get("engine"),
+        "calibrated": (result.get("meta") or {}).get("calibrated"),
+        "prob_ready": (result.get("meta") or {}).get("prob_ready"),
     }
+
+
+def _effective_probability_key(item: dict[str, Any]) -> tuple[int, float]:
+    """按「触及×守住」的有效概率降序；缺失概率的排在最后。"""
+    value = item.get("effective_probability")
+    if value is None:
+        return (1, 0.0)
+    return (0, -float(value))
 
 
 def _timeframe_sort_key(timeframe: str) -> tuple[int, str]:
@@ -145,6 +166,8 @@ def _build_snapshot(
     datasets: list[dict[str, Any]],
     *,
     timeframe: str,
+    n_zones: int = 6,
+    direction: str = "both",
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     datasets_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for dataset in datasets:
@@ -183,7 +206,12 @@ def _build_snapshot(
             continue
         try:
             record = db.get_dataset(str(dataset["id"]))
-            item = _summary_item(record, list(record["bars"]))
+            item = _summary_item(
+                record,
+                list(record["bars"]),
+                n_zones=n_zones,
+                direction=direction,
+            )
             item["available_timeframes"] = available_timeframes
             items.append(item)
         except (KeyError, TypeError, ValueError) as exc:
@@ -203,9 +231,11 @@ def _snapshot_for_request(
     *,
     timeframe: str,
     refresh: bool,
+    n_zones: int = 6,
+    direction: str = "both",
 ) -> tuple[dict[str, Any], bool]:
     fingerprint = _dataset_fingerprint(datasets)
-    cache_key = f"{_INSTRUMENTS_CACHE_KEY_PREFIX}:{timeframe}"
+    cache_key = f"{_INSTRUMENTS_CACHE_KEY_PREFIX}:{timeframe}:{n_zones}:{direction}"
     if not refresh:
         cached = db.get_cached_json(cache_key)
         if (
@@ -217,7 +247,13 @@ def _snapshot_for_request(
         ):
             return cached, True
 
-    items, errors = _build_snapshot(db, datasets, timeframe=timeframe)
+    items, errors = _build_snapshot(
+        db,
+        datasets,
+        timeframe=timeframe,
+        n_zones=n_zones,
+        direction=direction,
+    )
     snapshot = {
         "fingerprint": fingerprint,
         "items": items,
@@ -256,8 +292,11 @@ def _filter_items(
             if label != trend:
                 continue
         if change:
+            raw_change = item.get("change_pct")
+            if raw_change is None:
+                continue
             try:
-                change_pct = float(item.get("change_pct"))
+                change_pct = float(raw_change)
             except (TypeError, ValueError):
                 continue
             if change == "up" and change_pct <= 0:
@@ -300,6 +339,8 @@ def instrument_summaries(
     timeframe: Annotated[str, Query()] = _DEFAULT_ANALYSIS_TIMEFRAME,
     trend: Annotated[str | None, Query()] = None,
     change: Annotated[Literal["up", "down", "flat"] | None, Query()] = None,
+    direction: Annotated[Literal["both", "long", "short"], Query()] = "both",
+    n_zones: Annotated[int, Query(ge=2, le=12)] = 6,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 20,
     refresh: Annotated[bool, Query()] = False,
@@ -311,6 +352,8 @@ def instrument_summaries(
         datasets,
         timeframe=normalized_timeframe,
         refresh=refresh,
+        n_zones=n_zones,
+        direction=direction,
     )
     all_items = list(snapshot["items"])
     filtered_items = _filter_items(
@@ -320,6 +363,8 @@ def instrument_summaries(
         trend=trend,
         change=change,
     )
+    # 与上游一致：按「触及×守住」的有效概率降序，缺概率的排在最后
+    filtered_items.sort(key=_effective_probability_key)
     total = len(filtered_items)
     start = (page - 1) * page_size
     page_items = filtered_items[start : start + page_size]
@@ -332,10 +377,50 @@ def instrument_summaries(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size,
         "timeframe": normalized_timeframe,
+        "direction": direction,
+        "n_zones": n_zones,
         "facets": _facets(all_items, datasets),
         "from_cache": from_cache,
         "generated_at": snapshot["generated_at"],
     }
+
+
+def _mtf_frames(
+    db: Database,
+    datasets: list[dict[str, Any]],
+    dataset: dict[str, Any],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """同品种其他周期的 K 线，用于标注多周期共振。"""
+    summary = dataset["summary"]
+    symbol = str(summary["symbol"] or "").strip().upper()
+    timeframe = normalize_timeframe(str(summary["timeframe"] or ""))
+    candidates = [
+        item
+        for item in datasets
+        if str(item.get("symbol") or "").strip().upper() == symbol
+    ]
+    chosen = pick_mtf_timeframes(
+        timeframe,
+        [normalize_timeframe(str(item.get("timeframe") or "")) for item in candidates],
+    )
+    frames: list[tuple[str, list[dict[str, Any]]]] = []
+    for tf in chosen:
+        match = next(
+            (
+                item
+                for item in candidates
+                if normalize_timeframe(str(item.get("timeframe") or "")) == tf
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        try:
+            record = db.get_dataset(str(match["id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        frames.append((tf, list(record["bars"])))
+    return frames
 
 
 @router.post("/analysis/support-resistance")
@@ -344,26 +429,33 @@ def support_resistance(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = payload or {}
-    dataset = get_stock_timeframe_dataset_or_404(
+    dataset: dict[str, Any] = get_stock_timeframe_dataset_or_404(
         db,
         dataset_id=str(payload.get("dataset_id") or ""),
         symbol=str(payload.get("symbol") or ""),
         timeframe=str(payload.get("timeframe") or ""),
     )
+    bars: list[dict[str, Any]] = list(dataset["bars"])
+    summary: dict[str, Any] = dataset["summary"]
+    symbol = str(summary["symbol"])
+    timeframe = str(summary["timeframe"])
     try:
         lookback = int_in(payload.get("lookback"), 60, 1000, 250)
+        n_zones = int_in(payload.get("n_zones"), 2, 12, 6)
+        mtf_frames = _mtf_frames(db, db.list_datasets(), dataset) if payload.get("mtf", True) else []
         result = detect_support_resistance(
-            dataset["bars"],
-            symbol=dataset["summary"]["symbol"],
-            timeframe=dataset["summary"]["timeframe"],
+            bars,
+            symbol=symbol,
+            timeframe=timeframe,
             lookback=lookback,
-            n_zones=int_in(payload.get("n_zones"), 2, 8, 6),
+            n_zones=n_zones,
             direction=str(payload.get("direction") or "both"),
+            mtf_frames=mtf_frames,
         )
         price_action_result = analyze_price_action(
-            dataset["bars"],
-            symbol=dataset["summary"]["symbol"],
-            timeframe=dataset["summary"]["timeframe"],
+            bars,
+            symbol=symbol,
+            timeframe=timeframe,
             lookback=lookback,
             risk_fraction=number_in(payload.get("risk_fraction"), 0.0005, 0.1, 0.01),
             min_rr=number_in(payload.get("min_rr"), 0.5, 10.0, 1.5),
@@ -385,5 +477,5 @@ def support_resistance(
             float(risk_reward.get("potential_risk_atr") or 0.0) * atr / price * 100.0,
         )
     result["price_action"] = price_action_result
-    result["candles"] = dataset["bars"][-150:]
+    result["candles"] = bars[-150:]
     return result

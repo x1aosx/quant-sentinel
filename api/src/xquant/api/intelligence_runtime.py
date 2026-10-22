@@ -30,6 +30,7 @@ from xquant.intelligence import (
     SourceType,
     SqliteIntelligenceRepository,
 )
+from xquant.intelligence.domain import code
 from xquant.storage import StorageSettings
 from xquant.system_config import SystemConfigStore
 
@@ -136,21 +137,21 @@ class ApplicationIntelligenceService:
                 item
                 for item in items
                 if item.current_heat_score >= 60
-                or item.state.value in _HOT_THEATRES
+                or code(item.state) in _HOT_THEATRES
             ]
         elif normalized == "emerging":
             items = [
                 item
                 for item in items
                 if item.forward_heat_score > item.current_heat_score + 5
-                or item.state.value in _EMERGING_STATES
+                or code(item.state) in _EMERGING_STATES
             ]
         elif normalized == "overcrowded":
             items = [
                 item
                 for item in items
                 if item.crowding_score >= 70
-                or item.state.value == "OVERCROWDED"
+                or code(item.state) == "OVERCROWDED"
             ]
         elif normalized not in {"", "all"}:
             raise ValueError("主题分类仅支持 hot/emerging/overcrowded/all")
@@ -180,7 +181,7 @@ class ApplicationDiscoveryService:
             candidates = [
                 candidate
                 for candidate in candidates
-                if candidate.state.value == normalized
+                if code(candidate.state) == normalized
             ]
         candidates = sorted(candidates, key=lambda item: (item.rank or 10**9, item.stock_id))
         trade_date = max(
@@ -286,7 +287,7 @@ class DatabaseDiscoveryDataSource:
             ThemeSnapshot(
                 theme_id=str(theme.id),
                 name=theme.name,
-                state=theme.state.value,
+                state=code(theme.state),
                 as_of=theme.updated_at,
                 current_heat_score=theme.current_heat_score,
                 forward_heat_score=theme.forward_heat_score,
@@ -309,9 +310,9 @@ class DatabaseDiscoveryDataSource:
             EventSnapshot(
                 event_id=str(event.id),
                 title=event.title,
-                event_type=event.event_type.value,
-                direction=event.impact_direction.value,
-                horizon=event.impact_horizon.value,
+                event_type=code(event.event_type),
+                direction=code(event.impact_direction),
+                horizon=code(event.impact_horizon),
                 as_of=event.last_update_time,
                 affected_stock_ids=list(event.impact.affected_stocks),
                 affected_theme_ids=[
@@ -424,8 +425,8 @@ class DiscoveryCandidateStore:
                 "trade_date": candidate.updated_at.date().isoformat(),
                 "discovery_score": candidate.discovery_score,
                 "rank": candidate.rank,
-                "state": candidate.state.value,
-                "market_regime": candidate.market_regime.value,
+                "state": code(candidate.state),
+                "market_regime": code(candidate.market_regime),
                 "confidence": candidate.confidence,
                 "model_version": candidate.model_version,
                 "updated_at": candidate.updated_at.isoformat(),

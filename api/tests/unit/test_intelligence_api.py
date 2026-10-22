@@ -1,3 +1,5 @@
+"""情报模块 API 契约测试（既有用例）。"""
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient

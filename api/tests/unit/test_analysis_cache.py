@@ -65,6 +65,7 @@ def test_instrument_summaries_cache_filter_pagination_and_invalidation(
     def fake_summary_item(
         dataset: dict[str, Any],
         _bars: list[dict[str, Any]],
+        **_kwargs: Any,
     ) -> dict[str, Any]:
         summary = dataset["summary"]
         symbol = str(summary["symbol"])
@@ -82,15 +83,9 @@ def test_instrument_summaries_cache_filter_pagination_and_invalidation(
 
     with TestClient(create_app(tmp_path / "xquant.db")) as client:
         created = {
-            "AAA": _create_dataset(
-                client, symbol="AAA", title="Alpha", timeframe="1d"
-            ),
-            "BBB": _create_dataset(
-                client, symbol="BBB", title="Beta", timeframe="1d"
-            ),
-            "CCC": _create_dataset(
-                client, symbol="CCC", title="Gamma", timeframe="1d"
-            ),
+            "AAA": _create_dataset(client, symbol="AAA", title="Alpha", timeframe="1d"),
+            "BBB": _create_dataset(client, symbol="BBB", title="Beta", timeframe="1d"),
+            "CCC": _create_dataset(client, symbol="CCC", title="Gamma", timeframe="1d"),
         }
         _create_dataset(client, symbol="BBB", title="Beta", timeframe="4h")
 
@@ -372,9 +367,7 @@ def test_postgres_sync_rewrites_revised_existing_bars(monkeypatch) -> None:
     assert second["updated_count"] == 3
     assert second["sync_status"] == "updated"
     assert [len(batch) for batch in influx.write_batches] == [3, 1]
-    refreshed_bars = {
-        bar["session_id"]: bar for bar in database._fetch_dataset_bars(first["id"])
-    }
+    refreshed_bars = {bar["session_id"]: bar for bar in database._fetch_dataset_bars(first["id"])}
     assert refreshed_bars["2026-01-03"]["close"] == 302.0
 
     third = database.sync_dataset(
@@ -385,3 +378,65 @@ def test_postgres_sync_rewrites_revised_existing_bars(monkeypatch) -> None:
     assert third["updated_count"] == 3
     assert third["sync_status"] == "unchanged"
     assert [len(batch) for batch in influx.write_batches] == [3, 1]
+
+
+def test_instrument_summaries_sorted_by_effective_probability(tmp_path, monkeypatch) -> None:
+    probabilities: dict[str, float | None] = {"AAA": 0.2, "BBB": 0.75, "CCC": None}
+
+    def fake_summary_item(
+        dataset: dict[str, Any],
+        _bars: list[dict[str, Any]],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        summary = dataset["summary"]
+        symbol = str(summary["symbol"])
+        return {
+            "dataset_id": summary["id"],
+            "symbol": symbol,
+            "title": summary["title"],
+            "timeframe": summary["timeframe"],
+            "change_pct": 0.0,
+            "effective_probability": probabilities[symbol],
+            "trend": {"label": "震荡", "detail": None},
+        }
+
+    monkeypatch.setattr(analysis_routes, "_summary_item", fake_summary_item)
+
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        for symbol, title in (("AAA", "Alpha"), ("BBB", "Beta"), ("CCC", "Gamma")):
+            _create_dataset(client, symbol=symbol, title=title, timeframe="1d")
+
+        payload = client.get("/api/v1/analysis/instruments").json()
+
+    assert [item["symbol"] for item in payload["items"]] == ["BBB", "AAA", "CCC"]
+
+
+def test_support_resistance_returns_density_engine_contract(tmp_path) -> None:
+    with TestClient(create_app(tmp_path / "xquant.db")) as client:
+        dataset = _create_dataset(client, symbol="AAA", title="Alpha", timeframe="1d")
+        _create_dataset(client, symbol="AAA", title="Alpha", timeframe="4h")
+
+        response = client.post(
+            "/api/v1/analysis/support-resistance",
+            json={"dataset_id": dataset["id"]},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["meta"]["engine"] == "V3_fusion"
+    assert payload["meta"]["mtf_timeframes"] == ["4h"]
+    assert payload["mtf_zones"] and payload["mtf_zones"][0]["tf"] == "4h"
+    assert payload["candles"]
+    for level in payload["levels"]:
+        assert {
+            "p_touch",
+            "p_hold",
+            "p_effective",
+            "bucket",
+            "bucket_hold_rate",
+            "p_stall",
+            "stale",
+            "vp_strength",
+            "tf_count",
+        } <= set(level)
+        assert level["tf_count"] >= 2  # 与 4h 数据同源，应标注共振

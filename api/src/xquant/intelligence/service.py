@@ -18,6 +18,7 @@ from .domain import (
     NotificationSeverity,
     RawInformation,
     Theme,
+    code,
     ensure_utc,
     utc_iso,
     utc_now,
@@ -218,19 +219,19 @@ class IntelligenceService:
         policies = [
             event
             for event in important_events
-            if event.event_type.value
+            if code(event.event_type)
             in {"POLICY", "MONETARY_POLICY", "REGULATION"}
         ]
         global_events = [
             event
             for event in important_events
-            if event.event_type.value in {"GEOPOLITICAL", "COMMODITY"}
+            if code(event.event_type) in {"GEOPOLITICAL", "COMMODITY"}
         ]
         risks = [
             event
             for event in important_events
-            if event.event_type.value in {"RISK", "BLACK_SWAN"}
-            or event.impact_direction.value == "NEGATIVE"
+            if code(event.event_type) in {"RISK", "BLACK_SWAN"}
+            or code(event.impact_direction) == "NEGATIVE"
         ]
         current_hot = sorted(
             themes,
@@ -244,7 +245,7 @@ class IntelligenceService:
                 theme
                 for theme in themes
                 if theme.forward_heat_score >= 50
-                or theme.state.value in {"BREAKOUT", "INCUBATING"}
+                or code(theme.state) in {"BREAKOUT", "INCUBATING"}
             ),
             key=lambda theme: (-theme.forward_heat_score, -theme.confidence),
         )[:10]
@@ -253,7 +254,7 @@ class IntelligenceService:
             "market_environment": [
                 event.to_dict()
                 for event in important_events
-                if event.event_type.value in {"MACRO", "MARKET"}
+                if code(event.event_type) in {"MACRO", "MARKET"}
             ][:8],
             "important_policies": [event.to_dict() for event in policies[:8]],
             "global_events": [event.to_dict() for event in global_events[:8]],
@@ -298,14 +299,14 @@ class IntelligenceService:
         for event in events:
             should_notify = (
                 event.importance >= 75
-                or event.event_type.value in {"RISK", "BLACK_SWAN", "POLICY"}
+                or code(event.event_type) in {"RISK", "BLACK_SWAN", "POLICY"}
             )
             if not should_notify:
                 continue
             severity = (
                 NotificationSeverity.CRITICAL
                 if event.importance >= 90
-                or event.event_type.value == "BLACK_SWAN"
+                or code(event.event_type) == "BLACK_SWAN"
                 else NotificationSeverity.IMPORTANT
             )
             dedup_key = hashlib.sha256(
@@ -344,7 +345,7 @@ def _aggregate_stocks(events: Sequence[MarketEvent]) -> list[dict[str, Any]]:
             )
             item["event_ids"].append(str(event.id))
             item["themes"].extend(event.impact.affected_themes)
-            item["directions"].append(event.impact_direction.value)
+            item["directions"].append(code(event.impact_direction))
             item["importance"] = max(item["importance"], event.importance)
     result = []
     for item in grouped.values():
