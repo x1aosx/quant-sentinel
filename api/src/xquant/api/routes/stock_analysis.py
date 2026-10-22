@@ -396,33 +396,3 @@ def stock_multi_timeframe(
         "timeframes": result["timeframes"],
         "generated_at": result["generated_at"],
     }
-
-
-@router.post("/{symbol}/analysis/ai")
-def stock_ai_analysis(
-    symbol: str,
-    db: Annotated[Database, Depends(get_database)],
-    store: Annotated[SystemConfigStore, Depends(get_system_config)],
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    normalized = _normalize_symbol(symbol)
-    request_payload = payload or {}
-    profile = _normalize_profile(
-        request_payload.get("profile")
-        if isinstance(request_payload.get("profile"), Mapping)
-        else request_payload
-    )
-    base, fingerprint = _get_or_build(
-        db,
-        symbol=normalized,
-        profile=profile,
-        refresh=bool(request_payload.get("refresh", False)),
-    )
-    result = _with_ai(base, store, overrides=request_payload, use_cache=False)
-    if isinstance(result.get("ai_summary"), dict):
-        db.set_cached_json(
-            _ai_cache_key(normalized, fingerprint, profile),
-            result["ai_summary"],
-            _CACHE_TTL_SECONDS,
-        )
-    return result["ai_summary"]

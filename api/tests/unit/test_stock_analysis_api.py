@@ -34,13 +34,17 @@ def test_stock_analysis_aggregates_timeframes_and_local_ai(tmp_path) -> None:
         }
         assert payload["ai_summary"] is None
 
-        ai_response = client.post("/api/v1/stocks/DEMO.RESEARCH/analysis/ai", json={})
+        ai_response = client.get(
+            "/api/v1/stocks/DEMO.RESEARCH/analysis",
+            params={"include_ai": "true"},
+        )
         assert ai_response.status_code == 200, ai_response.text
-        ai_payload = ai_response.json()
+        ai_payload = ai_response.json()["ai_summary"]
         assert ai_payload["status"] == "ok"
         assert ai_payload["source"] == "local"
         assert ai_payload["summary"]
 
+        # 第二次应命中 AI 缓存，不再重新计算
         cached_ai = client.get(
             "/api/v1/stocks/DEMO.RESEARCH/analysis",
             params={"include_ai": "true"},
