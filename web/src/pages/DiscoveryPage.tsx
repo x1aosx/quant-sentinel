@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Crosshair,
+  Globe,
   Loader2,
   RefreshCw,
   ShieldAlert,
@@ -18,6 +19,7 @@ import type {
   DiscoveryCandidateState,
   DiscoveryScoreContribution,
   DiscoveryScoreMap,
+  DiscoveryUniverseCandidate,
 } from '../types';
 
 const CANDIDATE_LIMIT = 100;
@@ -289,6 +291,185 @@ function CandidateDetails({ candidate }: { candidate: DiscoveryCandidate }) {
   );
 }
 
+const UNIVERSE_STATUS_LABELS: Record<string, string> = {
+  SYNCED: '已入库',
+  EXISTING: '已在池',
+  PENDING: '待入库',
+  REJECTED: '同步失败',
+};
+
+const UNIVERSE_ORIGIN_LABELS: Record<string, string> = {
+  intelligence: '情报',
+  market_ranking: '外部榜单',
+  'intelligence+market_ranking': '情报 + 榜单',
+  'market_ranking+intelligence': '情报 + 榜单',
+};
+
+function universeOriginLabel(origin: string): string {
+  return UNIVERSE_ORIGIN_LABELS[origin] ?? origin;
+}
+
+function UniversePanel() {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(true);
+
+  const universeQuery = useQuery({
+    queryKey: ['discovery', 'universe'],
+    queryFn: api.getDiscoveryUniverse,
+  });
+
+  const scanMutation = useMutation({
+    mutationFn: () => api.scanDiscoveryUniverse({ sync: true }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['discovery', 'universe'] }),
+        queryClient.invalidateQueries({ queryKey: ['discovery', 'candidates'] }),
+      ]);
+    },
+  });
+
+  const latest = scanMutation.data ?? universeQuery.data?.latest ?? null;
+  const enabled = universeQuery.data?.enabled ?? true;
+  const items: DiscoveryUniverseCandidate[] = latest?.candidates ?? [];
+
+  return (
+    <div className="panel discovery-panel discovery-universe-panel">
+      <div className="discovery-toolbar">
+        <div>
+          <button
+            className="button discovery-universe-toggle"
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            aria-expanded={expanded}
+          >
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <Globe size={15} />
+            候选池扩展
+          </button>
+          <div className="muted discovery-universe-hint">
+            结合情报事件、主题热度与外部市场榜单，发现本地数据集之外的优质标的，并按分数同步入库。
+          </div>
+        </div>
+        <div className="discovery-toolbar-actions">
+          {latest ? (
+            <span className="muted">
+              最近扫描 {new Date(latest.scanned_at).toLocaleString('zh-CN')} · 数据集{' '}
+              {latest.dataset_count} · 线索 {latest.lead_count} · 候选 {latest.candidate_count} · 新入库{' '}
+              {latest.synced_count}
+            </span>
+          ) : null}
+          <button
+            className="button"
+            type="button"
+            disabled={!enabled || scanMutation.isPending}
+            onClick={() => {
+              scanMutation.reset();
+              scanMutation.mutate();
+            }}
+          >
+            {scanMutation.isPending ? (
+              <Loader2 className="spin" size={14} />
+            ) : (
+              <Sparkles size={14} />
+            )}
+            扩展候选池
+          </button>
+        </div>
+      </div>
+
+      {!enabled ? (
+        <div className="intelligence-feedback" role="status">
+          候选池扩展未启用。
+        </div>
+      ) : null}
+
+      {scanMutation.isError ? (
+        <div className="intelligence-error-state" role="alert">
+          <span>
+            <AlertTriangle size={15} />
+            扩展失败：{errorText(scanMutation.error)}
+          </span>
+          <button
+            className="button"
+            type="button"
+            disabled={scanMutation.isPending}
+            onClick={() => scanMutation.mutate()}
+          >
+            <RefreshCw size={14} />
+            重试
+          </button>
+        </div>
+      ) : null}
+
+      {latest && latest.warnings.length ? (
+        <div className="intelligence-feedback" role="status">
+          {latest.warnings.map((warning, index) => (
+            <div key={`${warning}-${index}`}>
+              <AlertTriangle size={13} /> {warning}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {expanded ? (
+        universeQuery.isError ? (
+          <ErrorState
+            message={`候选池扩展记录加载失败：${errorText(universeQuery.error)}`}
+            onRetry={() => void universeQuery.refetch()}
+          />
+        ) : items.length ? (
+          <div className="table-wrap discovery-table-wrap">
+            <table className="table discovery-table">
+              <thead>
+                <tr>
+                  <th>代码</th>
+                  <th>名称</th>
+                  <th>来源</th>
+                  <th>分数</th>
+                  <th>状态</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={`${item.symbol}-${item.origin}`}>
+                    <td>{item.symbol}</td>
+                    <td>{item.name || '--'}</td>
+                    <td>
+                      <span className="tag">{universeOriginLabel(item.origin)}</span>
+                    </td>
+                    <td>{formatNumber(item.score, 1)}</td>
+                    <td>
+                      <span
+                        className={`tag${
+                          item.status === 'REJECTED' ? ' discovery-universe-status-failed' : ''
+                        }`}
+                      >
+                        {UNIVERSE_STATUS_LABELS[item.status] ?? item.status}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="discovery-universe-note">
+                        {item.note ? <span>{item.note}</span> : null}
+                        {item.reasons?.length ? <small>{item.reasons.join(' · ')}</small> : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty discovery-empty">
+            <Globe size={18} />
+            尚未执行扩展扫描。点击「扩展候选池」从情报与外部榜单寻找新标的。
+          </div>
+        )
+      ) : null}
+    </div>
+  );
+}
+
 export function DiscoveryPage() {
   const queryClient = useQueryClient();
   const [stateFilter, setStateFilter] = useState<StateFilter>('all');
@@ -301,9 +482,12 @@ export function DiscoveryPage() {
   });
 
   const refreshMutation = useMutation({
-    mutationFn: api.refreshDiscovery,
+    mutationFn: () => api.refreshDiscovery({ expandUniverse: true }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['discovery', 'candidates'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['discovery', 'candidates'] }),
+        queryClient.invalidateQueries({ queryKey: ['discovery', 'universe'] }),
+      ]);
     },
   });
 
@@ -329,6 +513,8 @@ export function DiscoveryPage() {
           候选池
         </span>
       </div>
+
+      <UniversePanel />
 
       <div className="panel discovery-panel">
         <div className="discovery-toolbar">
@@ -393,7 +579,11 @@ export function DiscoveryPage() {
 
         {refreshMutation.isSuccess ? (
           <div className="intelligence-feedback intelligence-feedback-success" role="status">
-            已刷新 {refreshMutation.data.trade_date} 候选池，共 {refreshMutation.data.count} 只。
+            已刷新 {refreshMutation.data.trade_date} 候选池，共 {refreshMutation.data.count} 只
+            {refreshMutation.data.universe
+              ? `，扩展候选池新增 ${refreshMutation.data.universe.synced_count} 只`
+              : ''}
+            。
           </div>
         ) : null}
 

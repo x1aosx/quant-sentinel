@@ -28,9 +28,30 @@ def list_discovery_candidates(
 
 
 @router.post("/discovery/refresh")
-def refresh_discovery_candidates(service: DiscoveryDep) -> dict[str, Any]:
+def refresh_discovery_candidates(
+    service: DiscoveryDep,
+    expand_universe: bool = Query(default=False),
+) -> dict[str, Any]:
     try:
-        result = service.refresh()
+        result = service.refresh(expand_universe=expand_universe)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return jsonable_encoder(result)
+
+
+@router.get("/discovery/universe")
+def get_discovery_universe(service: DiscoveryDep) -> dict[str, Any]:
+    return jsonable_encoder(service.list_universe())
+
+
+@router.post("/discovery/universe/scan")
+def scan_discovery_universe(
+    service: DiscoveryDep,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = payload or {}
+    try:
+        report = service.scan_universe(sync=bool(body.get("sync", True)))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return jsonable_encoder(report.to_dict())

@@ -3606,6 +3606,41 @@ textarea {
   gap: 8px;
 }
 
+.discovery-universe-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.discovery-universe-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.discovery-universe-hint {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.discovery-universe-note {
+  display: grid;
+  gap: 2px;
+}
+
+.discovery-universe-note small {
+  color: var(--muted, #6b7785);
+}
+
+.discovery-universe-status-failed {
+  color: #8a1c1c;
+  background: #fde8e8;
+}
+
 @media (max-width: 1180px) {
   .intelligence-overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

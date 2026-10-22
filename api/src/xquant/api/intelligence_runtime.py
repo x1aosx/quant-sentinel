@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,11 +13,16 @@ from typing import Any
 from xquant.discovery import (
     DiscoveryCandidate,
     DiscoveryService,
+    EastmoneyRankingSource,
     EventSnapshot,
     MarketRegime,
     ScoreComponent,
+    SinaRankingSource,
     StockSnapshot,
     ThemeSnapshot,
+    UniverseCandidate,
+    UniverseScanner,
+    UniverseScanReport,
 )
 from xquant.intelligence import (
     AnnouncementProvider,
@@ -116,9 +121,7 @@ class ApplicationIntelligenceService:
             )
             result.append(
                 {
-                    "id": str(
-                        getattr(feed, "source", "") or f"source-{index}"
-                    ),
+                    "id": str(getattr(feed, "source", "") or f"source-{index}"),
                     "source": str(getattr(feed, "source", "") or ""),
                     "source_type": getattr(source_type, "value", str(source_type)),
                     "url": str(getattr(feed, "feed_url", "") or ""),
@@ -136,8 +139,7 @@ class ApplicationIntelligenceService:
             items = [
                 item
                 for item in items
-                if item.current_heat_score >= 60
-                or code(item.state) in _HOT_THEATRES
+                if item.current_heat_score >= 60 or code(item.state) in _HOT_THEATRES
             ]
         elif normalized == "emerging":
             items = [
@@ -150,8 +152,7 @@ class ApplicationIntelligenceService:
             items = [
                 item
                 for item in items
-                if item.crowding_score >= 70
-                or code(item.state) == "OVERCROWDED"
+                if item.crowding_score >= 70 or code(item.state) == "OVERCROWDED"
             ]
         elif normalized not in {"", "all"}:
             raise ValueError("主题分类仅支持 hot/emerging/overcrowded/all")
@@ -169,19 +170,21 @@ class ApplicationDiscoveryService:
         service: DiscoveryService,
         data_source: DatabaseDiscoveryDataSource,
         store: DiscoveryCandidateStore,
+        universe_scanner: UniverseScanner | None = None,
+        universe_store: UniverseReportStore | None = None,
     ) -> None:
         self._service = service
         self._data_source = data_source
         self._store = store
+        self._universe_scanner = universe_scanner
+        self._universe_store = universe_store
 
     def list_candidates(self, *, state: str = "all", limit: int = 100) -> dict[str, Any]:
         candidates = self._store.list_candidates()
         normalized = str(state or "all").upper()
         if normalized != "ALL":
             candidates = [
-                candidate
-                for candidate in candidates
-                if code(candidate.state) == normalized
+                candidate for candidate in candidates if code(candidate.state) == normalized
             ]
         candidates = sorted(candidates, key=lambda item: (item.rank or 10**9, item.stock_id))
         trade_date = max(
@@ -191,11 +194,38 @@ class ApplicationDiscoveryService:
         items = [_candidate_payload(candidate) for candidate in candidates[:limit]]
         return {"trade_date": trade_date, "items": items, "count": len(items)}
 
-    def refresh(self) -> dict[str, Any]:
+    def refresh(self, *, expand_universe: bool = False) -> dict[str, Any]:
+        universe: dict[str, Any] | None = None
+        if expand_universe and self._universe_scanner is not None:
+            report = self.scan_universe()
+            universe = {
+                "scanned_at": report.scanned_at.isoformat(),
+                "synced_count": report.synced_count,
+                "candidate_count": report.candidate_count,
+                "warnings": list(report.warnings),
+            }
         snapshots = self._data_source.list_stock_snapshots()
         regime = _infer_market_regime(snapshots)
         self._service.run(regime)
-        return self.list_candidates(state="all", limit=1000)
+        payload = self.list_candidates(state="all", limit=1000)
+        if universe is not None:
+            payload["universe"] = universe
+        return payload
+
+    def list_universe(self) -> dict[str, Any]:
+        report = self._universe_store.load() if self._universe_store is not None else None
+        return {
+            "enabled": self._universe_scanner is not None,
+            "latest": report.to_dict() if report is not None else None,
+        }
+
+    def scan_universe(self, *, sync: bool = True) -> UniverseScanReport:
+        if self._universe_scanner is None:
+            raise ValueError("候选池扩展未启用")
+        report = self._universe_scanner.scan(sync=sync)
+        if self._universe_store is not None:
+            self._universe_store.save(report)
+        return report
 
 
 class DatabaseDiscoveryDataSource:
@@ -248,7 +278,10 @@ class DatabaseDiscoveryDataSource:
             linked_themes: list[Any] = []
             linked_events: list[Any] = []
             for event in events:
-                if symbol not in event.affected_stock_ids and symbol.split(".")[0] not in event.affected_stock_ids:
+                if (
+                    symbol not in event.affected_stock_ids
+                    and symbol.split(".")[0] not in event.affected_stock_ids
+                ):
                     continue
                 linked_events.append(event)
                 for theme_id in event.affected_theme_ids:
@@ -409,9 +442,7 @@ class DiscoveryCandidateStore:
         )
         return [
             _candidate_from_payload(
-                row["payload"]
-                if isinstance(row["payload"], str)
-                else json.dumps(row["payload"])
+                row["payload"] if isinstance(row["payload"], str) else json.dumps(row["payload"])
             )
             for row in rows
         ]
@@ -486,6 +517,160 @@ class DiscoveryCandidateStore:
         return count
 
 
+class UniverseReportStore:
+    """SQLite/PostgreSQL persistence for the latest universe expansion report."""
+
+    _ROW_ID = "latest"
+
+    def __init__(self, database: Any, settings: StorageSettings) -> None:
+        self.database = database
+        self.settings = settings
+        self._sqlite = settings.storage_backend == "legacy_sqlite"
+        self.initialize()
+
+    def initialize(self) -> None:
+        if self._sqlite:
+            connection = sqlite3.connect(Path(self.database.path))
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS discovery_universe_scan (
+                        id TEXT PRIMARY KEY,
+                        scanned_at TEXT NOT NULL,
+                        payload TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            return
+
+        self.database.postgres.execute(
+            """
+            CREATE SCHEMA IF NOT EXISTS discovery;
+            CREATE TABLE IF NOT EXISTS discovery.universe_scan (
+                id TEXT PRIMARY KEY,
+                scanned_at TIMESTAMPTZ NOT NULL,
+                payload JSONB NOT NULL
+            );
+            """
+        )
+
+    def load(self) -> UniverseScanReport | None:
+        if self._sqlite:
+            connection = sqlite3.connect(Path(self.database.path))
+            try:
+                row = connection.execute(
+                    "SELECT payload FROM discovery_universe_scan WHERE id = ?",
+                    (self._ROW_ID,),
+                ).fetchone()
+            finally:
+                connection.close()
+            return _universe_report_from_payload(row[0]) if row else None
+
+        rows = self.database.postgres.query(
+            "SELECT payload FROM discovery.universe_scan WHERE id = :id",
+            {"id": self._ROW_ID},
+        )
+        if not rows:
+            return None
+        payload = rows[0]["payload"]
+        return _universe_report_from_payload(
+            payload if isinstance(payload, str) else json.dumps(payload)
+        )
+
+    def save(self, report: UniverseScanReport) -> None:
+        payload = json.dumps(report.to_dict(), ensure_ascii=False)
+        if self._sqlite:
+            connection = sqlite3.connect(Path(self.database.path))
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO discovery_universe_scan (id, scanned_at, payload)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        scanned_at = excluded.scanned_at,
+                        payload = excluded.payload
+                    """,
+                    (self._ROW_ID, report.scanned_at.isoformat(), payload),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            return
+
+        self.database.postgres.execute(
+            """
+            INSERT INTO discovery.universe_scan (id, scanned_at, payload)
+            VALUES (:id, CAST(:scanned_at AS timestamptz), CAST(:payload AS jsonb))
+            ON CONFLICT (id) DO UPDATE SET
+                scanned_at = excluded.scanned_at,
+                payload = excluded.payload
+            """,
+            {
+                "id": self._ROW_ID,
+                "scanned_at": report.scanned_at.isoformat(),
+                "payload": payload,
+            },
+        )
+
+
+def _universe_report_from_payload(payload: str) -> UniverseScanReport:
+    try:
+        raw = json.loads(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("候选池扫描记录格式无效") from exc
+    if not isinstance(raw, Mapping):
+        raise TypeError("候选池扫描记录必须是对象")
+    candidates = [
+        UniverseCandidate(
+            symbol=str(item.get("symbol") or ""),
+            name=str(item.get("name") or ""),
+            origin=str(item.get("origin") or ""),
+            score=float(item.get("score") or 0.0),
+            status=str(item.get("status") or ""),
+            reasons=[str(reason) for reason in item.get("reasons") or []],
+            signals={
+                str(key): float(value)
+                for key, value in (item.get("signals") or {}).items()
+                if _float(value) is not None
+            },
+            dataset_id=item.get("dataset_id"),
+            note=str(item.get("note") or ""),
+            discovered_at=_parse_datetime(item.get("discovered_at")),
+        )
+        for item in raw.get("candidates") or []
+        if isinstance(item, Mapping)
+    ]
+    return UniverseScanReport(
+        scanned_at=_parse_datetime(raw.get("scanned_at")) or datetime.now(UTC),
+        model_version=str(raw.get("model_version") or ""),
+        dataset_count=int(_float(raw.get("dataset_count")) or 0),
+        lead_count=int(_float(raw.get("lead_count")) or 0),
+        candidate_count=int(_float(raw.get("candidate_count")) or 0),
+        synced_count=int(_float(raw.get("synced_count")) or 0),
+        origin_counts={
+            str(key): int(_float(value) or 0)
+            for key, value in (raw.get("origin_counts") or {}).items()
+        },
+        candidates=candidates,
+        warnings=[str(warning) for warning in raw.get("warnings") or []],
+    )
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def build_intelligence_runtime(
     database: Any,
     settings: StorageSettings,
@@ -509,6 +694,18 @@ def build_intelligence_runtime(
     )
     data_source = DatabaseDiscoveryDataSource(database, repository)
     candidate_store = DiscoveryCandidateStore(database, settings)
+    universe_store = UniverseReportStore(database, settings)
+    universe_scanner = UniverseScanner(
+        data_source,
+        database,
+        sources=[
+            SinaRankingSource(size=20, min_amount=5e7),
+            EastmoneyRankingSource(size=20, min_amount=5e7),
+        ],
+        max_candidates=30,
+        max_sync=10,
+        min_score=55.0,
+    )
     discovery = DiscoveryService(
         data_source,
         candidate_store,
@@ -526,6 +723,8 @@ def build_intelligence_runtime(
             discovery,
             data_source,
             candidate_store,
+            universe_scanner,
+            universe_store,
         ),
     )
 
@@ -648,10 +847,7 @@ def _candidate_payload(candidate: DiscoveryCandidate) -> dict[str, Any]:
             "symbol": metadata.get("symbol"),
             "stock_name": metadata.get("stock_name"),
             "name": metadata.get("stock_name"),
-            "theme_names": [
-                str(theme_id)
-                for theme_id in candidate.theme_ids
-            ],
+            "theme_names": [str(theme_id) for theme_id in candidate.theme_ids],
             "scores": {component.name: component.score for component in candidate.score_components},
             "score_contributions": components,
             "forward_heat_score": _component_score(candidate, "forward_theme"),
@@ -663,10 +859,12 @@ def _candidate_payload(candidate: DiscoveryCandidate) -> dict[str, Any]:
 
 
 def _candidate_from_payload(payload: str) -> DiscoveryCandidate:
-    raw = json.loads(payload)
+    try:
+        raw = json.loads(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("候选股票记录格式无效") from exc
     raw["score_components"] = [
-        ScoreComponent(**component)
-        for component in raw.get("score_components") or []
+        ScoreComponent(**component) for component in raw.get("score_components") or []
     ]
     return DiscoveryCandidate(**raw)
 

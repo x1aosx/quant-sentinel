@@ -9,6 +9,8 @@ import type {
   DatasetSyncReconcileResult,
   DatasetSyncScheduleResult,
   DiscoveryCandidateListResponse,
+  DiscoveryUniverseReport,
+  DiscoveryUniverseResponse,
   HealthSummary,
   IntelligenceOverview,
   IntelligenceRunRequest,
@@ -101,9 +103,19 @@ export const api = {
       `/discovery/candidates?${search.toString()}`,
     );
   },
-  refreshDiscovery: () =>
-    apiRequest<DiscoveryCandidateListResponse>('/discovery/refresh', {
+  refreshDiscovery: (options: { expandUniverse?: boolean } = {}) =>
+    apiRequest<DiscoveryCandidateListResponse>(
+      `/discovery/refresh?${new URLSearchParams({
+        expand_universe: String(options.expandUniverse ?? false),
+      }).toString()}`,
+      { method: 'POST' },
+    ),
+  getDiscoveryUniverse: () =>
+    apiRequest<DiscoveryUniverseResponse>('/discovery/universe'),
+  scanDiscoveryUniverse: (options: { sync?: boolean } = {}) =>
+    apiRequest<DiscoveryUniverseReport>('/discovery/universe/scan', {
       method: 'POST',
+      body: JSON.stringify({ sync: options.sync ?? true }),
     }),
   getDashboard: () => apiRequest<{
     status: string;
@@ -421,9 +433,19 @@ export const api = {
     apiRequest<{ items: WorkerSummary[] }>('/scheduler/workers').then((payload) => payload.items),
 };
 
+export interface AIStreamEvent {
+  type: string;
+  text?: string;
+  message?: string;
+  symbol?: string;
+  timeframe?: string;
+  bar_count?: number;
+  record?: AIAnalysisRecord;
+}
+
 export async function streamAIAnalysis(
   payload: Record<string, unknown>,
-  onEvent: (event: Record<string, any>) => void,
+  onEvent: (event: AIStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<AIAnalysisRecord> {
   const response = await fetch(`${API_BASE}/ai/analyze/stream`, {
@@ -458,9 +480,9 @@ export async function streamAIAnalysis(
       .map((line) => line.slice(5).trimStart())
       .join('\n');
     if (!data) return;
-    let event: Record<string, any>;
+    let event: AIStreamEvent;
     try {
-      event = JSON.parse(data) as Record<string, any>;
+      event = JSON.parse(data) as AIStreamEvent;
     } catch {
       return;
     }

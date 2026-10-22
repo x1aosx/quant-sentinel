@@ -1070,8 +1070,46 @@ export interface DiscoveryCandidate {
   updated_at?: string | null;
 }
 
+export interface DiscoveryUniverseRefreshSummary {
+  scanned_at: string;
+  synced_count: number;
+  candidate_count: number;
+  warnings: string[];
+}
+
 export interface DiscoveryCandidateListResponse {
   trade_date: string;
   items: DiscoveryCandidate[];
   count: number;
+  universe?: DiscoveryUniverseRefreshSummary | null;
+}
+
+export interface DiscoveryUniverseCandidate {
+  symbol: string;
+  name: string;
+  origin: string;
+  score: number;
+  status: string;
+  reasons?: string[];
+  signals?: Record<string, number>;
+  dataset_id?: string | null;
+  note?: string;
+  discovered_at?: string | null;
+}
+
+export interface DiscoveryUniverseReport {
+  scanned_at: string;
+  model_version: string;
+  dataset_count: number;
+  lead_count: number;
+  candidate_count: number;
+  synced_count: number;
+  origin_counts: Record<string, number>;
+  candidates: DiscoveryUniverseCandidate[];
+  warnings: string[];
+}
+
+export interface DiscoveryUniverseResponse {
+  enabled: boolean;
+  latest: DiscoveryUniverseReport | null;
 }
