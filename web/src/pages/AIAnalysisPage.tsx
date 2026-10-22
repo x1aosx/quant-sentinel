@@ -19,6 +19,7 @@ import {
   Gauge,
   History,
   ListTree,
+  Layers,
   MonitorUp,
   PlayCircle,
   Plus,
@@ -35,6 +36,7 @@ import {
 import { api, streamAIAnalysis } from '../api/client';
 import { DecisionVisualization } from '../components/ai/DecisionVisualization';
 import { KlineChart } from '../components/KlineChart';
+import { QuantSupplementPanel } from '../components/QuantSupplementPanel';
 import type {
   AIAnalysisRecord,
   AIRecordSummary,
@@ -87,6 +89,7 @@ const VIEWS = [
   { key: 'decision', label: '决策', icon: Gauge },
   { key: 'visualization', label: '决策可视化', icon: ListTree },
   { key: 'future', label: '未来走势', icon: TrendingUp },
+  { key: 'quant', label: '量化补充', icon: Layers },
   { key: 'raw', label: '原始', icon: Bot },
   { key: 'debug', label: '调试', icon: ShieldAlert },
 ] as const;
@@ -376,6 +379,18 @@ export function AIAnalysisPage() {
   });
   const datasets: DatasetSummary[] = datasetQuery.data?.items ?? [];
   const stockGroups = useMemo(() => groupDatasetsByStock(datasets), [datasets]);
+  const monitorTimeframesBySymbol = useMemo(() => {
+    const map = new Map<string, string[]>();
+    stockGroups.forEach((group) => {
+      const key = group.symbol.trim().toUpperCase();
+      if (!key) return;
+      map.set(
+        key,
+        group.datasets.map((dataset) => dataset.timeframe),
+      );
+    });
+    return map;
+  }, [stockGroups]);
   const datasetById = useMemo(
     () => new Map(datasets.map((dataset) => [dataset.id, dataset])),
     [datasets],
@@ -1798,31 +1813,22 @@ export function AIAnalysisPage() {
                                         <div className="label">标的代码</div>
                                         <input
                                           value={target.symbol}
+                                          list="monitor-symbol-options"
                                           onClick={(event) => event.stopPropagation()}
                                           onChange={(event) =>
                                             updateTarget(index, {
                                               symbol: event.target.value,
                                             })
                                           }
-                                          placeholder="XAUUSD / 600519"
+                                          placeholder="从数据中心已同步的标的中选择"
                                         />
-                                      </div>
-                                      <div className="meta-item">
-                                        <div className="label">数据源</div>
-                                        <select
-                                          value={target.source}
-                                          onClick={(event) => event.stopPropagation()}
-                                          onChange={(event) =>
-                                            updateTarget(index, {
-                                              source: event.target.value,
-                                            })
-                                          }
-                                        >
-                                          <option value="yfinance">YFinance</option>
-                                          <option value="akshare">AkShare</option>
-                                          <option value="tradingview">TradingView</option>
-                                          <option value="mt5">MT5</option>
-                                        </select>
+                                        <datalist id="monitor-symbol-options">
+                                          {stockGroups.map((group) => (
+                                            <option key={group.symbol} value={group.symbol}>
+                                              {group.title}
+                                            </option>
+                                          ))}
+                                        </datalist>
                                       </div>
                                       <div className="meta-item">
                                         <div className="label">周期</div>
@@ -1835,7 +1841,9 @@ export function AIAnalysisPage() {
                                             })
                                           }
                                         >
-                                          {['1m', '5m', '15m', '30m', '1h', '1d', '1w'].map(
+                                          {(monitorTimeframesBySymbol.get(
+                                            target.symbol.trim().toUpperCase(),
+                                          ) ?? ['1m', '5m', '15m', '30m', '1h', '1d', '1w']).map(
                                             (timeframe) => (
                                               <option key={timeframe} value={timeframe}>
                                                 {timeframe}
@@ -2057,7 +2065,7 @@ export function AIAnalysisPage() {
           })}
         </div>
 
-        {!record && view !== 'live' ? (
+        {!record && view !== 'live' && view !== 'quant' ? (
           <div className="empty">选择股票与周期执行分析，或从盯盘列表打开最近结果。</div>
         ) : null}
 
@@ -2284,6 +2292,13 @@ export function AIAnalysisPage() {
               )}
             </div>
           </div>
+        ) : null}
+
+        {view === 'quant' ? (
+          <QuantSupplementPanel
+            symbol={selectedSymbol}
+            enabled={Boolean(selectedSymbol)}
+          />
         ) : null}
 
         {view === 'raw' && record ? (

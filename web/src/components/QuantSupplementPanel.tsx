@@ -1,46 +1,37 @@
+/**
+ * 量化补充视图 —— 从原「股票分析工作台」迁移而来的确定性量化面板。
+ *
+ * 定位：AI 分析页的补充。AI（LLM）负责诊断/决策/未来走势，
+ * 这里提供 quant 引擎测算出的多周期趋势、周期角色、支撑阻力与量价结构，
+ * 供用户交叉验证 AI 结论。
+ *
+ * 刻意不包含「AI 综合结论」卡与决策卡：那两块与 AI 分析页的
+ * decision 视图重复，且数据来源不同（quant 决策 vs stage2 决策），
+ * 同时展示会给出两个互相矛盾的结论。
+ */
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
-  Activity,
-  AlertTriangle,
-  BrainCircuit,
-  ChevronRight,
   CircleDollarSign,
   Database,
   Gauge,
   Layers,
   Loader2,
+  AlertTriangle,
   RefreshCw,
-  Search,
   ShieldAlert,
-  Sparkles,
   TrendingUp,
 } from 'lucide-react';
 import { api } from '../api/client';
-import { KlineChart } from '../components/KlineChart';
+import { KlineChart } from './KlineChart';
 import type {
   DatasetBar,
-  DatasetSummary,
   MultiTimeframeAnalysisResult,
   SrLevel,
-  StockAnalysisAISummary,
   StockAnalysisDecision,
   StockAnalysisResponse,
   TimeframeAnalysisResult,
 } from '../types';
-
-type AnalysisView = 'overview' | 'timeframes' | 'quant' | 'decision' | 'raw';
-
-interface RoleEntry {
-  role: string;
-  timeframe: string;
-}
-
-interface StockProductGroup {
-  symbol: string;
-  name: string;
-  timeframes: string[];
-}
 
 const DEFAULT_PROFILE: Record<string, string> = {
   strategic: '1d',
@@ -48,18 +39,6 @@ const DEFAULT_PROFILE: Record<string, string> = {
   confirmation: '30m',
   execution: '15m',
 };
-
-const VIEWS: Array<{
-  key: AnalysisView;
-  label: string;
-  icon: typeof Gauge;
-}> = [
-  { key: 'overview', label: '综合概览', icon: Gauge },
-  { key: 'timeframes', label: '多周期', icon: Layers },
-  { key: 'quant', label: '量价结构', icon: TrendingUp },
-  { key: 'decision', label: '决策', icon: ShieldAlert },
-  { key: 'raw', label: '原始数据', icon: Database },
-];
 
 const ROLE_LABELS: Record<string, string> = {
   strategic: '战略趋势',
@@ -111,89 +90,53 @@ const ACTION_LABELS: Record<string, string> = {
   INVALIDATED: '已失效',
 };
 
-function normalizeSymbol(value: string): string {
-  return value.trim().toUpperCase();
-}
+type QuantTab = 'overview' | 'timeframes' | 'quant' | 'decision' | 'raw';
 
-function groupStocks(datasets: DatasetSummary[]): StockProductGroup[] {
-  const groups: StockProductGroup[] = [];
-  const groupBySymbol = new Map<string, StockProductGroup>();
+const QUANT_TABS: Array<{ key: QuantTab; label: string }> = [
+  { key: 'overview', label: '综合概览' },
+  { key: 'timeframes', label: '多周期' },
+  { key: 'quant', label: '量价结构' },
+  { key: 'decision', label: '量化决策' },
+  { key: 'raw', label: '原始数据' },
+];
 
-  datasets.forEach((dataset) => {
-    const symbol = normalizeSymbol(dataset.symbol);
-    if (!symbol) return;
-    let group = groupBySymbol.get(symbol);
-    if (!group) {
-      group = {
-        symbol: dataset.symbol.trim(),
-        name: dataset.title?.trim() || dataset.symbol.trim(),
-        timeframes: [],
-      };
-      groupBySymbol.set(symbol, group);
-      groups.push(group);
-    }
-    if ((!group.name || group.name === group.symbol) && dataset.title?.trim()) {
-      group.name = dataset.title.trim();
-    }
-    if (!group.timeframes.includes(dataset.timeframe)) {
-      group.timeframes.push(dataset.timeframe);
-    }
-  });
-
-  return groups;
+interface RoleEntry {
+  role: string;
+  timeframe: string;
 }
 
 function toFiniteNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function fmtNumber(value: unknown, digits = 2, missing = '--'): string {
   const parsed = toFiniteNumber(value);
-  if (parsed === null) return missing;
-  return parsed.toLocaleString('zh-CN', {
-    maximumFractionDigits: digits,
-  });
-}
-
-function fmtSignedPct(value: unknown, digits = 2): string {
-  const parsed = toFiniteNumber(value);
-  if (parsed === null) return '--';
-  return `${parsed > 0 ? '+' : ''}${parsed.toFixed(digits)}%`;
+  return parsed === null ? missing : parsed.toFixed(digits);
 }
 
 function fmtConfidence(value: unknown): string {
   const parsed = toFiniteNumber(value);
   if (parsed === null) return '--';
-  const percent = Math.abs(parsed) <= 1 ? parsed * 100 : parsed;
-  return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
+  const normalized = parsed > 1 ? parsed / 100 : parsed;
+  return `${(normalized * 100).toFixed(0)}%`;
 }
 
 function fmtTimestamp(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) return '--';
+  if (typeof value !== 'string' || !value) return '--';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return parsed.toLocaleString('zh-CN', { hour12: false });
 }
 
 function enumLabel(value: unknown, labels: Record<string, string>): string {
-  const key = String(value ?? '').trim();
-  if (!key) return '--';
-  const normalized = key.toUpperCase();
-  return labels[normalized] ?? normalized.replace(/_/g, ' ');
+  if (typeof value !== 'string' || !value) return '--';
+  return labels[value] ?? value;
 }
 
 function timeframeLabel(timeframe: string): string {
+  if (!timeframe) return '--';
   return TIMEFRAME_LABELS[timeframe.toLowerCase()] ?? timeframe;
 }
 
@@ -202,44 +145,11 @@ function roleLabel(role: string): string {
 }
 
 function toneClass(value: unknown): string {
-  const normalized = String(value ?? '').toUpperCase();
-  if (
-    normalized.includes('BULL') ||
-    normalized.includes('BUY') ||
-    normalized.includes('LONG') ||
-    normalized.includes('HEALTH') ||
-    normalized.includes('TREND')
-  ) {
-    return 'market-up';
-  }
-  if (
-    normalized.includes('BEAR') ||
-    normalized.includes('SELL') ||
-    normalized.includes('SHORT') ||
-    normalized.includes('WEAK') ||
-    normalized.includes('INVALID')
-  ) {
-    return 'market-down';
-  }
-  return 'market-flat';
-}
-
-function changeToneClass(value: unknown): string {
-  const parsed = toFiniteNumber(value);
-  if (parsed === null || parsed === 0) return 'market-flat';
-  return parsed > 0 ? 'market-up' : 'market-down';
-}
-
-function decisionBadgeClass(action: unknown): string {
-  const normalized = String(action ?? '').toUpperCase();
-  if (['BUY', 'HOLD'].includes(normalized)) return 'badge badge-ok';
-  if (['SELL', 'REDUCE', 'AVOID', 'INVALIDATED'].includes(normalized)) {
-    return 'badge badge-danger';
-  }
-  if (['WAIT_BUY', 'READY', 'TRIGGERED'].includes(normalized)) {
-    return 'badge badge-warn';
-  }
-  return 'badge badge-neutral';
+  if (typeof value !== 'string') return '';
+  const upper = value.toUpperCase();
+  if (upper.includes('BULL') || upper === 'BUY' || upper === 'HOLD') return 'tone-up';
+  if (upper.includes('BEAR') || upper === 'SELL' || upper === 'AVOID') return 'tone-down';
+  return '';
 }
 
 function getTimeframeResult(
@@ -370,6 +280,17 @@ function roleScore(
   return timeframeResult?.trend_score ?? null;
 }
 
+function decisionBadgeClass(action: unknown): string {
+  if (typeof action !== 'string') return 'badge badge-neutral';
+  const upper = action.toUpperCase();
+  if (upper === 'BUY' || upper === 'HOLD') return 'badge badge-ok';
+  if (upper === 'SELL' || upper === 'REDUCE' || upper === 'AVOID') return 'badge badge-danger';
+  if (upper === 'WAIT_BUY' || upper === 'WAIT_SELL' || upper === 'WATCH') {
+    return 'badge badge-warn';
+  }
+  return 'badge badge-neutral';
+}
+
 function formatAiValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -394,19 +315,7 @@ function formatAiValue(value: unknown): string {
   return String(value);
 }
 
-function isStockAnalysisResponse(
-  value: StockAnalysisAISummary | StockAnalysisResponse,
-): value is StockAnalysisResponse {
-  return 'timeframes' in value && 'decision' in value && 'multi_timeframe' in value;
-}
-
-function TextItems({
-  items,
-  empty = '暂无数据',
-}: {
-  items: unknown;
-  empty?: string;
-}) {
+function TextItems({ items, empty = '暂无数据' }: { items: unknown; empty?: string }) {
   const values = Array.isArray(items) ? items.map(formatAiValue).filter(Boolean) : [];
   if (!values.length) return <span className="muted">{empty}</span>;
   return (
@@ -422,16 +331,10 @@ function OverviewPanel({
   analysis,
   roleEntries,
   primaryResult,
-  aiPending,
-  aiError,
-  onGenerateAI,
 }: {
   analysis: StockAnalysisResponse;
   roleEntries: RoleEntry[];
   primaryResult: TimeframeAnalysisResult | undefined;
-  aiPending: boolean;
-  aiError: string;
-  onGenerateAI: () => void;
 }) {
   const multi = analysis.multi_timeframe;
   const decision = analysis.decision;
@@ -466,18 +369,14 @@ function OverviewPanel({
             <strong className={toneClass(multi.intraday_state)}>
               {enumLabel(multi.intraday_state, TREND_LABELS)}
             </strong>
-            <span className="muted">
-              {enumLabel(multi.confirmation_state, PHASE_LABELS)}
-            </span>
+            <span className="muted">{enumLabel(multi.confirmation_state, PHASE_LABELS)}</span>
           </div>
           <div>
             <span className="label">操作状态</span>
             <strong className={toneClass(decision?.action)}>
               {enumLabel(decision?.action, ACTION_LABELS)}
             </strong>
-            <span className="muted">
-              {enumLabel(multi.execution_state, ACTION_LABELS)}
-            </span>
+            <span className="muted">{enumLabel(multi.execution_state, ACTION_LABELS)}</span>
           </div>
           <div>
             <span className="label">置信度</span>
@@ -517,9 +416,7 @@ function OverviewPanel({
       <div className="panel">
         <div className="section-title">
           <span className="section-title-main">周期摘要</span>
-          <span className="tag">
-            {analysis.from_cache ? '缓存结果' : '实时计算'}
-          </span>
+          <span className="tag">{analysis.from_cache ? '缓存结果' : '实时计算'}</span>
         </div>
         <div className="analysis-role-grid">
           {roleEntries.map(({ role, timeframe }) => {
@@ -549,93 +446,29 @@ function OverviewPanel({
         </div>
       </div>
 
-      <div className="grid grid-2">
-        <div className="panel">
-          <div className="section-title">
-            <span className="section-title-main">
-              <CircleDollarSign size={16} />
-              最近支撑与压力
-            </span>
-            <span className="tag">
-              {timeframeLabel(primaryResult?.timeframe ?? roleEntries[0]?.timeframe ?? '--')}
-            </span>
-          </div>
-          <div className="analysis-level-grid">
-            <div>
-              <span className="label">最近支撑</span>
-              <strong className="support-value">{fmtNumber(nearestSupport, 4)}</strong>
-            </div>
-            <div>
-              <span className="label">当前价格</span>
-              <strong>{fmtNumber(currentPrice, 4)}</strong>
-            </div>
-            <div>
-              <span className="label">最近压力</span>
-              <strong className="resistance-value">{fmtNumber(nearestResistance, 4)}</strong>
-            </div>
-          </div>
+      <div className="panel">
+        <div className="section-title">
+          <span className="section-title-main">
+            <CircleDollarSign size={16} />
+            最近支撑与压力
+          </span>
+          <span className="tag">
+            {timeframeLabel(primaryResult?.timeframe ?? roleEntries[0]?.timeframe ?? '--')}
+          </span>
         </div>
-
-        <div className="panel">
-          <div className="section-title">
-            <span className="section-title-main">
-              <BrainCircuit size={16} />
-              AI 综合结论
-            </span>
-            {analysis.ai_summary ? (
-              <span className="badge badge-info">
-                {analysis.ai_summary.source || analysis.ai_summary.status || 'AI'}
-              </span>
-            ) : (
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={onGenerateAI}
-                disabled={aiPending}
-              >
-                {aiPending ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />}
-                {aiPending ? '生成中' : '生成 AI 结论'}
-              </button>
-            )}
+        <div className="analysis-level-grid">
+          <div>
+            <span className="label">最近支撑</span>
+            <strong className="support-value">{fmtNumber(nearestSupport, 4)}</strong>
           </div>
-          {aiError ? (
-            <div className="analysis-error">
-              <AlertTriangle size={15} />
-              {aiError}
-            </div>
-          ) : null}
-          {!analysis.ai_summary ? (
-            <div className="analysis-ai-empty">
-              尚未生成 AI 综合结论。
-            </div>
-          ) : (
-            <div className="analysis-ai-content">
-              <p>{analysis.ai_summary.summary || '暂无结论摘要。'}</p>
-              {analysis.ai_summary.cycle_explanation ? (
-                <p>{analysis.ai_summary.cycle_explanation}</p>
-              ) : null}
-              {formatAiValue(analysis.ai_summary.scenarios) ? (
-                <div className="analysis-ai-section">
-                  <span className="label">情景推演</span>
-                  <p>{formatAiValue(analysis.ai_summary.scenarios)}</p>
-                </div>
-              ) : null}
-              <div className="analysis-ai-columns">
-                <div>
-                  <span className="label">触发条件</span>
-                  <TextItems items={analysis.ai_summary.trigger_conditions} />
-                </div>
-                <div>
-                  <span className="label">失效条件</span>
-                  <TextItems items={analysis.ai_summary.invalid_conditions} />
-                </div>
-                <div>
-                  <span className="label">风险提示</span>
-                  <TextItems items={analysis.ai_summary.risks} />
-                </div>
-              </div>
-            </div>
-          )}
+          <div>
+            <span className="label">当前价格</span>
+            <strong>{fmtNumber(currentPrice, 4)}</strong>
+          </div>
+          <div>
+            <span className="label">最近压力</span>
+            <strong className="resistance-value">{fmtNumber(nearestResistance, 4)}</strong>
+          </div>
         </div>
       </div>
     </div>
@@ -774,8 +607,7 @@ function QuantStructurePanel({
   onSelectTimeframe: (timeframe: string) => void;
 }) {
   const activeTimeframe =
-    selectedTimeframe &&
-    getTimeframeResult(analysis.timeframes, selectedTimeframe)
+    selectedTimeframe && getTimeframeResult(analysis.timeframes, selectedTimeframe)
       ? selectedTimeframe
       : timeframeOrder[0] ?? '';
   const result = getTimeframeResult(analysis.timeframes, activeTimeframe);
@@ -871,7 +703,7 @@ function DecisionPanel({ decision }: { decision: StockAnalysisDecision | undefin
         <div className="section-title">
           <span className="section-title-main">
             <ShieldAlert size={16} />
-            量化决策
+            量化决策（引擎口径）
           </span>
           <span className={decisionBadgeClass(decision?.action)}>
             {enumLabel(decision?.action, ACTION_LABELS)}
@@ -944,92 +776,35 @@ function RawDataPanel({ analysis }: { analysis: StockAnalysisResponse }) {
         </span>
         <span className="tag">{fmtTimestamp(analysis.generated_at)}</span>
       </div>
-      <pre className="raw-prompt stock-analysis-raw">
-        {JSON.stringify(analysis, null, 2)}
-      </pre>
+      <pre className="raw-prompt stock-analysis-raw">{JSON.stringify(analysis, null, 2)}</pre>
     </div>
   );
 }
 
-export function StockAnalysisWorkbenchPage() {
-  const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
-  const [selectedSymbol, setSelectedSymbol] = useState('');
-  const [view, setView] = useState<AnalysisView>('overview');
+export function QuantSupplementPanel({
+  symbol,
+  enabled = true,
+}: {
+  symbol: string;
+  enabled?: boolean;
+}) {
+  const [tab, setTab] = useState<QuantTab>('overview');
   const [selectedTimeframe, setSelectedTimeframe] = useState('');
 
-  const datasetsQuery = useQuery({
-    queryKey: ['datasets'],
-    queryFn: api.listDatasets,
-  });
-  const groups = useMemo(
-    () => groupStocks(datasetsQuery.data?.items ?? []),
-    [datasetsQuery.data?.items],
-  );
-  const filteredGroups = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) return groups;
-    return groups.filter(
-      (group) =>
-        group.symbol.toLowerCase().includes(keyword) ||
-        group.name.toLowerCase().includes(keyword),
-    );
-  }, [groups, search]);
-  const effectiveSymbol =
-    selectedSymbol && groups.some((group) => group.symbol === selectedSymbol)
-      ? selectedSymbol
-      : groups[0]?.symbol ?? '';
-
-  const analysisQuery = useQuery({
-    queryKey: ['stock-analysis', effectiveSymbol],
-    queryFn: () =>
-      api.getStockAnalysis(effectiveSymbol, {
-        refresh: false,
-        include_ai: false,
-      }),
-    enabled: Boolean(effectiveSymbol),
-  });
-  const analysis = analysisQuery.data;
-
-  const refreshMutation = useMutation({
-    mutationFn: (symbol: string) =>
-      api.getStockAnalysis(symbol, { refresh: true, include_ai: false }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['stock-analysis', data.symbol], data);
-    },
+  const query = useQuery({
+    queryKey: ['quant-supplement', symbol],
+    queryFn: () => api.getStockAnalysis(symbol, { include_ai: false }),
+    enabled: enabled && Boolean(symbol),
+    staleTime: 60_000,
   });
 
-  const aiMutation = useMutation({
-    mutationFn: (symbol: string) => api.generateStockAnalysisAI(symbol),
-    onSuccess: (payload, symbol) => {
-      const current = queryClient.getQueryData<StockAnalysisResponse>([
-        'stock-analysis',
-        symbol,
-      ]);
-      if (isStockAnalysisResponse(payload)) {
-        queryClient.setQueryData(['stock-analysis', payload.symbol], payload);
-        return;
-      }
-      if (current) {
-        queryClient.setQueryData(['stock-analysis', symbol], {
-          ...current,
-          ai_summary: payload,
-        });
-      }
-    },
-  });
-
-  const profile = analysis?.multi_timeframe?.metadata?.profile;
-  const roleProfile = useMemo(() => {
-    if (profile && Object.keys(profile).length) return profile;
-    return DEFAULT_PROFILE;
-  }, [profile]);
+  const analysis = query.data;
   const roleEntries = useMemo<RoleEntry[]>(
     () =>
-      Object.entries(roleProfile)
+      Object.entries(DEFAULT_PROFILE)
         .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
         .map(([role, timeframe]) => ({ role, timeframe })),
-    [roleProfile],
+    [],
   );
   const timeframeOrder = useMemo(() => {
     const known = new Set(roleEntries.map((entry) => entry.timeframe.toLowerCase()));
@@ -1048,189 +823,94 @@ export function StockAnalysisWorkbenchPage() {
       )
     : undefined;
 
-  const selectSymbol = (symbol: string) => {
-    setSelectedSymbol(symbol);
-    setView('overview');
-    setSelectedTimeframe('');
-    aiMutation.reset();
-  };
+  if (!symbol) {
+    return <div className="empty">先在上方选择股票，量化补充视图会同步展示该标的的多周期结构。</div>;
+  }
 
-  const listLoading = datasetsQuery.isLoading;
-  const listError = datasetsQuery.isError
-    ? `股票列表加载失败：${(datasetsQuery.error as Error).message}`
-    : '';
-  const analysisError = analysisQuery.isError
-    ? `股票分析加载失败：${(analysisQuery.error as Error).message}`
-    : '';
-  const refreshError = refreshMutation.isError
-    ? `刷新失败：${(refreshMutation.error as Error).message}`
-    : '';
-  const aiError = aiMutation.isError ? `AI 生成失败：${(aiMutation.error as Error).message}` : '';
+  if (query.isLoading) {
+    return (
+      <div className="empty">
+        <Loader2 className="spin" size={16} /> 加载量化结构…
+      </div>
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <div className="analysis-error">
+        <AlertTriangle size={15} />
+        {(query.error as Error)?.message || '量化分析加载失败'}
+        <button className="button" type="button" onClick={() => void query.refetch()}>
+          <RefreshCw size={14} />
+          重试
+        </button>
+      </div>
+    );
+  }
+
+  if (!analysis) {
+    return <div className="empty">该标的暂无可用的量化分析结果。</div>;
+  }
 
   return (
-    <div className="stack">
-      <div className="page-header stock-analysis-page-header">
-        <div>
-          <h1>股票分析工作台</h1>
-          <div className="muted">多周期量化、量价结构与按需 AI 结论统一在一个视图中。</div>
+    <div className="stack" style={{ marginTop: 16 }}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <div className="segmented segmented-scroll">
+          {QUANT_TABS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={tab === item.key ? 'button button-primary' : 'button'}
+              onClick={() => setTab(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
-        <span className="badge badge-info">simulation only</span>
+        <button className="button" type="button" onClick={() => void query.refetch()}>
+          <RefreshCw size={14} />
+          刷新
+        </button>
       </div>
 
-      <div className="stock-analysis-layout">
-        <aside className="panel stock-list-panel">
-          <div className="section-title">
-            <span className="section-title-main">
-              <Activity size={16} />
-              股票列表
-            </span>
-            <span className="tag">{groups.length}</span>
+      <div className="muted" style={{ fontSize: 12 }}>
+        确定性量化引擎输出（非 LLM）。用于交叉验证 AI 结论：若两者方向冲突，说明该标的处于
+        分歧区，宜降低仓位或等待确认。
+      </div>
+
+      {tab === 'overview' ? (
+        <OverviewPanel
+          analysis={analysis}
+          roleEntries={roleEntries}
+          primaryResult={primaryResult}
+        />
+      ) : null}
+      {tab === 'timeframes' ? (
+        <MultiTimeframePanel
+          analysis={analysis}
+          roleEntries={roleEntries}
+          timeframeOrder={timeframeOrder}
+        />
+      ) : null}
+      {tab === 'quant' ? (
+        <QuantStructurePanel
+          analysis={analysis}
+          roleEntries={roleEntries}
+          timeframeOrder={timeframeOrder}
+          selectedTimeframe={selectedTimeframe}
+          onSelectTimeframe={setSelectedTimeframe}
+        />
+      ) : null}
+      {tab === 'decision' ? (
+        <div className="stack">
+          <div className="muted" style={{ fontSize: 12 }}>
+            这是 quant 规则引擎的独立决策口径（8 值行动词表）。若与 AI 决策视图方向不同，
+            说明模型与规则引擎存在分歧，不是数据错误；两者共振时信号更可信。
           </div>
-          <label className="stock-list-search">
-            <Search size={14} />
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索代码或名称"
-              aria-label="搜索股票"
-            />
-          </label>
-          {listLoading ? (
-            <div className="empty">正在加载股票...</div>
-          ) : listError ? (
-            <div className="empty">{listError}</div>
-          ) : filteredGroups.length ? (
-            <div className="stock-list">
-              {filteredGroups.map((group) => {
-                const active = group.symbol === effectiveSymbol;
-                return (
-                  <button
-                    key={group.symbol}
-                    type="button"
-                    className={`stock-list-item${active ? ' active' : ''}`}
-                    onClick={() => selectSymbol(group.symbol)}
-                  >
-                    <span className="stock-list-main">
-                      <strong>{group.symbol}</strong>
-                      <span>{group.name !== group.symbol ? group.name : '--'}</span>
-                    </span>
-                    <span className="stock-list-meta">
-                      {group.timeframes.map(timeframeLabel).join(' / ')}
-                      <ChevronRight size={14} />
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="empty">
-              {search.trim() ? '没有匹配的股票。' : '暂无可分析股票，请先在数据中心导入行情。'}
-            </div>
-          )}
-        </aside>
-
-        <section className="stack stock-analysis-workspace">
-          {!effectiveSymbol ? (
-            <div className="empty">暂无可分析股票。</div>
-          ) : analysisQuery.isLoading || (!analysis && !analysisError) ? (
-            <div className="empty">正在加载量化分析...</div>
-          ) : analysisError ? (
-            <div className="empty">{analysisError}</div>
-          ) : analysis ? (
-            <>
-              <div className="stock-quote-bar">
-                <div className="stock-quote-identity">
-                  <span className="badge badge-info">{analysis.symbol}</span>
-                  <div>
-                    <h2>{analysis.name || analysis.symbol}</h2>
-                    <span>
-                      {analysis.quote?.timeframe ?? '--'} ·{' '}
-                      {analysis.quote?.last_session || '--'}
-                    </span>
-                  </div>
-                </div>
-                <div className="stock-quote-price">
-                  <span>现价</span>
-                  <strong>{fmtNumber(analysis.quote?.current_price, 4)}</strong>
-                </div>
-                <div className={`stock-quote-change ${changeToneClass(analysis.quote?.change_pct)}`}>
-                  <span>涨跌</span>
-                  <strong>{fmtSignedPct(analysis.quote?.change_pct)}</strong>
-                </div>
-                <div className="stock-quote-actions">
-                  <span className="muted">{fmtTimestamp(analysis.generated_at)}</span>
-                  <button
-                    className="button"
-                    type="button"
-                    onClick={() => refreshMutation.mutate(analysis.symbol)}
-                    disabled={analysisQuery.isFetching || refreshMutation.isPending}
-                  >
-                    <RefreshCw
-                      className={refreshMutation.isPending ? 'spin' : undefined}
-                      size={14}
-                    />
-                    {refreshMutation.isPending ? '刷新中' : '刷新'}
-                  </button>
-                </div>
-              </div>
-
-              {refreshError ? (
-                <div className="analysis-error">
-                  <AlertTriangle size={15} />
-                  {refreshError}
-                </div>
-              ) : null}
-
-              <div className="segmented segmented-scroll stock-analysis-tabs">
-                {VIEWS.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.key}
-                      type="button"
-                      className={view === item.key ? 'button button-primary' : 'button'}
-                      onClick={() => setView(item.key)}
-                    >
-                      <Icon size={14} />
-                      {item.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {view === 'overview' ? (
-                <OverviewPanel
-                  analysis={analysis}
-                  roleEntries={roleEntries}
-                  primaryResult={primaryResult}
-                  aiPending={aiMutation.isPending}
-                  aiError={aiError}
-                  onGenerateAI={() => aiMutation.mutate(analysis.symbol)}
-                />
-              ) : null}
-              {view === 'timeframes' ? (
-                <MultiTimeframePanel
-                  analysis={analysis}
-                  roleEntries={roleEntries}
-                  timeframeOrder={timeframeOrder}
-                />
-              ) : null}
-              {view === 'quant' ? (
-                <QuantStructurePanel
-                  analysis={analysis}
-                  roleEntries={roleEntries}
-                  timeframeOrder={timeframeOrder}
-                  selectedTimeframe={selectedTimeframe}
-                  onSelectTimeframe={setSelectedTimeframe}
-                />
-              ) : null}
-              {view === 'decision' ? <DecisionPanel decision={analysis.decision} /> : null}
-              {view === 'raw' ? <RawDataPanel analysis={analysis} /> : null}
-            </>
-          ) : null}
-        </section>
-      </div>
+          <DecisionPanel decision={analysis.decision} />
+        </div>
+      ) : null}
+      {tab === 'raw' ? <RawDataPanel analysis={analysis} /> : null}
     </div>
   );
 }

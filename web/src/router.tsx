@@ -13,7 +13,6 @@ import { DiscoveryPage } from './pages/DiscoveryPage';
 import { IntelligencePage } from './pages/IntelligencePage';
 import { MarketAnalysisPage } from './pages/MarketAnalysisPage';
 import { SchedulerPage } from './pages/SchedulerPage';
-import { StockAnalysisWorkbenchPage } from './pages/StockAnalysisWorkbenchPage';
 import { SystemConfigPage } from './pages/SystemConfigPage';
 
 export const router = createBrowserRouter(
@@ -26,8 +25,9 @@ export const router = createBrowserRouter(
         { path: 'data', element: <DataCenterPage /> },
         { path: 'intelligence', element: <IntelligencePage /> },
         { path: 'discovery', element: <DiscoveryPage /> },
-        { path: 'analysis', element: <StockAnalysisWorkbenchPage /> },
         { path: 'ai', element: <AIAnalysisPage /> },
+        // 股票分析已并入 AI 分析页的「量化补充」视图，旧地址保留重定向。
+        { path: 'analysis', element: <Navigate to="/ai" replace /> },
         { path: 'market-analysis', element: <MarketAnalysisPage /> },
         { path: 'alphalab/training', element: <TrainingPage /> },
         { path: 'alphalab/strategies', element: <StrategyPage /> },

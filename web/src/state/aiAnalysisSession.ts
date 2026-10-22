@@ -8,6 +8,7 @@ export type AIAnalysisViewKey =
   | 'decision'
   | 'visualization'
   | 'future'
+  | 'quant'
   | 'raw'
   | 'debug';
 
@@ -32,6 +33,7 @@ const VIEW_KEYS = new Set<AIAnalysisViewKey>([
   'decision',
   'visualization',
   'future',
+  'quant',
   'raw',
   'debug',
 ]);

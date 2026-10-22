@@ -24,7 +24,6 @@ const navGroups = [
     items: [
       { to: '/', label: '驾驶台', icon: Gauge },
       { to: '/data', label: '数据中心', icon: Database },
-      { to: '/analysis', label: '股票分析', icon: Crosshair },
       { to: '/ai', label: 'AI 分析', icon: BrainCircuit },
       { to: '/market-analysis', label: '量价分析', icon: Crosshair },
       { to: '/intelligence', label: '市场情报', icon: Newspaper },
@@ -52,7 +51,6 @@ const navGroups = [
 const titles: Record<string, string> = {
   '/': '驾驶台',
   '/data': '数据中心',
-  '/analysis': '股票分析',
   '/ai': 'AI 分析',
   '/market-analysis': '支撑阻力与价格行为',
   '/alphalab/training': 'Alpha 因子研究中心 · 因子训练',

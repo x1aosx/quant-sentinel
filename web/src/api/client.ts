@@ -21,7 +21,6 @@ import type {
   ProviderTestResult,
   ScheduleDefinition,
   SchedulerTrigger,
-  StockAnalysisAISummary,
   StockAnalysisResponse,
   SyncDatasetResponse,
   SystemConfig,
@@ -125,11 +124,6 @@ export const api = {
       `/stocks/${encodeURIComponent(symbol)}/analysis?${search.toString()}`,
     );
   },
-  generateStockAnalysisAI: (symbol: string) =>
-    apiRequest<StockAnalysisAISummary | StockAnalysisResponse>(
-      `/stocks/${encodeURIComponent(symbol)}/analysis/ai`,
-      { method: 'POST' },
-    ),
   getInstrumentSummaries: (params: AnalysisInstrumentSummariesParams = {}) => {
     const search = new URLSearchParams({
       page: String(params.page ?? 1),
