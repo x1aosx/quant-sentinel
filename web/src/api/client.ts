@@ -15,6 +15,7 @@ import type {
   IntelligenceOverview,
   IntelligenceRunRequest,
   IntelligenceRunResult,
+  IntelligenceScheduleStatus,
   IntelligenceThemeCategory,
   MarketEventListResponse,
   MonitorLogListResponse,
@@ -80,6 +81,16 @@ export const api = {
   runIntelligence: (payload: IntelligenceRunRequest = {}) =>
     apiRequest<IntelligenceRunResult>('/intelligence/run', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getIntelligenceSchedule: () =>
+    apiRequest<IntelligenceScheduleStatus>('/intelligence/schedule'),
+  setIntelligenceSchedule: (payload: {
+    enabled: boolean;
+    interval_seconds?: number;
+  }) =>
+    apiRequest<IntelligenceScheduleStatus>('/intelligence/schedule', {
+      method: 'PUT',
       body: JSON.stringify(payload),
     }),
   listMarketEvents: (limit = 50) =>

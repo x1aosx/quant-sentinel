@@ -1007,6 +1007,15 @@ export interface IntelligenceRunResult {
   generated_at: string;
 }
 
+export interface IntelligenceScheduleStatus {
+  schedule_id: string | null;
+  task_name: string;
+  enabled: boolean;
+  interval_seconds: number | null;
+  timezone: string;
+  next_fire_at: string | null;
+}
+
 export interface MarketEventListResponse {
   items: MarketEvent[];
   count: number;

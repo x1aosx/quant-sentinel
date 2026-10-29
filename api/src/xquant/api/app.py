@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from xquant.ai.coordinator import MonitorManager
 from xquant.alpha_lab.config import AlphaLabSettings
 from xquant.alpha_lab.runtime import build_alpha_lab_runtime
+from xquant.intelligence.schedules import IntelligenceScheduleService
 from xquant.notifications.feishu import send_feishu_message
 from xquant.registry import Database
 from xquant.scheduler.application import TaskRegistry
@@ -118,6 +119,9 @@ def create_app(
         alpha_lab_runtime.service if alpha_lab_runtime is not None else None
     )
     app.state.scheduler_runtime = scheduler_runtime
+    app.state.intelligence_schedule_service = (
+        IntelligenceScheduleService(scheduler_runtime) if scheduler_runtime is not None else None
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

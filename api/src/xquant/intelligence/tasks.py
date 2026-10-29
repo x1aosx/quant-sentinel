@@ -36,6 +36,35 @@ class IntelligenceCollectHandler:
         )
 
 
+class IntelligenceRunHandler:
+    """采集 + 处理一步到位，供定时自动更新调度使用。"""
+
+    def __init__(self, service: IntelligenceService) -> None:
+        self.service = service
+
+    async def execute(self, context: TaskContext) -> TaskResult:
+        start_time = _optional_datetime(context.params.get("start_time"), "start_time")
+        end_time = _optional_datetime(context.params.get("end_time"), "end_time")
+        cursor = context.params.get("cursor")
+        source_errors: list[str] = []
+        result = await self.service.run(
+            start_time,
+            end_time,
+            cursor=str(cursor) if cursor not in (None, "") else None,
+            source_errors=source_errors,
+        )
+        return TaskResult(
+            success=True,
+            data={**result, "source_errors": source_errors},
+            metrics={
+                "collected_count": int(result["collected"]),
+                "normalized_count": int(result["normalized"]),
+                "event_count": int(result["events"]),
+                "theme_count": int(result["themes"]),
+            },
+        )
+
+
 class IntelligenceProcessHandler:
     def __init__(self, service: IntelligenceService) -> None:
         self.service = service
@@ -104,6 +133,20 @@ def register_intelligence_tasks(
     )
     registry.register(
         TaskDefinition(
+            name="intelligence.run",
+            handler="IntelligenceRunHandler",
+            description="采集并处理市场情报（定时自动更新入口）",
+            timeout_seconds=900,
+            retry_policy=retry_policy,
+            concurrency_policy=ConcurrencyPolicy.FORBID,
+            queue="market-data",
+            priority=4,
+            rate_limit_key="provider:intelligence",
+        ),
+        IntelligenceRunHandler(service),
+    )
+    registry.register(
+        TaskDefinition(
             name="intelligence.collect",
             handler="IntelligenceCollectHandler",
             description="采集新闻、政策和公告信息",
@@ -153,5 +196,6 @@ __all__ = [
     "IntelligenceMorningBriefHandler",
     "IntelligenceProcessHandler",
     "IntelligenceRefreshHandler",
+    "IntelligenceRunHandler",
     "register_intelligence_tasks",
 ]

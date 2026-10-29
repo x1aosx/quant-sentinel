@@ -20,6 +20,13 @@ import type {
 
 const THEME_LIMIT = 50;
 const EVENT_LIMIT = 50;
+const AUTO_REFRESH_OPTIONS = [
+  { label: '5 分钟', value: 300 },
+  { label: '15 分钟', value: 900 },
+  { label: '30 分钟', value: 1800 },
+  { label: '1 小时', value: 3600 },
+  { label: '4 小时', value: 14400 },
+];
 
 function formatTimestamp(value?: string | null): string {
   if (!value) return '时间未知';
@@ -281,6 +288,11 @@ export function IntelligencePage() {
     queryKey: ['intelligence', 'brief', 'morning'],
     queryFn: api.getMorningBrief,
   });
+  const scheduleQuery = useQuery({
+    queryKey: ['intelligence', 'schedule'],
+    queryFn: api.getIntelligenceSchedule,
+    retry: false,
+  });
 
   const themeQueries = {
     hot: hotThemesQuery,
@@ -306,7 +318,17 @@ export function IntelligencePage() {
     },
   });
 
+  const scheduleMutation = useMutation({
+    mutationFn: (payload: { enabled: boolean; interval_seconds?: number }) =>
+      api.setIntelligenceSchedule(payload),
+    onSuccess: async (status) => {
+      queryClient.setQueryData(['intelligence', 'schedule'], status);
+      await queryClient.invalidateQueries({ queryKey: ['scheduler'] });
+    },
+  });
+
   const overview = overviewQuery.data;
+  const schedule = scheduleQuery.data;
   const brief = briefQuery.data?.brief ?? overview?.brief ?? null;
   const briefSectionsData = brief ? briefSections(brief) : [];
   const metrics = [
@@ -385,6 +407,88 @@ export function IntelligencePage() {
               运行采集与处理
             </button>
           </div>
+        </div>
+
+        <div className="intelligence-auto-refresh">
+          <Clock3 size={15} />
+          <span className="intelligence-auto-refresh-label">定时自动更新</span>
+          {scheduleQuery.isLoading ? (
+            <span className="muted">状态加载中…</span>
+          ) : scheduleQuery.isError ? (
+            <span className="muted" title={errorText(scheduleQuery.error)}>
+              定时模块未启用，仅可手动更新
+            </span>
+          ) : (
+            <>
+              <label className="intelligence-auto-refresh-interval">
+                间隔
+                <select
+                  value={
+                    schedule?.interval_seconds &&
+                    AUTO_REFRESH_OPTIONS.some(
+                      (option) => option.value === schedule.interval_seconds,
+                    )
+                      ? schedule.interval_seconds
+                      : 1800
+                  }
+                  disabled={scheduleMutation.isPending}
+                  onChange={(event) => {
+                    const intervalSeconds = Number(event.target.value);
+                    scheduleMutation.mutate({
+                      enabled: true,
+                      interval_seconds: intervalSeconds,
+                    });
+                  }}
+                >
+                  {AUTO_REFRESH_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {schedule?.enabled ? (
+                <span className="badge badge-ok">已开启</span>
+              ) : (
+                <span className="badge badge-neutral">已关闭</span>
+              )}
+              {schedule?.enabled && schedule?.next_fire_at ? (
+                <span className="muted intelligence-auto-refresh-next">
+                  下次执行：{formatTimestamp(schedule.next_fire_at)}
+                </span>
+              ) : null}
+              {scheduleMutation.isError ? (
+                <span className="badge badge-danger">
+                  {errorText(scheduleMutation.error)}
+                </span>
+              ) : null}
+              {schedule?.enabled ? (
+                <button
+                  className="button"
+                  type="button"
+                  disabled={scheduleMutation.isPending}
+                  onClick={() => scheduleMutation.mutate({ enabled: false })}
+                >
+                  停止自动更新
+                </button>
+              ) : (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  disabled={scheduleMutation.isPending}
+                  onClick={() =>
+                    scheduleMutation.mutate({
+                      enabled: true,
+                      interval_seconds:
+                        schedule?.interval_seconds ?? 1800,
+                    })
+                  }
+                >
+                  开启自动更新
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         {overviewQuery.isError ? (

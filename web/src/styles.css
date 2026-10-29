@@ -2874,6 +2874,36 @@ textarea {
   gap: 8px;
 }
 
+.intelligence-auto-refresh {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.intelligence-auto-refresh-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.intelligence-auto-refresh-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.intelligence-auto-refresh-interval select {
+  padding: 4px 8px;
+}
+
+.intelligence-auto-refresh-next {
+  font-variant-numeric: tabular-nums;
+}
+
 .intelligence-overview-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

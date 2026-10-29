@@ -15,7 +15,40 @@ def get_intelligence_service(request: Request) -> Any:
     return service
 
 
+def get_intelligence_schedule_service(request: Request) -> Any:
+    runtime = getattr(request.app.state, "scheduler_runtime", None)
+    service = getattr(request.app.state, "intelligence_schedule_service", None)
+    if runtime is None or service is None:
+        raise HTTPException(status_code=503, detail="定时任务模块未启用")
+    return service
+
+
 IntelligenceDep = Annotated[Any, Depends(get_intelligence_service)]
+IntelligenceScheduleDep = Annotated[Any, Depends(get_intelligence_schedule_service)]
+
+
+@router.get("/intelligence/schedule")
+async def get_intelligence_schedule(
+    service: IntelligenceScheduleDep,
+) -> dict[str, Any]:
+    return await service.get_status()
+
+
+@router.put("/intelligence/schedule")
+async def set_intelligence_schedule(
+    service: IntelligenceScheduleDep,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = payload or {}
+    try:
+        return await service.set_auto_refresh(
+            enabled=bool(body.get("enabled", True)),
+            interval_seconds=body.get("interval_seconds"),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/intelligence/overview")
